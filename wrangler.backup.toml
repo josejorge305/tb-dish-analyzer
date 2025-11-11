@@ -1,0 +1,124 @@
+# ================== BASE (dev/default) ==================
+name = "tb-dish-processor"
+main = "index.js"
+account_id = "68cbbc868956bf7166613432aee13dec"
+compatibility_date = "2024-10-01"
+
+[vars]
+# Used by internal links/debug; safe to keep for dev
+WORKER_BASE_URL = "https://tb-dish-processor-production.tummybuddy.workers.dev"
+
+# --- D1 (default env) ---
+[[d1_databases]]
+binding = "D1_DB"
+database_name = "tb-database"
+database_id = "055f6987-4353-4752-a4c5-24525e2f5cbb"
+
+# --- KV (default env) ---
+[[kv_namespaces]]
+binding = "LEXICON_CACHE"
+id = "c4323f68f6984853b7ec2b2d77bdc57e"
+
+[[kv_namespaces]]
+binding = "MENUS_CACHE"
+id = "f363caa0518e46daa062f511c9d50c75"
+
+[[kv_namespaces]]
+binding = "USER_PREFS_KV"
+id = "cff5be596e5048059c4b60fe78c49578"
+preview_id = "000694bd5dfb422180cb026d4de957dd"
+
+# --- R2 (default env) ---
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "tb-analysis-cache"
+
+# --- QUEUE PRODUCER (default env) ---
+[[queues.producers]]
+binding = "ANALYSIS_QUEUE"
+queue = "tb-dish-analysis-queue"
+
+
+
+# ================== PRODUCTION ENV ==================
+[env.production]
+# Give production a distinct Worker name to match workers.dev URL
+# This is the Worker you’ve been curling:
+#   https://tb-dish-processor-production.tummybuddy.workers.dev
+name = "tb-dish-processor-production"
+
+[env.production.vars]
+# === Tuning / feature flags ===
+FALLBACK_TRIGGER_UNDER = "50"
+HITS_LIMIT = "25"
+
+# === Providers ===
+# Code reads ONLY this var for recipe provider order:
+# (edamam, spoonacular, openai) — adjust as needed
+PROVIDERS = "edamam,spoonacular,openai"
+
+# If you add an ingredient parser tier later (zestful/openai), your code can read another var,
+# but today the running code path expects PROVIDERS above. Keeping parse hints for future:
+PROVIDERS_PARSE = "zestful,openai"
+
+# === External hosts (for consistency with your current code) ===
+UBER_RAPID_HOST  = "uber-eats-scraper-api.p.rapidapi.com"
+RAPIDAPI_HOST    = "uber-eats-scraper-api.p.rapidapi.com"
+ZESTFUL_RAPID_HOST = "zestful.p.rapidapi.com"
+ZESTFUL_DAILY_CAP  = "5500"
+USDA_FDC_HOST      = "api.nal.usda.gov"
+
+# === Internal services / URLs ===
+LEXICON_API_URL  = "https://tummy-lexicon-api.onrender.com"
+WORKER_BASE_URL  = "https://tb-dish-processor-production.tummybuddy.workers.dev"
+
+# === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===
+#   wrangler secret put RAPIDAPI_KEY
+#   wrangler secret put LEXICON_API_KEY
+#   wrangler secret put OPENAI_API_KEY
+#   wrangler secret put SPOONACULAR_KEY
+#   wrangler secret put ZESTFUL_RAPID_KEY
+#   wrangler secret put EDAMAM_APP_ID
+#   wrangler secret put EDAMAM_APP_KEY
+
+# --- D1 (production) ---
+[[env.production.d1_databases]]
+binding = "D1_DB"
+database_name = "tb-database"
+database_id = "055f6987-4353-4752-a4c5-24525e2f5cbb"
+
+# --- KV (production) ---
+[[env.production.kv_namespaces]]
+binding = "LEXICON_CACHE"
+id = "c4323f68f6984853b7ec2b2d77bdc57e"
+
+[[env.production.kv_namespaces]]
+binding = "MENUS_CACHE"
+id = "f363caa0518e46daa062f511c9d50c75"
+
+[[env.production.kv_namespaces]]
+binding = "USER_PREFS_KV"
+id = "cff5be596e5048059c4b60fe78c49578"
+
+# --- R2 (production) ---
+[[env.production.r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "tb-analysis-cache"
+
+# --- QUEUE PRODUCER (production) ---
+[[env.production.queues.producers]]
+binding = "ANALYSIS_QUEUE"
+queue = "tb-dish-analysis-queue"
+
+# --- QUEUE CONSUMER (production) ---
+[[env.production.queues.consumers]]
+queue = "tb-dish-analysis-queue"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 1
+
+# --- SERVICE BINDING (production) ---
+# If you self-call this Worker (fetch to SELF), this binding matches prod name above.
+[[env.production.services]]
+binding = "SELF"
+service = "tb-dish-processor-production"

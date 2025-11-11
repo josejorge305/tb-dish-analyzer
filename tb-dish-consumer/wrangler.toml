@@ -1,0 +1,8 @@
+name = "tb-dish-consumer"
+main = "index.js"
+account_id = "68cbbc868956bf7166613432aee13dec"
+compatibility_date = "2024-10-01"
+
+[[queues.consumers]]
+queue = "tb-dish-analysis-queue"
+binding = "ANALYSIS_QUEUE"

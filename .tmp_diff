@@ -1,0 +1,7 @@
+$(diff -u <(cat <<'A'
+$(sed -n '1,$p' index.js)
+A
+) <(cat <<'B'
+$(sed -n '1,$p' index.js)
+B
+))
