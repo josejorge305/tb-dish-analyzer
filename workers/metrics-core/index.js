@@ -69,6 +69,38 @@ export default {
         .all();
       return j({ ok: true, items: rows.results }, request);
     }
+    // GET /metrics/summary  → basic JSON analytics for last 24h
+    if (pathname === "/metrics/summary" && request.method === "GET") {
+      const now = Date.now();
+      const since = now - 24 * 60 * 60 * 1000; // last 24h
+      const total = await env.tb_metrics
+        .prepare("SELECT COUNT(*) AS n FROM logs WHERE ts >= ?")
+        .bind(since)
+        .first();
+      const users = await env.tb_metrics
+        .prepare(
+          "SELECT COUNT(DISTINCT user_id) AS n FROM logs WHERE user_id IS NOT NULL AND user_id <> '' AND ts >= ?"
+        )
+        .bind(since)
+        .first();
+      const top = await env.tb_metrics
+        .prepare(
+          "SELECT path, COUNT(*) AS hits FROM logs WHERE ts >= ? GROUP BY path ORDER BY hits DESC LIMIT 10"
+        )
+        .bind(since)
+        .all();
+      return j(
+        {
+          ok: true,
+          window_ms: 86400000,
+          since,
+          total: total?.n || 0,
+          unique_users: users?.n || 0,
+          top_paths: top.results || []
+        },
+        request
+      );
+    }
     return j({ ok: true, service: "tb-metrics-core" }, request);
   }
 }
