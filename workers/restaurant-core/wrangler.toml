@@ -1,0 +1,10 @@
+name = "tb-restaurant-core"
+main = "index.js"
+compatibility_date = "2024-10-01"
+
+[vars]
+ENV = "production"
+BUILT_AT = "manual"
+
+# Using workers.dev for now
+workers_dev = true
