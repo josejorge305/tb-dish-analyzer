@@ -1,6 +1,3 @@
-import * as restaurantCore from "./src/features/restaurant_core/index.js";
-import * as recipeCore from "./src/features/recipe_core/index.js";
-import * as organsCore from "./src/features/organs_core/index.js";
 
 /* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
 
@@ -38,6 +35,10 @@ function tbWhoami(env) {
     headers: { "content-type": "application/json", ...tbWhoamiHeaders(env) }
   });
 }
+function cid(h) {
+  return h.get("x-correlation-id") || crypto.randomUUID();
+}
+const _cid = (h) => h.get("x-correlation-id") || crypto.randomUUID();
 function isBinaryContentType(contentType = "") {
   if (!contentType) return false;
   const ct = contentType.toLowerCase();
@@ -6408,13 +6409,19 @@ const _worker_impl = {
     }
 
     if (pathname === "/organs/from-dish" && request.method === "GET") {
-      const params = new URL(request.url).searchParams;
-      const dish = params.get("dish") || "";
-      const userId = params.get("user_id") || "";
-      const result = await organsCore.fromDish(env, { dish, userId });
-      return new Response(JSON.stringify(result), {
-        headers: { "content-type": "application/json" }
-      });
+      const id = _cid(request.headers);
+      const init = { method: "GET", headers: new Headers(request.headers) };
+      init.headers.set("x-correlation-id", id);
+      const res = await env.allergen_organs.fetch(
+        new Request(request.url, init)
+      );
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+      return new Response(res.body, { status: res.status, headers: out });
     }
     if (pathname === "/organs/list" && request.method === "GET") {
       const ORGANS = await getOrgans(env);
@@ -7268,17 +7275,27 @@ const _worker_impl = {
       }
     }
 
+    // /menu/extract → forward to tb-restaurant-core
     if (pathname === "/menu/extract" && request.method === "GET") {
-      const params = new URL(request.url).searchParams;
-      const placeId = params.get("placeId") || "";
-      const urlParam = params.get("url") || "";
-      const result = await restaurantCore.extractMenu(env, {
-        placeId,
-        url: urlParam
-      });
-      return new Response(JSON.stringify(result), {
-        headers: { "content-type": "application/json" }
-      });
+      const id = cid(request.headers);
+      const init = {
+        method: request.method,
+        headers: new Headers(request.headers)
+      };
+      init.headers.set("x-correlation-id", id);
+
+      const res = await env.restaurant_core.fetch(
+        new Request(request.url, init)
+      );
+
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+
+      return new Response(res.body, { status: res.status, headers: out });
     }
     if (pathname === "/recipe/resolve")
       return handleRecipeResolve(env, request, url, ctx);
@@ -9784,13 +9801,67 @@ const _worker_impl = {
       }
     }
 
+    // /restaurants/find → forward to tb-restaurant-core
     if (pathname === "/restaurants/find") {
-      const urlParams = new URL(request.url).searchParams;
-      const query = urlParams.get("query") || "";
-      const result = await restaurantCore.findRestaurants(env, { query });
-      return new Response(JSON.stringify(result), {
-        headers: { "content-type": "application/json" }
-      });
+      const id = cid(request.headers);
+      const init = {
+        method: request.method,
+        headers: new Headers(request.headers)
+      };
+      init.headers.set("x-correlation-id", id);
+
+      const res = await env.restaurant_core.fetch(
+        new Request(request.url, init)
+      );
+
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+
+      return new Response(res.body, { status: res.status, headers: out });
+    }
+    // /ingredients/normalize → tb-recipe-core
+    if (pathname === "/ingredients/normalize" && request.method === "POST") {
+      const id = ((h) => h.get("x-correlation-id") || crypto.randomUUID())(
+        request.headers
+      );
+      const init = {
+        method: "POST",
+        headers: new Headers(request.headers),
+        body: await request.text()
+      };
+      init.headers.set("x-correlation-id", id);
+      const res = await env.recipe_core.fetch(new Request(request.url, init));
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+      return new Response(res.body, { status: res.status, headers: out });
+    }
+    // /recipe/resolve → tb-recipe-core
+    if (pathname === "/recipe/resolve" && request.method === "POST") {
+      const id = ((h) => h.get("x-correlation-id") || crypto.randomUUID())(
+        request.headers
+      );
+      const init = {
+        method: "POST",
+        headers: new Headers(request.headers),
+        body: await request.text()
+      };
+      init.headers.set("x-correlation-id", id);
+      const res = await env.recipe_core.fetch(new Request(request.url, init));
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+      return new Response(res.body, { status: res.status, headers: out });
     }
     if (pathname === "/debug/zestful-usage") {
       const today = new Date().toISOString().slice(0, 10);
@@ -9807,18 +9878,23 @@ const _worker_impl = {
     }
 
     if (pathname === "/organs/assess" && request.method === "POST") {
-      const body = await request.json().catch(() => ({}));
-      const params = new URL(request.url).searchParams;
-      const include_lactose = params.get("include_lactose") === "1";
-      const userId = params.get("user_id") || "";
-      const result = await organsCore.assessOrgans(env, {
-        ingredients: body.ingredients || [],
-        userId,
-        include_lactose
-      });
-      return new Response(JSON.stringify(result), {
-        headers: { "content-type": "application/json" }
-      });
+      const id = _cid(request.headers);
+      const init = {
+        method: "POST",
+        headers: new Headers(request.headers),
+        body: await request.text()
+      };
+      init.headers.set("x-correlation-id", id);
+      const res = await env.allergen_organs.fetch(
+        new Request(request.url, init)
+      );
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+      return new Response(res.body, { status: res.status, headers: out });
     }
 
     if (pathname === "/user/prefs") {

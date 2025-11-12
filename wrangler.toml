@@ -42,7 +42,14 @@ queue = "tb-dish-analysis-queue"
 
 # ================== PRODUCTION ENV ==================
 [env.production]
-workers_dev = true
+# existing production bindings stay above this if you have them (KV, D1, etc.)
+
+# ✅ Clean Service Binding declaration
+services = [
+  { binding = "restaurant_core", service = "tb-restaurant-core" },
+  { binding = "recipe_core",     service = "tb-recipe-core" },
+  { binding = "allergen_organs", service = "tb-allergen-organs" }
+]
 
 [env.production.vars]
 ENV = "production"
@@ -121,6 +128,3 @@ max_retries = 1
 
 # --- SERVICE BINDING (production) ---
 # If you self-call this Worker (fetch to SELF), this binding matches prod name above.
-[[env.production.services]]
-binding = "SELF"
-service = "tb-dish-processor-production"

@@ -1,0 +1,19 @@
+{
+  "root": true,
+  "env": { "es2021": true },
+  "extends": ["eslint:recommended"],
+  "parserOptions": { "ecmaVersion": 2021, "sourceType": "module" },
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "../restaurant_core",
+            "message": "Import from the public facade only: src/features/restaurant_core/index.js"
+          }
+        ]
+      }
+    ]
+  }
+}
