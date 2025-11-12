@@ -5,3 +5,8 @@ compatibility_date = "2024-10-01"
 ENV = "production"
 BUILT_AT = "manual"
 workers_dev = true
+
+[[d1_databases]]
+binding = "tb_metrics"
+database_name = "tb-metrics"
+database_id = "a4aa5ce3-2eb4-4bf8-bcaf-c35d8308d00f"

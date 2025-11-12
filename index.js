@@ -6411,13 +6411,15 @@ const _worker_impl = {
           request.headers.get("x-correlation-id") || crypto.randomUUID(),
         preview: bodyPreview
       });
-      env.metrics_core.fetch(
-        "https://tb-metrics-core.tummybuddy.workers.dev/metrics/ingest",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: logPayload
-        }
+      ctx.waitUntil(
+        env.metrics_core.fetch(
+          "https://tb-metrics-core.tummybuddy.workers.dev/metrics/ingest",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: logPayload
+          }
+        )
       );
     } catch (err) {
       console.error("metrics error", err);
@@ -11058,7 +11060,7 @@ function normPathname(u) {
   return p;
 }
 
-const _exports = {
+export default {
   async fetch(request, env, ctx) {
     const response = await handleFetch(request, env, ctx);
     return withTbWhoamiHeaders(response, env);
@@ -11070,4 +11072,3 @@ const _exports = {
     return handleScheduled(controller, env, ctx);
   }
 };
-export default _exports;
