@@ -48,7 +48,8 @@ queue = "tb-dish-analysis-queue"
 services = [
   { binding = "restaurant_core", service = "tb-restaurant-core" },
   { binding = "recipe_core",     service = "tb-recipe-core" },
-  { binding = "allergen_organs", service = "tb-allergen-organs" }
+  { binding = "allergen_organs", service = "tb-allergen-organs" },
+  { binding = "metrics_core",    service = "tb-metrics-core" }
 ]
 
 [env.production.vars]

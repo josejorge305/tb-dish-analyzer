@@ -6396,6 +6396,32 @@ const _worker_impl = {
   // ---- HTTP routes (health + debug + enqueue + results + uber-test) ----
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    // async fire-and-forget metrics logging
+    try {
+      const bodyPreview =
+        request.method === "POST"
+          ? (await request.clone().text()).slice(0, 300)
+          : "";
+      const logPayload = JSON.stringify({
+        ts: Date.now(),
+        method: request.method,
+        path: url.pathname,
+        user_id: url.searchParams.get("user_id") || null,
+        correlation_id:
+          request.headers.get("x-correlation-id") || crypto.randomUUID(),
+        preview: bodyPreview
+      });
+      env.metrics_core.fetch(
+        "https://tb-metrics-core.tummybuddy.workers.dev/metrics/ingest",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: logPayload
+        }
+      );
+    } catch (err) {
+      console.error("metrics error", err);
+    }
     const pathname = normPathname(url);
     const searchParams = url.searchParams;
 
