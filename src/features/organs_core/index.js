@@ -499,7 +499,7 @@ async function organsCallLexicon(env, text, lang = "en") {
     return { ok: false, reason: "missing-config-or-text" };
   }
 
-  const url = `${base}/analyze`;
+  const url = `${base}/v1/search`;
   const payload = {
     text,
     lang,

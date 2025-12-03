@@ -1,18 +1,15 @@
+var __defProp = Object.defineProperty;
+var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-/* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
-import * as restaurantCore from "./src/features/restaurant_core/index.js";
-
-// tb-dish-processor — Cloudflare Worker (Modules) — Uber Eats + Lexicon + Queue + Debug
-// Clean build: exact vendor body for /api/job, US bias + filter, proper Modules export.
-
-// ========== Version helper ==========
+// index.js
 function getVersion(env) {
-  const now = new Date().toLocaleString("en-US", {
+  const now = (/* @__PURE__ */ new Date()).toLocaleString("en-US", {
     timeZone: "America/New_York"
   });
   const localDate = new Date(now).toISOString().slice(0, 10);
   return env.RELEASE || env.VERSION || `prod-${localDate}`;
 }
+__name(getVersion, "getVersion");
 function tbWhoamiHeaders(env) {
   return {
     "x-tb-worker": env.WORKER_NAME || "tb-dish-processor-production",
@@ -21,6 +18,7 @@ function tbWhoamiHeaders(env) {
     "x-tb-built": env.BUILT_AT || "n/a"
   };
 }
+__name(tbWhoamiHeaders, "tbWhoamiHeaders");
 function tbWhoami(env) {
   const body = JSON.stringify(
     {
@@ -36,31 +34,23 @@ function tbWhoami(env) {
     headers: { "content-type": "application/json", ...tbWhoamiHeaders(env) }
   });
 }
+__name(tbWhoami, "tbWhoami");
 function cid(h) {
   return h.get("x-correlation-id") || crypto.randomUUID();
 }
-const _cid = (h) => h.get("x-correlation-id") || crypto.randomUUID();
+__name(cid, "cid");
+var _cid = /* @__PURE__ */ __name((h) => h.get("x-correlation-id") || crypto.randomUUID(), "_cid");
 function isBinaryContentType(contentType = "") {
   if (!contentType) return false;
   const ct = contentType.toLowerCase();
-  return (
-    ct.includes("application/octet-stream") ||
-    ct.includes("application/pdf") ||
-    ct.includes("application/zip") ||
-    ct.startsWith("image/") ||
-    ct.startsWith("audio/") ||
-    ct.startsWith("video/") ||
-    ct.startsWith("font/")
-  );
+  return ct.includes("application/octet-stream") || ct.includes("application/pdf") || ct.includes("application/zip") || ct.startsWith("image/") || ct.startsWith("audio/") || ct.startsWith("video/") || ct.startsWith("font/");
 }
+__name(isBinaryContentType, "isBinaryContentType");
 function withTbWhoamiHeaders(response, env) {
   if (!(response instanceof Response)) return response;
-  const ct =
-    (response.headers && response.headers.get
-      ? response.headers.get("content-type")
-      : "") || "";
+  const ct = (response.headers && response.headers.get ? response.headers.get("content-type") : "") || "";
   if (isBinaryContentType(ct)) return response;
-  const headers = new Headers(response.headers || undefined);
+  const headers = new Headers(response.headers || void 0);
   const baseHeaders = tbWhoamiHeaders(env);
   for (const [key, value] of Object.entries(baseHeaders)) {
     if (value == null) continue;
@@ -72,26 +62,16 @@ function withTbWhoamiHeaders(response, env) {
     headers
   });
 }
-// Provider order: control fallback (e.g., "edamam,spoonacular,openai")
+__name(withTbWhoamiHeaders, "withTbWhoamiHeaders");
 function providerOrder(env) {
-  const raw =
-    env && env.PROVIDERS ? String(env.PROVIDERS) : "edamam,spoonacular,openai";
-  return raw
-    .toLowerCase()
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const raw = env && env.PROVIDERS ? String(env.PROVIDERS) : "edamam,spoonacular,openai";
+  return raw.toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
 }
-
-// --- Simple Premium Gate (KV-backed) ---
-// Usage: add ?user_id=alice  AND set KV key: tier/user:alice -> "premium"
-// Dev override: ?dev=1 bypasses the check for quick testing.
+__name(providerOrder, "providerOrder");
 async function requirePremium(env, url) {
-  // Dev bypass for quick testing
   if (url.searchParams.get("dev") === "1") {
     return { ok: true, user: "dev-bypass" };
   }
-
   const userId = (url.searchParams.get("user_id") || "").trim();
   if (!userId) {
     return {
@@ -104,7 +84,6 @@ async function requirePremium(env, url) {
       }
     };
   }
-
   const kvKey = `tier/user:${userId}`;
   const tier = await (env.LEXICON_CACHE ? env.LEXICON_CACHE.get(kvKey) : null);
   if (String(tier || "").toLowerCase() === "premium") {
@@ -121,44 +100,41 @@ async function requirePremium(env, url) {
     }
   };
 }
-
-// ==== Step 41 Helpers: ctx + trace =========================================
-// Lightweight per-request context (for consistent analytics headers)
+__name(requirePremium, "requirePremium");
 function makeCtx(env) {
   return {
-    served_at: new Date().toISOString(),
+    served_at: (/* @__PURE__ */ new Date()).toISOString(),
     version: getVersion(env)
   };
 }
-
-// === PATCH A: params + JSON helpers (safe commas, no trailing spread) ===
-function asURL(u) {
-  return u instanceof URL ? u : new URL(u, "https://dummy.local");
-}
+__name(makeCtx, "makeCtx");
 function pick(query, name, def) {
   const v = query.get(name);
   return v == null || v === "" ? def : v;
 }
+__name(pick, "pick");
 function pickInt(query, name, def) {
   const v = query.get(name);
   if (v == null || v === "") return def;
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : def;
 }
+__name(pickInt, "pickInt");
 function pickFloat(query, name, def) {
   const v = query.get(name);
   if (v == null || v === "") return def;
   const n = Number(v);
   return Number.isFinite(n) ? n : def;
 }
+__name(pickFloat, "pickFloat");
 async function readJson(req) {
-  // --- enqueue minimal meal log (safe debug) ---
   try {
     return await req.json();
   } catch {
     return null;
   }
 }
+__name(readJson, "readJson");
 async function readJsonSafe(request) {
   try {
     return await request.json();
@@ -166,9 +142,9 @@ async function readJsonSafe(request) {
     return null;
   }
 }
+__name(readJsonSafe, "readJsonSafe");
 async function parseResSafe(res) {
-  const ct =
-    (res.headers && res.headers.get && res.headers.get("content-type")) || "";
+  const ct = res.headers && res.headers.get && res.headers.get("content-type") || "";
   try {
     if (ct.includes("application/json")) return await res.json();
     const txt = await res.text();
@@ -192,19 +168,19 @@ async function parseResSafe(res) {
     }
   }
 }
+__name(parseResSafe, "parseResSafe");
 async function callJson(url, opts = {}) {
   const fetcher = opts.fetcher || fetch;
   const resp = await fetcher(url, {
     method: opts.method || "GET",
     headers: {
       "content-type": "application/json",
-      ...(opts.headers || {})
+      ...opts.headers || {}
     },
-    body: opts.body ? JSON.stringify(opts.body) : undefined
+    body: opts.body ? JSON.stringify(opts.body) : void 0
   }).catch((err) => {
     return { _fetchError: err?.message || String(err) };
   });
-
   if (!resp || resp._fetchError) {
     return {
       ok: false,
@@ -212,674 +188,49 @@ async function callJson(url, opts = {}) {
       detail: resp && resp._fetchError
     };
   }
-
   const text = await resp.text().catch(() => "");
-  let json;
+  let json2;
   try {
-    json = JSON.parse(text);
+    json2 = JSON.parse(text);
   } catch {
-    json = { raw: text };
+    json2 = { raw: text };
   }
-
   return {
     ok: resp.ok,
     status: resp.status,
-    data: json
+    data: json2
   };
 }
+__name(callJson, "callJson");
 function okJson(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" }
   });
 }
-// --- Simple Google Places search for /restaurants/find (gateway inline) ---
-async function handleRestaurantsFindGateway(env, url) {
-  const searchParams = url.searchParams;
-  const q = (searchParams.get("query") || "").trim();
-  const latStr = searchParams.get("lat");
-  const lngStr = searchParams.get("lng");
-  const radiusStr = searchParams.get("radius") || "6000";
-
-  const apiKey = env.GOOGLE_MAPS_API_KEY;
-  // If we don't have a key, just return an empty stub so the app doesn't explode
-  if (!apiKey) {
-    return okJson({
-      ok: true,
-      source: "google_places.stub",
-      items: []
-    });
-  }
-
-  try {
-    const params = new URLSearchParams();
-    params.set("query", q || "restaurant");
-    if (latStr && lngStr) {
-      params.set("location", `${latStr},${lngStr}`);
-      params.set("radius", String(radiusStr));
-    }
-    params.set("type", "restaurant");
-    params.set("key", apiKey);
-
-    const gUrl =
-      "https://maps.googleapis.com/maps/api/place/textsearch/json?" +
-      params.toString();
-
-    const res = await fetch(gUrl);
-    const txt = await res.text();
-
-    if (!res.ok) {
-      return okJson({
-        ok: false,
-        source: "google_places_http_error",
-        status: res.status,
-        body: txt.slice(0, 500)
-      });
-    }
-
-    let data = {};
-    try {
-      data = txt ? JSON.parse(txt) : {};
-    } catch {
-      return okJson({
-        ok: false,
-        source: "google_places_non_json",
-        body: txt.slice(0, 500)
-      });
-    }
-
-    const results = Array.isArray(data.results) ? data.results : [];
-    if (!results.length) {
-      return okJson({
-        ok: true,
-        source: "google_places",
-        items: []
-      });
-    }
-
-    const items = results.map((r, idx) => {
-      const loc = r.geometry && r.geometry.location ? r.geometry.location : {};
-      return {
-        id: r.place_id || `google-${idx}`,
-        name: r.name || "Unnamed place",
-        provider: "google",
-        address: r.formatted_address || "",
-        city: "",
-        country: "",
-        lat: loc.lat ?? null,
-        lng: loc.lng ?? null,
-        placeId: r.place_id || `google-${idx}`,
-        url: r.website || ""
-      };
-    });
-
-    return okJson({
-      ok: true,
-      source: "google_places",
-      items
-    });
-  } catch (err) {
-    return okJson({
-      ok: false,
-      source: "google_places_error",
-      error: String(err?.message || err)
-    });
-  }
-}
-function badJson(obj, status = 400) {
-  const payload =
-    obj && typeof obj === "object" && obj.ok !== undefined
-      ? obj
-      : { ok: false, ...obj };
-  return okJson(payload, status);
-}
-
-/**
- * Build a normalized params object for handlers that accept both query/body.
- * Avoids parser errors VS Code was flagging and centralizes validation.
- */
-function buildCommonParams(url, body = {}, extras = {}) {
-  const q = url.searchParams;
-  return {
-    user_id: pick(q, "user_id", body?.user_id ?? undefined),
-    dish: pick(q, "dish", body?.dish ?? undefined),
-    method: pick(q, "method", body?.method ?? undefined),
-    weight_kg: pickFloat(q, "weight_kg", body?.weight_kg ?? undefined),
-    maxRows: pickInt(
-      q,
-      "maxRows",
-      pickInt(q, "top", body?.maxRows ?? undefined)
-    ),
-    lat: pickFloat(q, "lat", body?.lat ?? undefined),
-    lng: pickFloat(q, "lng", body?.lng ?? undefined),
-    radius: pickInt(q, "radius", body?.radius ?? undefined),
-    dev: pick(q, "dev", body?.dev ?? undefined) === "1" || body?.dev === 1,
-    used_path: undefined,
-    ...extras
-  };
-}
-
-// Standardized trace payload for analytics/debug mirrors
-// - endpoint: string (e.g. "uber-test" or "menu-search")
-// - searchParams: URLSearchParams from the current request URL
-// - env: worker env (optional, used only for host hint)
-// - extras: object to merge in later (e.g. { used_path, source, cache })
+__name(okJson, "okJson");
 function makeTrace(endpoint, searchParams, env, extras = {}) {
-  const host =
-    (env &&
-      (env.UBER_RAPID_HOST ||
-        env.RAPIDAPI_HOST ||
-        env.CF_PAGES_URL ||
-        env.HOSTNAME)) ||
-    undefined;
-
+  const host = env && (env.UBER_RAPID_HOST || env.RAPIDAPI_HOST || env.CF_PAGES_URL || env.HOSTNAME) || void 0;
   return {
     endpoint,
-    query: pick(searchParams, "query", undefined),
-    address: pick(searchParams, "address", undefined),
-    locale: pick(searchParams, "locale", undefined),
-    page: pickInt(searchParams, "page", undefined),
+    query: pick(searchParams, "query", void 0),
+    address: pick(searchParams, "address", void 0),
+    locale: pick(searchParams, "locale", void 0),
+    page: pickInt(searchParams, "page", void 0),
     maxRows: pickInt(
       searchParams,
       "maxRows",
-      pickInt(searchParams, "top", undefined)
+      pickInt(searchParams, "top", void 0)
     ),
-    lat: pickFloat(searchParams, "lat", undefined),
-    lng: pickFloat(searchParams, "lng", undefined),
-    radius: pickInt(searchParams, "radius", undefined),
+    lat: pickFloat(searchParams, "lat", void 0),
+    lng: pickFloat(searchParams, "lng", void 0),
+    radius: pickInt(searchParams, "radius", void 0),
     host,
-    used_path: undefined,
+    used_path: void 0,
     ...extras
   };
 }
-
-// === PATCH B: stricter /user/prefs with schema ===
-function validatePrefs(payload) {
-  // Minimal, future-proof: pills (allergen/FODMAP keys) + diet_tags
-  const errors = [];
-  if (!payload || typeof payload !== "object") {
-    errors.push("payload must be a JSON object");
-    return { ok: false, errors };
-  }
-  const out = {
-    user_id:
-      typeof payload.user_id === "string" && payload.user_id.trim()
-        ? payload.user_id.trim()
-        : null,
-    pills: Array.isArray(payload.pills)
-      ? payload.pills.filter((x) => typeof x === "string" && x.trim())
-      : [],
-    diet_tags: Array.isArray(payload.diet_tags)
-      ? payload.diet_tags.filter((x) => typeof x === "string" && x.trim())
-      : []
-  };
-  if (!out.user_id) errors.push("user_id is required");
-  if (errors.length) return { ok: false, errors };
-  return { ok: true, value: out };
-}
-
-async function handleGetUserPrefs(url, env) {
-  const q = url.searchParams;
-  const user_id = q.get("user_id");
-  if (!user_id) return badJson({ error: "user_id is required" }, 400);
-  if (!env.USER_PREFS_KV)
-    return badJson({ error: "USER_PREFS_KV binding missing" }, 500);
-
-  const key = `user_prefs:${user_id}`;
-  const raw = await env.USER_PREFS_KV.get(key, "json");
-  return okJson({
-    ok: true,
-    user_id,
-    prefs: raw ?? { pills: [], diet_tags: [] }
-  });
-}
-
-async function handlePostUserPrefs(request, env) {
-  if (!env.USER_PREFS_KV)
-    return badJson({ error: "USER_PREFS_KV binding missing" }, 500);
-  const body = await readJson(request);
-  const v = validatePrefs(body);
-  if (!v.ok)
-    return badJson({ error: "invalid user prefs", details: v.errors }, 400);
-
-  const key = `user_prefs:${v.value.user_id}`;
-  await env.USER_PREFS_KV.put(
-    key,
-    JSON.stringify({
-      pills: v.value.pills,
-      diet_tags: v.value.diet_tags
-    }),
-    { expirationTtl: 60 * 60 * 24 * 365 }
-  );
-  return okJson({
-    ok: true,
-    saved: {
-      user_id: v.value.user_id,
-      pills: v.value.pills,
-      diet_tags: v.value.diet_tags
-    }
-  });
-}
-
-// === PATCH C: clearer /organs/from-dish empty-card behavior ===
-async function handleOrgansFromDish(url, env, request) {
-  try {
-    console.log(
-      JSON.stringify({
-        at: "organs:enter",
-        method: request.method,
-        q_dish: url.searchParams.get("dish") || null
-      })
-    );
-  } catch {}
-
-  const dishQ = (url.searchParams.get("dish") || "").trim();
-  const body = await readJsonSafe(request);
-  const dishB =
-    body && typeof body === "object" && typeof body.dish === "string"
-      ? body.dish.trim()
-      : "";
-
-  const finalDish = dishQ || dishB;
-  if (!finalDish) {
-    try {
-      console.log(
-        JSON.stringify({
-          at: "organs:missing-dish",
-          dishQ: dishQ || null,
-          dishB: dishB || null
-        })
-      );
-    } catch {}
-    const resp = new Response(
-      JSON.stringify({
-        ok: false,
-        error: "dish is required (use ?dish= or JSON {dish})",
-        debug: { query_dish: dishQ || null, body_dish: dishB || null }
-      }),
-      {
-        status: 400,
-        headers: { "content-type": "application/json; charset=utf-8" }
-      }
-    );
-    resp.headers.set("X-TB-Route", "/organs/from-dish");
-    resp.headers.set("X-TB-Note", "missing-dish");
-    return resp;
-  }
-
-  const params =
-    typeof buildCommonParams === "function"
-      ? buildCommonParams(url, body || {}, { dish: finalDish })
-      : { dish: finalDish };
-  params.used_path = "/organs/from-dish";
-
-  const userId =
-    url.searchParams.get("user_id") || (body && body.user_id) || null;
-  const prefsKey = `prefs:user:${userId || "anon"}`;
-  const user_prefs =
-    (env.USER_PREFS_KV &&
-      (await env.USER_PREFS_KV.get(prefsKey, "json")).catch?.(() => null)) ||
-    (env.USER_PREFS_KV
-      ? await env.USER_PREFS_KV.get(prefsKey, "json")
-      : null) ||
-    {};
-  const ORGANS = await getOrgans(env);
-  const method =
-    (url.searchParams.get("method") || (body && body.method) || "saute")
-      .toLowerCase()
-      .trim() || "saute";
-  const wq = url.searchParams.get("weight_kg") || (body && body.weight_kg);
-  const weightNum = Number(wq);
-  const weight_kg =
-    Number.isFinite(weightNum) && weightNum > 0 ? weightNum : 70;
-
-  const card = await fetchRecipeCardWithFallback(finalDish, env, {
-    user_id: userId
-  });
-  const rawIngredients = Array.isArray(card?.ingredients)
-    ? card.ingredients
-    : [];
-  const recipe_debug = {
-    provider: card?.provider ?? null,
-    reason: card?.reason ?? null,
-    card_ingredients: rawIngredients.length,
-    providers_order: providerOrder(env),
-    attempts: card?.attempts ?? [],
-    user_prefs_present: !!user_prefs && !!Object.keys(user_prefs).length,
-    user_prefs_keys: Object.keys(user_prefs || {}),
-    assess_prefs_passed: !!user_prefs
-  };
-
-  if (!rawIngredients.length) {
-    const resp = new Response(
-      JSON.stringify({
-        ok: true,
-        dish: finalDish,
-        note: "no ingredients found — recipe card empty and inference didn’t yield ingredients",
-        guidance:
-          "Try a more specific dish name (e.g., 'Chicken Alfredo (Olive Garden)') or adjust PROVIDERS.",
-        recipe_debug,
-        ingredients: [],
-        organ_levels: {},
-        organ_top_drivers: {}
-      }),
-      { headers: { "content-type": "application/json; charset=utf-8" } }
-    );
-    resp.headers.set("X-TB-Route", "/organs/from-dish");
-    resp.headers.set("X-TB-Note", "empty-ingredients");
-    return resp;
-  }
-
-  const ingredientsRaw = Array.isArray(card?.ingredients)
-    ? card.ingredients
-    : [];
-  const originalLines = ingredientsRaw.map((item) =>
-    typeof item === "string"
-      ? item
-      : item?.original || item?.name || item?.text || ""
-  );
-  let ingredients = normalizeIngredientsArray(ingredientsRaw).map((entry) => ({
-    name: canonicalizeIngredientName(entry.name),
-    grams: entry.grams
-  }));
-  const normalizedIngredients = ingredients.slice();
-
-  function snapToKnownIngredient(name) {
-    const s = name.toLowerCase();
-    if (s.includes("olive oil")) return "olive oil";
-    if (s.includes("butter")) return "butter";
-    if (s.includes("cream")) return "cream";
-    if (s.includes("parmesan") || s.includes("parm")) return "parmesan cheese";
-    if (s.includes("chicken thigh")) return "chicken thigh";
-    if (s.includes("chicken")) return "chicken thighs";
-    if (s.includes("fettuccine")) return "fettuccine";
-    if (s.includes("tagliatelle")) return "tagliatelle";
-    return name;
-  }
-
-  // --- organ assessment (inline) ---
-  let organLevels = {};
-  let organDrivers = {};
-  try {
-    if (typeof assessOrgansFromIngredients === "function") {
-      console.log(
-        "[ORGANS] assessing",
-        normalizedIngredients.length,
-        "ingredients"
-      );
-      const assessRes = await assessOrgansFromIngredients(
-        normalizedIngredients,
-        { weightKg: weight_kg }
-      );
-      organLevels = assessRes?.levels || {};
-      organDrivers = assessRes?.top_drivers || {};
-    } else {
-      organLevels = {};
-      organDrivers = {};
-    }
-  } catch {
-    organLevels = {};
-    organDrivers = {};
-  }
-
-  let calories_kcal = null;
-  if (
-    (env.EDAMAM_NUTRITION_APP_ID || env.EDAMAM_APP_ID) &&
-    (env.EDAMAM_NUTRITION_APP_KEY || env.EDAMAM_APP_KEY) &&
-    originalLines.length
-  ) {
-    try {
-      const nut = await callEdamamNutritionAnalyze(
-        { title: finalDish, ingr: originalLines },
-        env
-      );
-      console.log("[NUTRITION] keys", Object.keys(nut || {}));
-      console.log(
-        "[NUTRITION] ingredients_n",
-        Array.isArray(nut?.ingredients) ? nut.ingredients.length : null
-      );
-      console.log("[NUTRITION] totalWeight", nut?.totalWeight);
-      console.log("[NUTRITION] lines_sent", originalLines);
-      console.log(
-        "[NUTRITION] reason:",
-        nut?.reason,
-        "calA:",
-        nut?.calories,
-        "calB:",
-        nut?.nutrition?.calories
-      );
-      calories_kcal =
-        typeof nut?.calories === "number"
-          ? Math.round(nut.calories)
-          : typeof nut?.nutrition?.calories === "number"
-            ? Math.round(nut.nutrition.calories)
-            : calories_kcal;
-      if (Array.isArray(nut?.ingredients) && nut.ingredients.length) {
-        const byName = new Map(
-          nut.ingredients
-            .filter((i) => i?.name)
-            .map((i) => [canonicalizeIngredientName(i.name), i.grams])
-        );
-        ingredients = ingredients.map((item) => {
-          const grams = byName.has(item.name)
-            ? byName.get(item.name)
-            : item.grams;
-          return { name: item.name, grams };
-        });
-      }
-    } catch {
-      // non-fatal enrichment failure
-    }
-  }
-  console.log("[CALORIES] kcal", calories_kcal);
-
-  ingredients = ingredients.map((it) => ({
-    ...it,
-    name: snapToKnownIngredient(it.name)
-  }));
-
-  let organ = null;
-  const origin = url.origin;
-  let assessResp = null;
-  const payload = JSON.stringify({
-    ingredients,
-    user_id: userId,
-    method,
-    weight_kg,
-    user_prefs
-  });
-
-  try {
-    if (env.SELF && typeof env.SELF.fetch === "function") {
-      console.log("[ASSESS] internal SELF.fetch /organs/assess");
-      assessResp = await env.SELF.fetch(
-        new Request("https://internal/organs/assess?user_id=" + userId, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: payload
-        })
-      );
-    } else {
-      const assessUrl = url.origin.replace(/\/$/, "") + "/organs/assess";
-      console.log("[ASSESS] external fetch", assessUrl);
-      assessResp = await fetch(assessUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload
-      });
-    }
-  } catch (err) {
-    return okJson({
-      ok: true,
-      dish: finalDish,
-      note: "assess_call_failed",
-      detail: String(err?.message || err),
-      recipe_debug,
-      ingredients
-    });
-  }
-
-  const data = await parseResSafe(assessResp);
-  console.log("[ASSESS] status", assessResp.status);
-  if (!assessResp.ok || !data || typeof data !== "object") {
-    return okJson({
-      ok: true,
-      dish: finalDish,
-      note: "assess_upstream_error",
-      status: assessResp.status,
-      detail: data?.__nonjson__ || data,
-      recipe_debug,
-      ingredients
-    });
-  }
-  organ = data;
-
-  if (!organLevels || !Object.keys(organLevels).length) {
-    organLevels = organ?.levels ?? organ?.organ_levels ?? {};
-  }
-  if (!organDrivers || !Object.keys(organDrivers).length) {
-    organDrivers = organ?.top ?? organ?.organ_top_drivers ?? organDrivers ?? {};
-  }
-  console.log("[ORGANS] filled", {
-    levels_keys: Object.keys(organLevels || {}).length,
-    top_keys: Object.keys(organDrivers || {}).length
-  });
-  const driversSlim = slimTopDrivers(organDrivers || {});
-  const driversText = topDriversText(driversSlim);
-
-  const organ_summaries = organ?.summaries ?? {};
-  const organ_top_drivers = { ...(organDrivers || {}) };
-  const scoring = organ?.scoring || {};
-  const filled = { organ_levels: organLevels || {} };
-  const levels =
-    (typeof organ_levels !== "undefined" && organ_levels) ||
-    filled?.organ_levels ||
-    scoring?.organ_levels ||
-    scoring?.levels ||
-    {};
-  for (const organName of ORGANS) {
-    if (!(organName in levels)) levels[organName] = "Neutral";
-    if (!Array.isArray(organ_top_drivers[organName]))
-      organ_top_drivers[organName] = [];
-  }
-  const levelToBar = (s) =>
-    ({
-      "High Benefit": 80,
-      Benefit: 40,
-      Neutral: 0,
-      Caution: -40,
-      "High Caution": -80
-    })[s] ?? 0;
-  const levelToColor = (s) =>
-    ({
-      "High Benefit": "#16a34a",
-      Benefit: "#22c55e",
-      Neutral: "#a1a1aa",
-      Caution: "#f59e0b",
-      "High Caution": "#dc2626"
-    })[s] ?? "#a1a1aa";
-  const barometerToColor = (n) =>
-    n >= 40
-      ? "#16a34a"
-      : n > 0
-        ? "#22c55e"
-        : n === 0
-          ? "#a1a1aa"
-          : n <= -40
-            ? "#dc2626"
-            : "#f59e0b";
-  const buildInsights = ({ top, prefs, organs = [] }) => {
-    const lines = [];
-    for (const organKey of organs) {
-      const arr = Array.isArray(top?.[organKey]) ? top[organKey] : [];
-      if (arr.length) {
-        const title =
-          organKey.charAt(0).toUpperCase() +
-          organKey.slice(1).replace(/_/g, " ");
-        lines.push(`${title}: ${arr.join(", ")}`);
-        if (lines.length >= 3) break;
-      }
-    }
-    if (prefs?.allergens?.dairy === false) {
-      lines.push("Preference: dairy-sensitive applied");
-    }
-    if (
-      prefs?.allergens?.garlic_onion === true ||
-      prefs?.fodmap?.strict === true
-    ) {
-      lines.push("Preference: FODMAP applied");
-    }
-    return lines.slice(0, 3);
-  };
-  const organ_bars = ORGANS.reduce((acc, organKey) => {
-    acc[organKey] = levelToBar(levels[organKey]);
-    return acc;
-  }, {});
-  const organ_colors = ORGANS.reduce((acc, organKey) => {
-    acc[organKey] = levelToColor(levels[organKey]);
-    return acc;
-  }, {});
-  const tummy_barometer = computeBarometerFromLevelsAll(ORGANS, levels);
-  const barometer_color = barometerToColor(tummy_barometer);
-  const insight_lines = buildInsights({
-    organs: ORGANS,
-    top: organ_top_drivers,
-    prefs: user_prefs
-  });
-  const result = {
-    ok: true,
-    dish: finalDish,
-    ingredients,
-    organ_summaries,
-    organ_levels: levels,
-    organ_top_drivers,
-    drivers_slim: driversSlim,
-    calories_kcal,
-    tummy_barometer,
-    barometer_color,
-    organ_bars,
-    organ_colors,
-    insight_lines,
-    recipe_debug
-  };
-
-  try {
-    const names = ingredients.map((i) => i.name).filter(Boolean);
-
-    console.log("[ENQUEUE] meal_log preview:", {
-      levels_keys: Object.keys(organLevels || {}).length,
-      top_keys: Object.keys(organDrivers || {}).length
-    });
-
-    if (env.ANALYSIS_QUEUE && names.length) {
-      await env.ANALYSIS_QUEUE.send({
-        kind: "meal_log",
-        dish: finalDish,
-        user_id: userId,
-        ingredients: names,
-        organs_summary: { levels: organLevels, top_drivers: organDrivers },
-        organ_levels: organLevels,
-        organ_top_drivers: organDrivers,
-        calories_kcal: result.calories_kcal ?? null,
-        created_at: new Date().toISOString()
-      });
-      recipe_debug.enqueue = { ok: true };
-    } else {
-      recipe_debug.enqueue = {
-        ok: false,
-        reason: "no_queue_or_no_ingredients"
-      };
-    }
-  } catch (e) {
-    recipe_debug.enqueue = { ok: false, reason: String(e?.message || e) };
-  }
-
-  try {
-    console.log(JSON.stringify({ at: "organs:return", dish: finalDish }));
-  } catch {}
-  return okJson(result);
-}
-
+__name(makeTrace, "makeTrace");
 async function handleDebugEcho(url, request) {
   const body = await readJson(request);
   const query = {};
@@ -891,27 +242,15 @@ async function handleDebugEcho(url, request) {
     body: body ?? null
   });
 }
-
-// [38.10] — shared CORS headers  (HOISTED so it's available everywhere)
-const CORS_ALL = {
+__name(handleDebugEcho, "handleDebugEcho");
+var CORS_ALL = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
-
-// Build a safe preview object for debug=1 (no CORS needed)
 function buildDebugPreview(raw, env, rowsUS = null, titles = null) {
-  const usedHost =
-    env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
-  const sample =
-    (Array.isArray(raw?.results) && raw.results[0]) ||
-    (Array.isArray(raw?.data?.results) && raw.data.results[0]) ||
-    (Array.isArray(raw?.data?.data?.results) && raw.data.data.results[0]) ||
-    (Array.isArray(raw?.payload?.results) && raw.payload.results[0]) ||
-    (Array.isArray(raw?.job?.results) && raw.job.results[0]) ||
-    (rowsUS && Array.isArray(rowsUS) && rowsUS[0]) ||
-    raw;
-
+  const usedHost = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+  const sample = Array.isArray(raw?.results) && raw.results[0] || Array.isArray(raw?.data?.results) && raw.data.results[0] || Array.isArray(raw?.data?.data?.results) && raw.data.data.results[0] || Array.isArray(raw?.payload?.results) && raw.payload.results[0] || Array.isArray(raw?.job?.results) && raw.job.results[0] || rowsUS && Array.isArray(rowsUS) && rowsUS[0] || raw;
   return {
     ok: true,
     source: "debug-preview",
@@ -923,24 +262,17 @@ function buildDebugPreview(raw, env, rowsUS = null, titles = null) {
     has_payload_results: Array.isArray(raw?.payload?.results),
     has_job_results: Array.isArray(raw?.job?.results),
     has_returnvalue_data: Array.isArray(raw?.returnvalue?.data),
-    ...(Array.isArray(titles)
-      ? { count: titles.length, titles: titles.slice(0, 25) }
-      : {}),
+    ...Array.isArray(titles) ? { count: titles.length, titles: titles.slice(0, 25) } : {},
     sample
   };
 }
-
-// Safe helper: always returns an object (never throws if 'trace' is missing)
+__name(buildDebugPreview, "buildDebugPreview");
 function safeTrace(t) {
   return t && typeof t === "object" ? t : {};
 }
-// ==========================================================================
-
-// Simple sleep
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// ===== LLM SAFE GLOBAL HELPERS (always defined) =====
-(function ensureLLMHelpers() {
+__name(safeTrace, "safeTrace");
+var sleep = /* @__PURE__ */ __name((ms) => new Promise((r) => setTimeout(r, ms)), "sleep");
+(/* @__PURE__ */ __name((function ensureLLMHelpers() {
   function _isValidUrl(u) {
     try {
       new URL(String(u || "").trim());
@@ -949,68 +281,41 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return false;
     }
   }
-
+  __name(_isValidUrl, "_isValidUrl");
   if (typeof globalThis.normalizeLLMItems !== "function") {
-    globalThis.normalizeLLMItems = function normalizeLLMItems(
-      rawItems = [],
-      tag = "llm"
-    ) {
-      return (Array.isArray(rawItems) ? rawItems : [])
-        .map((it) => ({
-          title: String(it.title || it.name || "").trim() || null,
-          description: String(it.description || it.desc || "").trim() || null,
-          section: String(it.section || it.category || "").trim() || null,
-          price_cents: Number.isFinite(Number(it.price_cents))
-            ? Number(it.price_cents)
-            : null,
-          price_text: it.price_text
-            ? String(it.price_text)
-            : Number.isFinite(it.price_cents)
-              ? `$${(Number(it.price_cents) / 100).toFixed(2)}`
-              : null,
-          calories_text: it.calories_text ? String(it.calories_text) : null,
-          source: tag,
-          confidence: typeof it.confidence === "number" ? it.confidence : 0.7
-        }))
-        .filter((r) => r.title);
-    };
+    globalThis.normalizeLLMItems = /* @__PURE__ */ __name(function normalizeLLMItems2(rawItems = [], tag = "llm") {
+      return (Array.isArray(rawItems) ? rawItems : []).map((it) => ({
+        title: String(it.title || it.name || "").trim() || null,
+        description: String(it.description || it.desc || "").trim() || null,
+        section: String(it.section || it.category || "").trim() || null,
+        price_cents: Number.isFinite(Number(it.price_cents)) ? Number(it.price_cents) : null,
+        price_text: it.price_text ? String(it.price_text) : Number.isFinite(it.price_cents) ? `$${(Number(it.price_cents) / 100).toFixed(2)}` : null,
+        calories_text: it.calories_text ? String(it.calories_text) : null,
+        source: tag,
+        confidence: typeof it.confidence === "number" ? it.confidence : 0.7
+      })).filter((r) => r.title);
+    }, "normalizeLLMItems");
   }
-
   if (typeof globalThis.dedupeItemsByTitleSection !== "function") {
-    globalThis.dedupeItemsByTitleSection = function dedupeItemsByTitleSection(
-      items = []
-    ) {
-      const seen = new Map(),
-        keep = [];
+    globalThis.dedupeItemsByTitleSection = /* @__PURE__ */ __name(function dedupeItemsByTitleSection2(items = []) {
+      const seen = /* @__PURE__ */ new Map(), keep = [];
       for (const it of items) {
         const k = `${(it.section || "").toLowerCase()}|${(it.title || "").toLowerCase()}`;
         if (!seen.has(k)) {
           seen.set(k, keep.length);
           keep.push(it);
         } else {
-          const i = seen.get(k),
-            cur = keep[i];
-          const curScore =
-            (cur.price_cents ? 1 : 0) +
-            (cur.price_text ? 1 : 0) +
-            (cur.description ? cur.description.length / 100 : 0);
-          const nxtScore =
-            (it.price_cents ? 1 : 0) +
-            (it.price_text ? 1 : 0) +
-            (it.description ? it.description.length / 100 : 0);
+          const i = seen.get(k), cur = keep[i];
+          const curScore = (cur.price_cents ? 1 : 0) + (cur.price_text ? 1 : 0) + (cur.description ? cur.description.length / 100 : 0);
+          const nxtScore = (it.price_cents ? 1 : 0) + (it.price_text ? 1 : 0) + (it.description ? it.description.length / 100 : 0);
           if (nxtScore > curScore) keep[i] = it;
         }
       }
       return keep;
-    };
+    }, "dedupeItemsByTitleSection");
   }
-
   if (typeof globalThis.callGrokExtract !== "function") {
-    globalThis.callGrokExtract = async function callGrokExtract(
-      env,
-      query,
-      address
-    ) {
+    globalThis.callGrokExtract = /* @__PURE__ */ __name(async function callGrokExtract2(env, query, address) {
       const url = (env.GROK_API_URL || "").trim();
       const key = (env.GROK_API_KEY || env.Tummy_Buddy_Grok || "").trim();
       if (!url) return { ok: true, items: [], note: "grok_missing_url" };
@@ -1043,31 +348,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           error: `grok fetch error: ${String(e?.message || e)}`
         };
       }
-    };
+    }, "callGrokExtract");
   }
-
   if (typeof globalThis.callOpenAIExtract !== "function") {
-    globalThis.callOpenAIExtract = async function callOpenAIExtract(
-      env,
-      query,
-      address
-    ) {
+    globalThis.callOpenAIExtract = /* @__PURE__ */ __name(async function callOpenAIExtract2(env, query, address) {
       const key = (env.OPENAI_API_KEY || "").trim();
-      const base = (
-        (env.OPENAI_API_BASE || "https://api.openai.com") + ""
-      ).replace(/\/+$/, "");
+      const base = ((env.OPENAI_API_BASE || "https://api.openai.com") + "").replace(/\/+$/, "");
       if (!key) return { ok: true, items: [], note: "openai_missing_key" };
       try {
         new URL(base);
       } catch {
         return { ok: true, items: [], note: "openai_invalid_base" };
       }
-
       const prompt = `You are extracting a restaurant's MENU ITEMS.
 Restaurant: ${query}
 Location: ${address}
 Return JSON with an "items" array. Each item: {title, description, section, price_text?, calories_text?}.`;
-
       try {
         const res = await fetch(`${base}/v1/chat/completions`, {
           method: "POST",
@@ -1088,7 +384,8 @@ Return JSON with an "items" array. Each item: {title, description, section, pric
         let payload = {};
         try {
           payload = JSON.parse(js?.choices?.[0]?.message?.content || "{}");
-        } catch {}
+        } catch {
+        }
         const items = Array.isArray(payload.items) ? payload.items : [];
         return { ok: true, items };
       } catch (e) {
@@ -1098,102 +395,52 @@ Return JSON with an "items" array. Each item: {title, description, section, pric
           error: `openai fetch error: ${String(e?.message || e)}`
         };
       }
-    };
+    }, "callOpenAIExtract");
   }
-})();
-
-const normalizeLLMItems = globalThis.normalizeLLMItems;
-const dedupeItemsByTitleSection = globalThis.dedupeItemsByTitleSection;
-const callGrokExtract = globalThis.callGrokExtract;
-const callOpenAIExtract = globalThis.callOpenAIExtract;
-
-// [37B] ── Tiny validators + friendly 400 helper
-const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
-
-// Accepts: "City, ST" or "City, ST 12345"  (e.g., "Miami, FL" / "Miami, FL 33131")
-const looksLikeCityState = (s) => {
+}), "ensureLLMHelpers"))();
+var normalizeLLMItems = globalThis.normalizeLLMItems;
+var dedupeItemsByTitleSection = globalThis.dedupeItemsByTitleSection;
+var callGrokExtract = globalThis.callGrokExtract;
+var callOpenAIExtract = globalThis.callOpenAIExtract;
+var isNonEmptyString = /* @__PURE__ */ __name((v) => typeof v === "string" && v.trim().length > 0, "isNonEmptyString");
+var looksLikeCityState = /* @__PURE__ */ __name((s) => {
   if (typeof s !== "string") return false;
   return /^[A-Za-z .'-]+,\s*[A-Z]{2}(\s*\d{5})?$/.test(s.trim());
-};
-
-// Address helpers used by /menu/search
+}, "looksLikeCityState");
 function hasLowercaseState(address) {
-  // Detect ", fl" or ", ny" etc.
   const m = String(address || "").match(/,\s*([A-Za-z]{2})(\b|[^A-Za-z]|$)/);
   if (!m) return false;
   const st = m[1];
   return st !== st.toUpperCase();
 }
+__name(hasLowercaseState, "hasLowercaseState");
 function normalizeCityStateAddress(address) {
-  // Convert ", fl" -> ", FL" (keep the rest intact)
   return String(address || "").replace(
     /,\s*([A-Za-z]{2})(\b|[^A-Za-z]|$)/,
     (_, st, tail) => `, ${st.toUpperCase()}${tail || ""}`
   );
 }
-
-function badRequest(
-  message,
-  hint,
-  envOrCtx,
-  request_id = null,
-  examples = null
-) {
+__name(normalizeCityStateAddress, "normalizeCityStateAddress");
+function badRequest(message, hint, envOrCtx, request_id = null, examples = null) {
   const body = { ok: false, error: message, hint };
   if (Array.isArray(examples) && examples.length) body.examples = examples;
   return errorResponseWith(body, 400, envOrCtx, {}, request_id);
 }
-
+__name(badRequest, "badRequest");
 function json(data, init = {}) {
   return new Response(JSON.stringify(data), {
     headers: { "content-type": "application/json; charset=utf-8" },
     ...init
   });
 }
-
-// === New helpers (ported from newer index) ================================
-function slimTopDrivers(drivers) {
-  // Input shape (V6): { OrganName: ["+ Compound A", "- Compound B"], ... }
-  // Output: compact array of up to 8 entries [{ organ, label }]
-  const out = [];
-  if (!drivers || typeof drivers !== "object") return out;
-  for (const [organ, arr] of Object.entries(drivers)) {
-    if (!Array.isArray(arr)) continue;
-    for (const label of arr) {
-      out.push({ organ, label: String(label) });
-    }
-  }
-  return out.slice(0, 8);
-}
-
-function topDriversText(slim) {
-  // Turn first two items into a short natural label: "Compound A; Compound B"
-  if (!Array.isArray(slim) || slim.length === 0) return "";
-  const names = slim.map((x) => {
-    // strip "+ " / "- " prefix for readability
-    const t = String(x?.label || "");
-    return t.replace(/^([+\-]\s*)/, "");
-  });
-  const firstTwo = names.slice(0, 2).filter(Boolean);
-  return firstTwo.join("; ");
-}
-// ========================================================================
-
-// [37B] ── Flag/number validators
-const is01 = (v) => v === "0" || v === "1";
-const isPositiveInt = (s) => /^\d+$/.test(String(s));
-
-// Simple request-id helper (used by /meta, /debug/status, etc.)
+__name(json, "json");
+var is01 = /* @__PURE__ */ __name((v) => v === "0" || v === "1", "is01");
+var isPositiveInt = /* @__PURE__ */ __name((s) => /^\d+$/.test(String(s)), "isPositiveInt");
 function newRequestId() {
   if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
-
-function isOcrEnabled(env) {
-  return String(env.OCR_TIER_ENABLED || "").trim() === "1";
-}
-
-// Friendly upstream error explainer (maps vendor HTTP to user-facing text)
+__name(newRequestId, "newRequestId");
 function friendlyUpstreamMessage(status) {
   switch (Number(status)) {
     case 429:
@@ -1206,20 +453,10 @@ function friendlyUpstreamMessage(status) {
       return "Upstream error.";
   }
 }
-
-// Flatten Uber Eats to simple items (normalized + deduped)
+__name(friendlyUpstreamMessage, "friendlyUpstreamMessage");
 function extractMenuItemsFromUber(raw, queryText = "") {
   const q = (queryText || "").toLowerCase().trim();
-
-  const results =
-    (raw?.data?.results &&
-      Array.isArray(raw.data.results) &&
-      raw.data.results) ||
-    (Array.isArray(raw?.results) && raw.results) ||
-    (Array.isArray(raw?.data?.data?.results) && raw.data.data.results) ||
-    [];
-
-  // Choose best-matching restaurant(s) if query given
+  const results = raw?.data?.results && Array.isArray(raw.data.results) && raw.data.results || Array.isArray(raw?.results) && raw.results || Array.isArray(raw?.data?.data?.results) && raw.data.data.results || [];
   let chosen = results;
   if (q && results.length) {
     const scored = results.map((r) => {
@@ -1232,52 +469,27 @@ function extractMenuItemsFromUber(raw, queryText = "") {
     });
     scored.sort((a, b) => b.score - a.score);
     const bestScore = scored[0]?.score || 0;
-    chosen =
-      bestScore > 0
-        ? scored.filter((s) => s.score === bestScore).map((s) => s.r)
-        : [scored[0].r];
+    chosen = bestScore > 0 ? scored.filter((s) => s.score === bestScore).map((s) => s.r) : [scored[0].r];
   }
-
-  // --- normalization helpers ---
   function normalizePriceFields(mi) {
-    // vendor sometimes gives cents as number; sometimes only a display string
-    const asNum = typeof mi.price === "number" ? mi.price : undefined;
-    const price = Number.isFinite(asNum) ? asNum : undefined;
-    const price_display =
-      mi.priceTagline ||
-      (Number.isFinite(price)
-        ? `$${(price / 100).toFixed(2)}`
-        : mi.price_display || "") ||
-      "";
+    const asNum = typeof mi.price === "number" ? mi.price : void 0;
+    const price = Number.isFinite(asNum) ? asNum : void 0;
+    const price_display = mi.priceTagline || (Number.isFinite(price) ? `$${(price / 100).toFixed(2)}` : mi.price_display || "") || "";
     return { price, price_display };
   }
-
+  __name(normalizePriceFields, "normalizePriceFields");
   function deriveCaloriesDisplay(mi, price_display) {
-    // Prefer explicit numeric calories if vendor exposes them
-    // (some shapes may have mi.nutrition?.calories or mi.calories)
-    const calNum =
-      (mi?.nutrition &&
-        Number.isFinite(mi.nutrition.calories) &&
-        mi.nutrition.calories) ||
-      (Number.isFinite(mi?.calories) && mi.calories) ||
-      null;
-
+    const calNum = mi?.nutrition && Number.isFinite(mi.nutrition.calories) && mi.nutrition.calories || Number.isFinite(mi?.calories) && mi.calories || null;
     if (Number.isFinite(calNum)) return `${Math.round(calNum)} Cal`;
-
-    // Fallback: parse from price_display (e.g., "$4.79 • 320 Cal.")
     const t = String(
       price_display || mi?.itemDescription || mi?.description || ""
     );
     const m = t.match(/\b(\d{2,4})\s*Cal\.?\b/i);
     return m ? `${m[1]} Cal` : null;
   }
-
+  __name(deriveCaloriesDisplay, "deriveCaloriesDisplay");
   function normalizeItemFields(it) {
-    const clean = (s) =>
-      String(s ?? "")
-        .normalize("NFKC")
-        .replace(/\s+/g, " ")
-        .trim();
+    const clean = /* @__PURE__ */ __name((s) => String(s ?? "").normalize("NFKC").replace(/\s+/g, " ").trim(), "clean");
     const out = { ...it };
     out.name = clean(it.name);
     out.section = clean(it.section);
@@ -1286,15 +498,11 @@ function extractMenuItemsFromUber(raw, queryText = "") {
     if (out.calories_display != null)
       out.calories_display = clean(out.calories_display);
     out.restaurant_name = clean(it.restaurant_name);
-
-    // keep price only if it’s a non-negative finite number
     if (!(Number.isFinite(out.price) && out.price >= 0)) delete out.price;
-
-    // enforce source field
     out.source = "uber_eats";
     return out;
   }
-
+  __name(normalizeItemFields, "normalizeItemFields");
   function makeItem(mi, sectionName, restaurantName) {
     const { price, price_display } = normalizePriceFields(mi);
     const calories_display = deriveCaloriesDisplay(mi, price_display);
@@ -1309,8 +517,7 @@ function extractMenuItemsFromUber(raw, queryText = "") {
       source: "uber_eats"
     };
   }
-
-  // prefer items that have price/calories/longer description when de-duping
+  __name(makeItem, "makeItem");
   function better(a, b) {
     const ap = hasPrice(a) ? 1 : 0;
     const bp = hasPrice(b) ? 1 : 0;
@@ -1321,13 +528,11 @@ function extractMenuItemsFromUber(raw, queryText = "") {
     const ad = (a.description || "").length;
     const bd = (b.description || "").length;
     if (ad !== bd) return ad > bd;
-    // keep earlier (stable) otherwise
     return false;
   }
-
+  __name(better, "better");
   const items = [];
-  const seen = new Map(); // key = `${section}|${name}` lowercased
-
+  const seen = /* @__PURE__ */ new Map();
   function addItem(it) {
     const item = normalizeItemFields(it);
     const key = `${(item.section || "").toLowerCase()}|${(item.name || "").toLowerCase()}`;
@@ -1340,74 +545,59 @@ function extractMenuItemsFromUber(raw, queryText = "") {
       if (better(item, prev)) items[prevIdx] = item;
     }
   }
-
-  // --- collect items from all vendor shapes, then dedupe via addItem() ---
+  __name(addItem, "addItem");
   for (const r of chosen) {
     const restaurantName = r.title || r.sanitizedTitle || r.name || "";
-
-    // catalogs / menu sections
     let sections = [];
     if (Array.isArray(r.menu)) sections = r.menu;
     else if (Array.isArray(r.catalogs)) sections = r.catalogs;
-
     for (const section of sections) {
       const sectionName = section.catalogName || section.name || "";
-      const catalogItems =
-        (Array.isArray(section.catalogItems) && section.catalogItems) ||
-        (Array.isArray(section.items) && section.items) ||
-        [];
+      const catalogItems = Array.isArray(section.catalogItems) && section.catalogItems || Array.isArray(section.items) && section.items || [];
       for (const mi of catalogItems)
         addItem(makeItem(mi, sectionName, restaurantName));
     }
-
-    // featured
     if (Array.isArray(r.featuredItems)) {
       for (const mi of r.featuredItems)
         addItem(makeItem(mi, "Featured", restaurantName));
     }
   }
-
   return items;
 }
-
-const SECTION_PRIORITY = [
+__name(extractMenuItemsFromUber, "extractMenuItemsFromUber");
+var SECTION_PRIORITY = [
   "most popular",
   "popular items",
   "featured",
   "bestsellers",
   "recommended"
 ];
-
 function sectionScore(section = "") {
   const s = section.toLowerCase();
   for (let i = 0; i < SECTION_PRIORITY.length; i++) {
-    if (s.includes(SECTION_PRIORITY[i])) return 100 - i * 2; // 100,98,96...
+    if (s.includes(SECTION_PRIORITY[i])) return 100 - i * 2;
   }
   return 0;
 }
-
+__name(sectionScore, "sectionScore");
 function hasCalories(item) {
-  // Many Uber items expose "Cal." inside price_display, e.g. "$4.79 • 320 Cal."
   const t = `${item.price_display || item.description || ""}`.toLowerCase();
   return /\bcal\b|\bcal\.\b/.test(t);
 }
-
+__name(hasCalories, "hasCalories");
 function hasPrice(item) {
-  return (
-    typeof item.price === "number" || /\$\d/.test(item.price_display || "")
-  );
+  return typeof item.price === "number" || /\$\d/.test(item.price_display || "");
 }
-
+__name(hasPrice, "hasPrice");
 function baseNameScore(name = "") {
-  // Prefer clearer names over generic—simple heuristic
   const n = name.toLowerCase();
   let sc = 0;
-  if (/\bcombo\b|\bmeal\b/.test(n)) sc += 2; // combos often user-intent
-  if (/\bfamily\b|\bparty\b/.test(n)) sc -= 2; // de-prioritize huge packs
+  if (/\bcombo\b|\bmeal\b/.test(n)) sc += 2;
+  if (/\bfamily\b|\bparty\b/.test(n)) sc -= 2;
   if (/\bside\b/.test(n)) sc -= 1;
   return sc;
 }
-
+__name(baseNameScore, "baseNameScore");
 function scoreItem(item) {
   let score = 0;
   score += sectionScore(item.section);
@@ -1416,25 +606,15 @@ function scoreItem(item) {
   score += baseNameScore(item.name || item.title || "");
   return score;
 }
-
+__name(scoreItem, "scoreItem");
 function rankTop(items, n) {
-  return (
-    [...items]
-      .map((it, idx) => ({ it, idx, score: scoreItem(it) }))
-      // stable: by score desc, then original index asc
-      .sort((a, b) => b.score - a.score || a.idx - b.idx)
-      .slice(0, Math.max(0, n))
-      .map((x) => x.it)
-  );
+  return [...items].map((it, idx) => ({ it, idx, score: scoreItem(it) })).sort((a, b) => b.score - a.score || a.idx - b.idx).slice(0, Math.max(0, n)).map((x) => x.it);
 }
-
-// ---- Step 41.7: normalize filters + ranking for analyze ----
+__name(rankTop, "rankTop");
 function filterAndRankItems(items, searchParams, env) {
   let candidates = Array.isArray(items) ? items : [];
-
   const skipDrinks = searchParams.get("skip_drinks") === "1";
   const skipParty = searchParams.get("skip_party") === "1";
-
   if (skipDrinks) {
     candidates = candidates.filter(
       (it) => !isDrink(it.name || it.title || "", it.section)
@@ -1445,372 +625,28 @@ function filterAndRankItems(items, searchParams, env) {
       (it) => !isPartyPack(it.name || it.title || "")
     );
   }
-
   const HITS_LIMIT = Number(searchParams.get("top") || env.HITS_LIMIT || "25");
   return rankTop(candidates, HITS_LIMIT);
 }
-
+__name(filterAndRankItems, "filterAndRankItems");
 function isDrink(name = "", section = "") {
   const n = name.toLowerCase();
   const s = (section || "").toLowerCase();
-  return (
-    /\b(drink|beverage|soda|coke|sprite|fanta|tea|coffee|juice|shake|mcflurry|water)\b/.test(
-      n
-    ) || /\b(drinks|beverages)\b/.test(s)
-  );
+  return /\b(drink|beverage|soda|coke|sprite|fanta|tea|coffee|juice|shake|mcflurry|water)\b/.test(
+    n
+  ) || /\b(drinks|beverages)\b/.test(s);
 }
-
+__name(isDrink, "isDrink");
 function isPartyPack(name = "") {
   const n = name.toLowerCase();
-  // Look for big counts or party/family cues
-  return (
-    /\b(20|30|40|50)\s*(pc|piece|pieces)\b/.test(n) ||
-    /\b(family|party|bundle|pack)\b/.test(n)
-  );
+  return /\b(20|30|40|50)\s*(pc|piece|pieces)\b/.test(n) || /\b(family|party|bundle|pack)\b/.test(n);
 }
-
-// Turns Uber items into our simple, clean shape
-function normalizeUberItems(rawItems = []) {
-  return rawItems.map((it) => ({
-    title: it.name || "",
-    description: it.description || "",
-    section: it.section || "",
-    price_cents: typeof it.price === "number" ? it.price : null,
-    price_text: it.price_display || null,
-    calories_text: it.calories_display || null,
-    source: "uber",
-    confidence: 1.0
-  }));
-}
-
-// Canonical item shape for /menu/extract
-// { title, description, section, price_cents, price_text, calories_text, source, confidence }
-function toCanonFromUber(it) {
-  return {
-    title: it.name || "",
-    description: it.description || "",
-    section: it.section || "",
-    price_cents: typeof it.price === "number" ? it.price : null,
-    price_text: it.price_display || null,
-    calories_text: it.calories_display || null,
-    source: "uber",
-    confidence: 1.0
-  };
-}
-function toCanonFromLLM(it) {
-  return {
-    title: (it.title || it.name || "").trim(),
-    description: (it.description || it.desc || "").trim() || null,
-    section: (it.section || it.category || "").trim() || "",
-    price_cents: Number.isFinite(Number(it.price_cents))
-      ? Number(it.price_cents)
-      : null,
-    price_text: it.price_text ? String(it.price_text) : null,
-    calories_text: it.calories_text ? String(it.calories_text) : null,
-    source: it.source || "llm",
-    confidence: typeof it.confidence === "number" ? it.confidence : 0.7
-  };
-}
-
-function toCanonFromOCR(it) {
-  return {
-    title: (it.title || it.name || "").trim(),
-    description: null,
-    section: (it.section || "").trim(),
-    price_cents: null,
-    price_text: it.price_text ? String(it.price_text) : null,
-    calories_text: null,
-    source: "ocr",
-    confidence: 0.6
-  };
-}
-
-function parseOCRToCandidates(fullText) {
-  const text = String(fullText || "")
-    .replace(/\r/g, "")
-    .replace(/[ \t]+/g, " ")
-    .trim();
-
-  const KNOWN_SECTIONS = new Set([
-    "APPETIZERS",
-    "STARTERS",
-    "SIDES",
-    "SALADS",
-    "SOUPS",
-    "ENTREES",
-    "MAINS",
-    "DESSERTS",
-    "DRINKS",
-    "BEVERAGES",
-    "PASTA",
-    "PIZZA",
-    "SANDWICHES",
-    "BURGERS",
-    "SPECIALS",
-    "BREAKFAST",
-    "LUNCH",
-    "DINNER"
-  ]);
-
-  let currentSection = null;
-  const items = [];
-  const lines = text
-    .split(/\n+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  function pushItem(title, price, section) {
-    const t = String(title || "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!t) return;
-    let name = t;
-    const firstWord = t.split(" ")[0];
-    if (KNOWN_SECTIONS.has(firstWord)) name = t.slice(firstWord.length).trim();
-    if (!name) return;
-    items.push({
-      title: name,
-      price_text: `$${price}`,
-      section: section || null
-    });
-  }
-
-  if (lines.length > 1) {
-    for (const line of lines) {
-      const cap = line.toUpperCase();
-      if (!/\$/.test(line) && KNOWN_SECTIONS.has(cap)) {
-        currentSection = cap;
-        continue;
-      }
-      const m = line.match(/(.+?)\s*\$?\s*([0-9]+(?:\.[0-9]{2})?)\b/);
-      if (m) pushItem(m[1], m[2], currentSection);
-    }
-  }
-
-  if (items.length === 0) {
-    const re = /([A-Z0-9][A-Z0-9 &'’\-]+?)\s*\$?\s*([0-9]+(?:\.[0-9]{2})?)\b/g;
-    let m;
-    while ((m = re.exec(text))) pushItem(m[1], m[2], currentSection);
-  }
-
-  const seen = new Set();
-  const out = [];
-  for (const it of items) {
-    const k = `${(it.section || "").toLowerCase()}|${it.title.toLowerCase()}|${it.price_text}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(it);
-  }
-  return out;
-}
-
-// Tiny bridge: image URL -> Vision full text -> parsed OCR menu items
-async function fetchOCRCandidates(env, imageUrl) {
-  const { fullText } = await callVisionForText(env, imageUrl);
-  const parsed = parseOCRToCandidates(fullText);
-  return Array.isArray(parsed) ? parsed : [];
-}
-
-// ---- WEB SCRAPER TINY HELPERS (HTML -> best menu image URL) ----
-
-// Download an HTML page as text (best-effort)
-async function fetchHtml(env, pageUrl) {
-  const res = await fetch(pageUrl, {
-    headers: {
-      "User-Agent": "TummyBuddyWorker/1.0 (+https://tummybuddy.app)",
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"
-    }
-  });
-  if (!res.ok) throw new Error(`html fetch failed: ${res.status}`);
-  return await res.text();
-}
-
-// Parse srcset and pick the largest candidate
-function pickLargestFromSrcset(srcset, baseUrl) {
-  try {
-    const parts = String(srcset || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    let best = null;
-    for (const p of parts) {
-      // formats like: "image.jpg 800w" or "image.jpg 2x"
-      const m = p.match(/(.+?)\s+(\d+)(w|x)\b/i);
-      const urlPart = m ? m[1].trim() : p;
-      const size = m ? parseInt(m[2], 10) : 0;
-      const abs = new URL(urlPart, baseUrl).toString();
-      if (!best || size > best.size) best = { url: abs, size };
-    }
-    return best ? best.url : null;
-  } catch {
-    return null;
-  }
-}
-
-// Pick the most likely menu image from <img> tags
-function pickMenuImageFromHtml(html, baseUrl) {
-  if (typeof html !== "string" || !html) return null;
-
-  // 0) Try OpenGraph first (very reliable on many sites)
-  const og =
-    /<meta\s+(?:property|name)\s*=\s*["']og:image["'][^>]*?\scontent\s*=\s*["']([^"']+)["'][^>]*?>/i.exec(
-      html
-    ) ||
-    /<meta\s+content\s*=\s*["']([^"']+)["'][^>]*?(?:property|name)\s*=\s*["']og:image["'][^>]*?>/i.exec(
-      html
-    );
-  if (og && og[1]) {
-    try {
-      return new URL(og[1].trim(), baseUrl).toString();
-    } catch {
-      /* fall through */
-    }
-  }
-
-  // 1) Collect <img> candidates from src and (if present) srcset
-  const candidates = [];
-  const imgRe = /<img\b([^>]+)>/gi;
-  let m;
-  while ((m = imgRe.exec(html))) {
-    const tag = m[1] || "";
-    const srcM = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag);
-    const setM = /\bsrcset\s*=\s*["']([^"']+)["']/i.exec(tag);
-
-    let abs = null;
-
-    if (setM && setM[1]) {
-      const picked = pickLargestFromSrcset(setM[1], baseUrl);
-      if (picked) abs = picked;
-    }
-    if (!abs && srcM && srcM[1]) {
-      try {
-        abs = new URL(srcM[1].trim(), baseUrl).toString();
-      } catch {}
-    }
-
-    if (abs) candidates.push(abs);
-  }
-
-  if (!candidates.length) return null;
-
-  // 2) Score images by menu-like hints and deprioritize obvious non-menus
-  function score(url) {
-    const u = url.toLowerCase();
-    let s = 0;
-    if (/\bmenu\b/.test(u)) s += 6;
-    if (
-      /\b(food|foods|dishes|lunch|dinner|brunch|dessert|beverage|drinks|wine|beer)\b/.test(
-        u
-      )
-    )
-      s += 3;
-    if (/\.(jpg|jpeg|png|webp)(\?|$)/.test(u)) s += 2;
-
-    // down-rank sprites, logos, favicons, tiny thumbs, social, tracking
-    if (
-      /sprite|icon|logo|favicon|thumb|tracking|pixel|social|twitter|facebook|instagram/.test(
-        u
-      )
-    )
-      s -= 5;
-
-    // mild up-rank if looks like a full-size image
-    if (/(\bfull\b|\blarge\b|\bxl\b|@2x|@3x)/.test(u)) s += 1;
-
-    return s;
-  }
-
-  candidates.sort((a, b) => score(b) - score(a));
-  return candidates[0] || null;
-}
-
-// Turn common gallery/page URLs into a direct image URL when possible
-function normalizeGalleryToDirectImage(pageUrl) {
-  try {
-    const u = new URL(pageUrl);
-    const host = u.hostname.toLowerCase();
-    const parts = u.pathname.split("/").filter(Boolean); // e.g., ["gallery","abc123"] or ["abc123"]
-
-    // Imgur patterns:
-    // https://imgur.com/abc123       -> https://i.imgur.com/abc123.jpg
-    // https://imgur.com/gallery/abc  -> https://i.imgur.com/abc.jpg
-    if (host === "imgur.com" && parts.length >= 1) {
-      const id = parts[parts.length - 1];
-      if (/^[A-Za-z0-9]+$/.test(id)) {
-        return `https://i.imgur.com/${id}.jpg`;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Decide which of two items with the same (section|title) to keep
-function preferBetter(a, b) {
-  const score = (x) =>
-    (x.price_cents ? 3 : 0) +
-    (x.price_text ? 2 : 0) +
-    (x.calories_text ? 1 : 0) +
-    Math.min(3, (x.description || "").length / 60) +
-    (x.source === "uber" ? 1 : 0) +
-    (typeof x.confidence === "number" ? x.confidence : 0);
-  return score(b) > score(a) ? b : a;
-}
-
-// Merge + de-dup by (section|title), keeping the richer one
-function mergeCanonItems(uberItems = [], llmItems = [], ocrItems = []) {
-  const all = [];
-
-  for (const u of uberItems || []) all.push(toCanonFromUber(u));
-  for (const l of llmItems || []) all.push(toCanonFromLLM(l));
-  for (const o of ocrItems || []) all.push(toCanonFromOCR(o));
-
-  const byKey = new Map();
-  for (const it of all) {
-    const key = `${(it.section || "").toLowerCase()}|${(it.title || "").toLowerCase()}`;
-    if (!byKey.has(key)) byKey.set(key, it);
-    else byKey.set(key, preferBetter(byKey.get(key), it));
-  }
-  return Array.from(byKey.values());
-}
-
-function rankCanon(items = [], topN = 25) {
-  const scored = items.map((it, idx) => {
-    let score = 0;
-    const s = (it.section || "").toLowerCase();
-    if (
-      /\bmost popular\b|\bpopular items\b|\bfeatured\b|\bbestsellers\b|\brecommended\b/.test(
-        s
-      )
-    )
-      score += 100;
-    if (it.price_cents) score += 6;
-    if (it.price_text) score += 3;
-    if (it.calories_text) score += 2;
-    if ((it.description || "").length > 30) score += 2;
-    if (it.source === "uber") score += 2;
-    if (typeof it.confidence === "number") score += Math.min(4, it.confidence);
-    return { it, idx, score };
-  });
-  return scored
-    .sort((a, b) => b.score - a.score || a.idx - b.idx)
-    .slice(0, Math.max(0, topN))
-    .map((x) => x.it);
-}
-
-// ---- Recipe cache helpers (KV) ----
+__name(isPartyPack, "isPartyPack");
 function recipeCacheKey(dish, lang = "en") {
-  const base = String(dish || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const base = String(dish || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return `recipe/${lang}/${base || "unknown"}.json`;
 }
-
+__name(recipeCacheKey, "recipeCacheKey");
 async function recipeCacheRead(env, key) {
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   if (!kv) return null;
@@ -1821,14 +657,14 @@ async function recipeCacheRead(env, key) {
     return null;
   }
 }
-
+__name(recipeCacheRead, "recipeCacheRead");
 async function recipeCacheWrite(env, key, payload) {
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   if (!kv) return false;
   try {
     await kv.put(
       key,
-      JSON.stringify({ savedAt: new Date().toISOString(), ...payload }),
+      JSON.stringify({ savedAt: (/* @__PURE__ */ new Date()).toISOString(), ...payload }),
       {
         expirationTtl: 365 * 24 * 3600
       }
@@ -1838,11 +674,11 @@ async function recipeCacheWrite(env, key, payload) {
     return false;
   }
 }
-
+__name(recipeCacheWrite, "recipeCacheWrite");
 function defaultPrefs() {
   return { allergens: [], fodmap: {}, units: "us" };
 }
-
+__name(defaultPrefs, "defaultPrefs");
 function normalizePrefs(input) {
   const out = defaultPrefs();
   const src = input?.prefs ? input.prefs : input || {};
@@ -1851,7 +687,7 @@ function normalizePrefs(input) {
     out.fodmap = { ...src.fodmap };
   if (Array.isArray(src.pills)) {
     const al = new Set(out.allergens);
-    const fm = { ...(out.fodmap || {}) };
+    const fm = { ...out.fodmap || {} };
     for (const p of src.pills) {
       const s = String(p);
       if (s.startsWith("allergen:")) al.add(s.slice(9));
@@ -1863,7 +699,7 @@ function normalizePrefs(input) {
   if (typeof src.units === "string") out.units = src.units;
   return out;
 }
-
+__name(normalizePrefs, "normalizePrefs");
 async function loadUserPrefs(env, user_id) {
   const id = (user_id || "").trim();
   if (!id || !env?.USER_PREFS_KV) return defaultPrefs();
@@ -1874,15 +710,12 @@ async function loadUserPrefs(env, user_id) {
     return defaultPrefs();
   }
 }
-
+__name(loadUserPrefs, "loadUserPrefs");
 function derivePillsForUser(hits = [], prefs = { allergens: [], fodmap: {} }) {
   const safeHits = Array.isArray(hits) ? hits : [];
-  const safePrefs =
-    prefs && typeof prefs === "object" ? prefs : { allergens: [], fodmap: {} };
-
-  const baseAllergens = new Set();
-  const baseClasses = new Set();
-
+  const safePrefs = prefs && typeof prefs === "object" ? prefs : { allergens: [], fodmap: {} };
+  const baseAllergens = /* @__PURE__ */ new Set();
+  const baseClasses = /* @__PURE__ */ new Set();
   for (const hit of safeHits) {
     if (Array.isArray(hit?.allergens)) {
       for (const allergen of hit.allergens) {
@@ -1897,14 +730,10 @@ function derivePillsForUser(hits = [], prefs = { allergens: [], fodmap: {} }) {
       }
     }
   }
-
   const pills = [];
   const allergenPrefs = new Set(
-    Array.isArray(safePrefs.allergens)
-      ? safePrefs.allergens.map((a) => String(a))
-      : []
+    Array.isArray(safePrefs.allergens) ? safePrefs.allergens.map((a) => String(a)) : []
   );
-
   for (const allergen of baseAllergens) {
     pills.push({
       key: `allergen:${allergen}`,
@@ -1912,11 +741,7 @@ function derivePillsForUser(hits = [], prefs = { allergens: [], fodmap: {} }) {
       active: allergenPrefs.has(allergen)
     });
   }
-
-  const fodmapPrefs =
-    safePrefs.fodmap && typeof safePrefs.fodmap === "object"
-      ? safePrefs.fodmap
-      : {};
+  const fodmapPrefs = safePrefs.fodmap && typeof safePrefs.fodmap === "object" ? safePrefs.fodmap : {};
   if (baseClasses.has("onion"))
     pills.push({
       key: "fodmap:onion",
@@ -1929,125 +754,21 @@ function derivePillsForUser(hits = [], prefs = { allergens: [], fodmap: {} }) {
       label: "Garlic",
       active: !!fodmapPrefs.garlic
     });
-
   return pills;
 }
-
-function inferHitsFromRecipeCard(card = {}) {
-  const text = JSON.stringify(card).toLowerCase();
-  const hits = [];
-
-  const push = (o) =>
-    hits.push({
-      allergens: o.allergens || [],
-      classes: o.classes || [],
-      source: "infer"
-    });
-
-  if (/\bgarlic\b/.test(text)) push({ classes: ["garlic"] });
-  if (/\bonion\b|shallot|scallion/.test(text)) push({ classes: ["onion"] });
-
-  if (
-    /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
-      text
-    )
-  )
-    push({ allergens: ["dairy"] });
-
-  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text))
-    push({ allergens: ["shellfish"] });
-
-  return hits;
-}
-
-function inferHitsFromText(title = "", desc = "") {
-  const text = `${title} ${desc}`.toLowerCase();
-  const hits = [];
-  const push = (o) =>
-    hits.push({
-      allergens: o.allergens || [],
-      classes: o.classes || [],
-      source: "infer:title"
-    });
-
-  if (/\bgarlic\b/.test(text)) push({ classes: ["garlic"] });
-  if (/\bonion\b|shallot|scallion/.test(text)) push({ classes: ["onion"] });
-  if (
-    /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
-      text
-    )
-  )
-    push({ allergens: ["dairy"] });
-  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text))
-    push({ allergens: ["shellfish"] });
-
-  return hits;
-}
-
-function inferHitsFromIngredients(ingredients = []) {
-  const hits = [];
-  const push = (o) =>
-    hits.push({
-      allergens: o.allergens || [],
-      classes: o.classes || [],
-      source: "infer:ingredients"
-    });
-
-  for (const ing of ingredients) {
-    const name = String(ing?.name || "").toLowerCase();
-
-    if (
-      /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
-        name
-      )
-    )
-      push({ allergens: ["dairy"] });
-    if (/\bgarlic\b/.test(name)) push({ classes: ["garlic"] });
-    if (/\bonion\b|shallot|scallion/.test(name)) push({ classes: ["onion"] });
-    if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(name))
-      push({ allergens: ["shellfish"] });
-    if (/\bflour|wheat\b/.test(name)) push({ allergens: ["gluten"] });
-  }
-  return hits;
-}
-
-async function fetchRecipeCard(env, dishTitle, urlOrigin) {
-  try {
-    const base = (
-      urlOrigin || "https://tb-dish-processor.tummybuddy.workers.dev"
-    ).replace(/\/$/, "");
-    const u = new URL("/recipe/resolve", base);
-    u.searchParams.set("dish", dishTitle);
-    u.searchParams.set("shape", "recipe_card");
-    u.searchParams.set("force_reanalyze", "1");
-    const r = await fetch(u, { headers: { accept: "application/json" } });
-    if (!r.ok) return null;
-    const j = await r.json();
-    return j && typeof j === "object" ? j : null;
-  } catch {
-    return null;
-  }
-}
-
-// ============== EDAMAM: RECIPE SEARCH V2 + NUTRITION ANALYSIS ==============
+__name(derivePillsForUser, "derivePillsForUser");
 async function callEdamamRecipe(dish, env, opts = {}) {
   const id = env.EDAMAM_APP_ID;
   const key = env.EDAMAM_APP_KEY;
   if (!id || !key)
     return { ingredients: [], reason: "EDAMAM_APP_ID/KEY missing" };
-
   const url = new URL("https://api.edamam.com/api/recipes/v2");
   url.searchParams.set("type", "public");
   url.searchParams.set("q", dish);
   url.searchParams.set("app_id", id);
   url.searchParams.set("app_key", key);
-
   let data;
-  const accountUser =
-    typeof opts?.user_id === "string" && opts.user_id.trim()
-      ? opts.user_id.trim()
-      : "anon";
-
+  const accountUser = typeof opts?.user_id === "string" && opts.user_id.trim() ? opts.user_id.trim() : "anon";
   try {
     const res = await fetch(url.toString(), {
       method: "GET",
@@ -2077,36 +798,30 @@ async function callEdamamRecipe(dish, env, opts = {}) {
       reason: `edamam fetch err ${String(e?.message || e)}`
     };
   }
-
   const hit = data?.hits?.[0]?.recipe;
   const lines = Array.isArray(hit?.ingredientLines) ? hit.ingredientLines : [];
   const ingredients = lines.map((s) => String(s).trim()).filter(Boolean);
-
   return {
     ingredients,
     reason: ingredients.length ? "ok" : "no ingredients",
     raw: { label: hit?.label || null }
   };
 }
-
+__name(callEdamamRecipe, "callEdamamRecipe");
 async function callEdamamNutritionAnalyze(payload, env) {
   const nid = env.EDAMAM_NUTRITION_APP_ID || env.EDAMAM_APP_ID;
   const nkey = env.EDAMAM_NUTRITION_APP_KEY || env.EDAMAM_APP_KEY;
   if (!nid || !nkey)
     return { ingredients: [], reason: "nutrition keys missing" };
-
   const body = {
     title: payload?.title || "Recipe",
     ingr: Array.isArray(payload?.ingr) ? payload.ingr : []
   };
-
   const url = `https://api.edamam.com/api/nutrition-details?app_id=${encodeURIComponent(
     nid
   )}&app_key=${encodeURIComponent(nkey)}`;
-
   let data = null;
   let status = 0;
-
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -2118,7 +833,6 @@ async function callEdamamNutritionAnalyze(payload, env) {
   } catch (e) {
     data = { error: String(e?.message || e) };
   }
-
   const norm = [];
   const src = Array.isArray(data?.ingredients) ? data.ingredients : [];
   for (const ing of src) {
@@ -2127,21 +841,11 @@ async function callEdamamNutritionAnalyze(payload, env) {
     if (!name) continue;
     norm.push({
       name: name.toLowerCase(),
-      grams: grams > 0 ? grams : undefined
+      grams: grams > 0 ? grams : void 0
     });
   }
-
-  let calories =
-    typeof data?.calories === "number" ? Math.round(data.calories) : null;
-
-  const needFallback =
-    calories === null ||
-    !Array.isArray(body.ingr) ||
-    body.ingr.length === 0 ||
-    !Array.isArray(data?.ingredients) ||
-    data.ingredients.length === 0 ||
-    (status && status !== 200);
-
+  let calories = typeof data?.calories === "number" ? Math.round(data.calories) : null;
+  const needFallback = calories === null || !Array.isArray(body.ingr) || body.ingr.length === 0 || !Array.isArray(data?.ingredients) || data.ingredients.length === 0 || status && status !== 200;
   if (needFallback && Array.isArray(body.ingr) && body.ingr.length) {
     let sum = 0;
     for (const line of body.ingr) {
@@ -2152,13 +856,13 @@ async function callEdamamNutritionAnalyze(payload, env) {
         const r = await fetch(u);
         const d = await r.json();
         if (typeof d?.calories === "number") sum += d.calories;
-      } catch {}
+      } catch {
+      }
     }
     if (sum > 0) {
       calories = Math.round(sum);
     }
   }
-
   return {
     ingredients: norm,
     nutrition: {
@@ -2167,16 +871,13 @@ async function callEdamamNutritionAnalyze(payload, env) {
       totalWeight: data?.totalWeight ?? null
     },
     calories,
-    reason:
-      calories !== null ? "ok" : `no calories (status ${status || "n/a"})`,
-    debug: calories === null ? data : undefined
+    reason: calories !== null ? "ok" : `no calories (status ${status || "n/a"})`,
+    debug: calories === null ? data : void 0
   };
 }
-
+__name(callEdamamNutritionAnalyze, "callEdamamNutritionAnalyze");
 function normalizeIngredientLine(s) {
-  let x = String(s || "")
-    .toLowerCase()
-    .trim();
+  let x = String(s || "").toLowerCase().trim();
   x = x.replace(/^[•\-\–\—\*]+\s*/g, "");
   x = x.replace(/\([^)]*\)/g, " ");
   x = x.replace(
@@ -2187,135 +888,65 @@ function normalizeIngredientLine(s) {
     /\b(to taste|optional|finely|roughly|minced|chopped|fresh|juice of|zest of|divided)\b/gi,
     " "
   );
-  x = x
-    .replace(/\s*,\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  x = x
-    .replace(/\bparm(e|a)san\b/g, "parmesan")
-    .replace(/\bboneless\b/g, "")
-    .replace(/\bskinless\b/g, "");
-  x = x
-    .replace(/\b(cloves?|bunch|bunches|handful|pinch|pinches)\b/g, "")
-    .trim();
+  x = x.replace(/\s*,\s*/g, " ").replace(/\s+/g, " ").trim();
+  x = x.replace(/\bparm(e|a)san\b/g, "parmesan").replace(/\bboneless\b/g, "").replace(/\bskinless\b/g, "");
+  x = x.replace(/\b(cloves?|bunch|bunches|handful|pinch|pinches)\b/g, "").trim();
   return x;
 }
-function guessGrams(name) {
-  const n = String(name || "").toLowerCase();
-  if (/(chicken|beef|pork|salmon|tuna|shrimp)\b/.test(n)) return 120;
-  if (/(pasta|fettuccine|spaghetti|noodle|rice)\b/.test(n)) return 180;
-  if (/(heavy cream|cream|milk)\b/.test(n)) return 60;
-  if (/(parmesan|cheese)\b/.test(n)) return 28;
-  if (/\bbutter\b/.test(n)) return 14;
-  if (/(olive oil|oil)\b/.test(n)) return 10;
-  if (/\bgarlic\b/.test(n)) return 6;
-  if (/(onion|shallot)\b/.test(n)) return 50;
-  if (
-    /(salt|black pepper|pepper|paprika|cumin|oregano|parsley|basil|chili)\b/.test(
-      n
-    )
-  )
-    return 2;
-  if (/(tomato|mushroom|spinach|broccoli|bell pepper)\b/.test(n)) return 60;
-  return 12;
-}
-function normalizeIngredientsArray(raw) {
-  const out = [];
-  const seen = new Set();
-  for (const it of raw || []) {
-    const text =
-      typeof it === "string" ? it : it?.original || it?.name || it?.text || "";
-    const name = normalizeIngredientLine(text);
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    out.push({ name, grams: guessGrams(name) });
-  }
-  return out;
-}
-
+__name(normalizeIngredientLine, "normalizeIngredientLine");
 function titleizeIngredient(text) {
-  return text
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return text.split(/\s+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
-
+__name(titleizeIngredient, "titleizeIngredient");
 function sanitizeIngredientForCookbook(raw) {
-  const base =
-    typeof raw === "string"
-      ? raw
-      : raw?.name || raw?.original || raw?.text || "";
+  const base = typeof raw === "string" ? raw : raw?.name || raw?.original || raw?.text || "";
   const lower = String(base || "").toLowerCase();
-  const optional =
-    /\boptional\b/.test(lower) ||
-    /\bfor (serving|garnish)\b/.test(lower) ||
-    /\bto taste\b/.test(lower);
-
-  const cleaned = normalizeIngredientLine(base)
-    .replace(/\b(optional|undefined|to taste)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const optional = /\boptional\b/.test(lower) || /\bfor (serving|garnish)\b/.test(lower) || /\bto taste\b/.test(lower);
+  const cleaned = normalizeIngredientLine(base).replace(/\b(optional|undefined|to taste)\b/gi, "").replace(/\s+/g, " ").trim();
   if (!cleaned) return null;
-
   const withoutPrefix = cleaned.replace(
     /^\s*[\d\/\.\-¼½¾⅓⅔⅛⅜⅝⅞]+\s*(cups?|cup|tbsp|tablespoons?|tsp|teaspoons?|ounces?|oz|grams?|g|kg|pounds?|lb|ml|l|liters?)?\s+/i,
     ""
   );
   const name = titleizeIngredient(
-    withoutPrefix
-      .replace(/^[\d\s\.\/\-]+/, "")
-      .replace(/\s+/g, " ")
-      .trim()
+    withoutPrefix.replace(/^[\d\s\.\/\-]+/, "").replace(/\s+/g, " ").trim()
   );
   if (!name) return null;
-
   const entry = { name, optional };
   const n = name.toLowerCase();
-  const catMatch = (patterns) => patterns.some((re) => re.test(n));
-  if (
-    catMatch([
-      /\b(chicken|beef|pork|salmon|tuna|shrimp|lobster|crab|prawn|turkey|lamb|tofu|tempeh|egg|steak|ham|bacon|sausage)\b/
-    ])
-  ) {
+  const catMatch = /* @__PURE__ */ __name((patterns) => patterns.some((re) => re.test(n)), "catMatch");
+  if (catMatch([
+    /\b(chicken|beef|pork|salmon|tuna|shrimp|lobster|crab|prawn|turkey|lamb|tofu|tempeh|egg|steak|ham|bacon|sausage)\b/
+  ])) {
     entry.category = "protein";
-  } else if (
-    catMatch([
-      /\b(rice|noodles?|pasta|spaghetti|fettuccine|linguine|macaroni|quinoa|couscous|tortilla|bread|bun|potato|potatoes|yuca|cassava|gnocchi|grain|lentils?)\b/,
-      /\b(greens?|spinach|kale|lettuce|arugula|cabbage)\b/
-    ])
-  ) {
+  } else if (catMatch([
+    /\b(rice|noodles?|pasta|spaghetti|fettuccine|linguine|macaroni|quinoa|couscous|tortilla|bread|bun|potato|potatoes|yuca|cassava|gnocchi|grain|lentils?)\b/,
+    /\b(greens?|spinach|kale|lettuce|arugula|cabbage)\b/
+  ])) {
     entry.category = "base";
-  } else if (
-    catMatch([
-      /\b(onion|garlic|shallot|scallion|leek|ginger|chili|jalapeno|pepper|bell pepper)\b/,
-      /\b(parsley|cilantro|basil|oregano|thyme|rosemary|sage|dill)\b/
-    ])
-  ) {
+  } else if (catMatch([
+    /\b(onion|garlic|shallot|scallion|leek|ginger|chili|jalapeno|pepper|bell pepper)\b/,
+    /\b(parsley|cilantro|basil|oregano|thyme|rosemary|sage|dill)\b/
+  ])) {
     entry.category = "aromatic";
-  } else if (
-    catMatch([
-      /\b(oil|olive oil|vinegar|broth|stock|soy sauce|coconut milk|milk|cream|wine)\b/,
-      /\b(sauce|dressing)\b/
-    ])
-  ) {
+  } else if (catMatch([
+    /\b(oil|olive oil|vinegar|broth|stock|soy sauce|coconut milk|milk|cream|wine)\b/,
+    /\b(sauce|dressing)\b/
+  ])) {
     entry.category = "liquid";
-  } else if (
-    catMatch([
-      /\b(salt|black pepper|pepper|paprika|cumin|turmeric|curry|chili powder|flakes|oregano|parsley|basil|spice|seasoning|sugar|honey)\b/
-    ])
-  ) {
+  } else if (catMatch([
+    /\b(salt|black pepper|pepper|paprika|cumin|turmeric|curry|chili powder|flakes|oregano|parsley|basil|spice|seasoning|sugar|honey)\b/
+  ])) {
     entry.category = "seasoning";
   } else {
     entry.category = "other";
   }
-
   return entry;
 }
-
+__name(sanitizeIngredientForCookbook, "sanitizeIngredientForCookbook");
 function arrangeCookbookIngredients(rawList = []) {
   const cleaned = [];
-  const seen = new Set();
+  const seen = /* @__PURE__ */ new Set();
   for (const it of rawList) {
     const entry = sanitizeIngredientForCookbook(it);
     if (!entry) continue;
@@ -2324,18 +955,13 @@ function arrangeCookbookIngredients(rawList = []) {
     seen.add(key);
     cleaned.push(entry);
   }
-
-  const order = (cat) =>
-    cleaned.filter((c) => c.category === cat && !c.optional);
+  const order = /* @__PURE__ */ __name((cat) => cleaned.filter((c) => c.category === cat && !c.optional), "order");
   const optional = cleaned.filter((c) => c.optional);
   const others = cleaned.filter(
-    (c) =>
-      !c.optional &&
-      !["protein", "base", "aromatic", "liquid", "seasoning"].includes(
-        c.category
-      )
+    (c) => !c.optional && !["protein", "base", "aromatic", "liquid", "seasoning"].includes(
+      c.category
+    )
   );
-
   const ordered = [
     ...order("protein"),
     ...order("base"),
@@ -2344,7 +970,6 @@ function arrangeCookbookIngredients(rawList = []) {
     ...order("seasoning"),
     ...others
   ];
-
   const bullets = ordered.map((c) => `- ${c.name}`);
   if (optional.length) {
     bullets.push(
@@ -2353,7 +978,7 @@ function arrangeCookbookIngredients(rawList = []) {
   }
   return bullets.length ? bullets : ["- Ingredients not available"];
 }
-
+__name(arrangeCookbookIngredients, "arrangeCookbookIngredients");
 function naturalList(arr = [], fallback = "the ingredients") {
   const clean = arr.map((s) => s.trim()).filter(Boolean);
   if (!clean.length) return fallback;
@@ -2361,19 +986,12 @@ function naturalList(arr = [], fallback = "the ingredients") {
   if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
   return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
 }
-
+__name(naturalList, "naturalList");
 function inferCookbookDescription(dishName, bullets = []) {
   const name = (dishName || "").trim();
-  const proteins = bullets
-    .filter((b) => b.startsWith("- ") && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const bases = bullets
-    .filter((b) => b.startsWith("- ") && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const accents = bullets
-    .filter((b) => b.startsWith("- ") && /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-
+  const proteins = bullets.filter((b) => b.startsWith("- ") && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const bases = bullets.filter((b) => b.startsWith("- ") && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const accents = bullets.filter((b) => b.startsWith("- ") && /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const subject = name || "This dish";
   if (proteins.length && bases.length) {
     return `*${subject} brings ${naturalList(proteins)} together with ${naturalList(bases)} and warm pantry flavors.*`;
@@ -2387,7 +1005,7 @@ function inferCookbookDescription(dishName, bullets = []) {
   const accent = accents.length ? naturalList(accents) : "bright aromatics";
   return `*${subject} uses everyday ingredients with ${accent} for an easy, cozy plate.*`;
 }
-
+__name(inferCookbookDescription, "inferCookbookDescription");
 function cleanCookbookStep(text) {
   let s = String(text || "");
   s = s.replace(/^\s*(step\s*\d+[:\.\)]?\s*)/i, "");
@@ -2398,25 +1016,13 @@ function cleanCookbookStep(text) {
   const capped = s.charAt(0).toUpperCase() + s.slice(1);
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 }
-
+__name(cleanCookbookStep, "cleanCookbookStep");
 function inferCookbookSteps(rawSteps = [], ingredientBullets = []) {
-  const cleanedRaw = Array.isArray(rawSteps)
-    ? rawSteps.map((s) => cleanCookbookStep(s)).filter(Boolean)
-    : [];
-
-  const proteins = ingredientBullets
-    .filter((b) => /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const bases = ingredientBullets
-    .filter((b) => /^- /.test(b) && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const aromatics = ingredientBullets
-    .filter((b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const liquids = ingredientBullets
-    .filter((b) => /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b))
-    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-
+  const cleanedRaw = Array.isArray(rawSteps) ? rawSteps.map((s) => cleanCookbookStep(s)).filter(Boolean) : [];
+  const proteins = ingredientBullets.filter((b) => /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const bases = ingredientBullets.filter((b) => /^- /.test(b) && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const aromatics = ingredientBullets.filter((b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const liquids = ingredientBullets.filter((b) => /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const inferred = [];
   if (aromatics.length || bases.length) {
     inferred.push(
@@ -2425,42 +1031,35 @@ function inferCookbookSteps(rawSteps = [], ingredientBullets = []) {
   } else {
     inferred.push("Ingredients are prepped and cut into bite-size pieces.");
   }
-
   if (proteins.length) {
     inferred.push(
       `${naturalList(proteins)} ${proteins.length > 1 ? "are" : "is"} seasoned and cooked until browned.`
     );
   }
-
   if (bases.length) {
     inferred.push(
       `${naturalList(bases)} ${bases.length > 1 ? "are" : "is"} cooked until tender.`
     );
   }
-
   if (liquids.length || aromatics.length) {
     inferred.push(
       `${liquids.length ? naturalList(liquids) : "Sauce"} is stirred in with the cooked ingredients until flavors meld.`
     );
   }
-
   inferred.push("The dish is assembled, tasted, and served warm.");
-
   let steps = cleanedRaw.length && cleanedRaw.length <= 6 ? cleanedRaw : [];
   if (!steps.length || steps.length > 6) {
     steps = inferred;
   }
-
   if (steps.length < 3) {
     for (const inf of inferred) {
       if (steps.length >= 3) break;
       if (!steps.includes(inf)) steps.push(inf);
     }
   }
-
   return steps.slice(0, 6);
 }
-
+__name(inferCookbookSteps, "inferCookbookSteps");
 function formatLikelyRecipeMarkdown({
   dishName,
   rawIngredients = [],
@@ -2471,7 +1070,6 @@ function formatLikelyRecipeMarkdown({
   const ingredients = arrangeCookbookIngredients(rawIngredients);
   const description = inferCookbookDescription(dishName, ingredients);
   const steps = inferCookbookSteps(rawSteps, ingredients);
-
   const lines = [
     title,
     description,
@@ -2482,25 +1080,21 @@ function formatLikelyRecipeMarkdown({
     "**How it's prepared**",
     ...steps.map((s, idx) => `${idx + 1}. ${s}`)
   ];
-
   if (servingInfo && (servingInfo.servings || servingInfo.grams)) {
     const bits = [];
     if (servingInfo.servings)
       bits.push(`${servingInfo.servings} serving${servingInfo.servings > 1 ? "s" : ""}`);
     if (servingInfo.grams) bits.push(`${servingInfo.grams} g`);
-    const joined =
-      bits.length === 2 ? `${bits[0]} (${bits[1]})` : bits.join("");
+    const joined = bits.length === 2 ? `${bits[0]} (${bits[1]})` : bits.join("");
     if (joined) lines.push("", `**Estimated serving size:** about ${joined}`);
   }
-
   lines.push(
     "",
     "**Based on typical recipes from Edamam and Spoonacular. Restaurant versions may vary.**"
   );
-
   return lines.join("\n");
 }
-
+__name(formatLikelyRecipeMarkdown, "formatLikelyRecipeMarkdown");
 function safeJson(s, fallback) {
   try {
     return s ? JSON.parse(s) : fallback;
@@ -2508,6 +1102,7 @@ function safeJson(s, fallback) {
     return fallback;
   }
 }
+__name(safeJson, "safeJson");
 function barometerFromOrgans(levelsObj) {
   const vals = Object.values(levelsObj || {});
   if (!vals.length) return 0;
@@ -2522,7 +1117,7 @@ function barometerFromOrgans(levelsObj) {
   const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
   return Math.max(-100, Math.min(100, Math.round(avg)));
 }
-
+__name(barometerFromOrgans, "barometerFromOrgans");
 async function getOrgans(env) {
   const fallback = ["gut", "liver", "heart"];
   if (!env?.D1_DB) return fallback;
@@ -2536,173 +1131,27 @@ async function getOrgans(env) {
     return fallback;
   }
 }
-
+__name(getOrgans, "getOrgans");
 function computeBarometerFromLevelsAll(ORGANS, lv) {
-  const levelToBar = (s) =>
-    ({
-      "High Benefit": 80,
-      Benefit: 40,
-      Neutral: 0,
-      Caution: -40,
-      "High Caution": -80
-    })[s] ?? 0;
+  const levelToBar = /* @__PURE__ */ __name((s) => ({
+    "High Benefit": 80,
+    Benefit: 40,
+    Neutral: 0,
+    Caution: -40,
+    "High Caution": -80
+  })[s] ?? 0, "levelToBar");
   if (!Array.isArray(ORGANS) || !ORGANS.length) return 0;
   const nums = ORGANS.map((o) => levelToBar(lv?.[o]));
   const sum = nums.reduce((acc, val) => acc + val, 0);
   return Math.round(sum / Math.max(nums.length, 1));
 }
-
-async function fetchRecipeCardWithFallback(dish, env, opts = {}) {
-  const attempts = [];
-
-  async function tryEdamam() {
-    if (typeof callEdamamRecipe !== "function") return null;
-    const r = await callEdamamRecipe(dish, env, opts);
-    const count = Array.isArray(r?.ingredients) ? r.ingredients.length : 0;
-    attempts.push({
-      provider: "edamam",
-      ok: count > 0,
-      reason: r?.reason,
-      count
-    });
-    if (count > 0) {
-      return {
-        provider: "edamam",
-        reason: r?.reason,
-        ingredients: r.ingredients,
-        attempts,
-        label: r?.raw?.label || null
-      };
-    }
-    return null;
-  }
-
-  async function trySpoonacular() {
-    if (typeof callSpoonacularRecipe !== "function") return null;
-    const r = await callSpoonacularRecipe(dish, env, opts);
-    const count = Array.isArray(r?.ingredients) ? r.ingredients.length : 0;
-    attempts.push({
-      provider: "spoonacular",
-      ok: count > 0,
-      reason: r?.reason,
-      count
-    });
-    if (count > 0) {
-      return {
-        provider: "spoonacular",
-        reason: r?.reason,
-        ingredients: r.ingredients,
-        attempts
-      };
-    }
-    return null;
-  }
-
-  async function tryOpenAI() {
-    if (typeof callOpenAIRecipe !== "function") return null;
-    const r = await callOpenAIRecipe(dish, env, opts);
-    const count = Array.isArray(r?.ingredients) ? r.ingredients.length : 0;
-    attempts.push({
-      provider: "openai",
-      ok: count > 0,
-      reason: r?.reason,
-      count
-    });
-    if (count > 0) {
-      return {
-        provider: "openai",
-        reason: r?.reason,
-        ingredients: r.ingredients,
-        attempts
-      };
-    }
-    return null;
-  }
-
-  let hit = await tryEdamam();
-  if (hit) return hit;
-  hit = await trySpoonacular();
-  if (hit) return hit;
-  hit = await tryOpenAI();
-  if (hit) return hit;
-
-  return {
-    provider: null,
-    reason: "all providers yielded no ingredients",
-    ingredients: [],
-    attempts
-  };
-}
-
-function personalizeDishForUser(dish, prefs) {
-  if (!dish || typeof dish !== "object") return dish;
-  const safePrefs =
-    prefs && typeof prefs === "object" ? prefs : { allergens: [], fodmap: {} };
-
-  const hits = Array.isArray(dish.hits) ? dish.hits : [];
-  const hasHits = hits.length > 0;
-
-  const pills_user = hasHits ? derivePillsForUser(hits, safePrefs) : [];
-
-  let baseScore = dish?.score?.base ?? null;
-  let personalScore = dish?.score?.personal ?? null;
-
-  if (baseScore == null && typeof scoreDishFromHits === "function" && hasHits) {
-    const base = scoreDishFromHits(hits);
-    baseScore = base?.tummy_barometer?.score ?? null;
-  }
-
-  if (personalScore == null && baseScore != null && hasHits) {
-    const tracked = new Set(
-      Array.isArray(safePrefs.allergens) ? safePrefs.allergens.map(String) : []
-    );
-    const anyTracked = hits.some(
-      (h) =>
-        Array.isArray(h.allergens) &&
-        h.allergens.some((a) => tracked.has(String(a)))
-    );
-    const onionFlag =
-      !!safePrefs?.fodmap?.onion &&
-      hits.some((h) => (h.classes || []).map(String).includes("onion"));
-    const garlicFlag =
-      !!safePrefs?.fodmap?.garlic &&
-      hits.some((h) => (h.classes || []).map(String).includes("garlic"));
-
-    let penalty = 0;
-    if (anyTracked) penalty += 5;
-    if (onionFlag) penalty += 2;
-    if (garlicFlag) penalty += 2;
-    personalScore = Math.max(1, Math.min(100, baseScore - penalty));
-  }
-
-  const personal_reasons = (() => {
-    const out = [];
-    const tracked = new Set(
-      Array.isArray(safePrefs.allergens) ? safePrefs.allergens.map(String) : []
-    );
-    if (tracked.size)
-      out.push(`You're tracking: ${Array.from(tracked).join(", ")}`);
-    if (safePrefs?.fodmap?.onion) out.push("You track onion.");
-    if (safePrefs?.fodmap?.garlic) out.push("You track garlic.");
-    if (!out.length) out.push("No tracked triggers selected.");
-    return out;
-  })();
-
-  dish.score = { base: baseScore, personal: personalScore };
-  dish.pills_user = pills_user;
-  dish.personal_reasons = personal_reasons;
-  return dish;
-}
-
-// ==== Step 47.1 — Forever-cache skip helpers (R2 preflight) ====
-
+__name(computeBarometerFromLevelsAll, "computeBarometerFromLevelsAll");
 function normalizeTitle(s = "") {
   return s.toLowerCase().trim().replace(/\s+/g, " ");
 }
-
+__name(normalizeTitle, "normalizeTitle");
 function resultIdForDish(place_id, title) {
   const base = `${(place_id || "").trim()}::${normalizeTitle(title || "")}`;
-  // Deterministic tiny hash (no crypto import needed in CF)
   let hash = 0;
   for (let i = 0; i < base.length; i++) {
     hash = (hash << 5) - hash + base.charCodeAt(i);
@@ -2710,7 +1159,7 @@ function resultIdForDish(place_id, title) {
   }
   return `dish_${Math.abs(hash)}`;
 }
-
+__name(resultIdForDish, "resultIdForDish");
 async function r2Head(env, key) {
   if (!env?.R2_BUCKET) return false;
   try {
@@ -2720,15 +1169,11 @@ async function r2Head(env, key) {
     return false;
   }
 }
-
+__name(r2Head, "r2Head");
 function normKey(s = "") {
-  return s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
-
+__name(normKey, "normKey");
 async function getCachedNutrition(env, name) {
   if (!env?.R2_BUCKET) return null;
   const key = `nutrition/${normKey(name)}.json`;
@@ -2742,15 +1187,15 @@ async function getCachedNutrition(env, name) {
     return null;
   }
 }
-
+__name(getCachedNutrition, "getCachedNutrition");
 async function putCachedNutrition(env, name, data) {
   if (!env?.R2_BUCKET) return null;
   const key = `nutrition/${normKey(name)}.json`;
-  const payload = { ...data, _cachedAt: new Date().toISOString() };
+  const payload = { ...data, _cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
   await r2WriteJSON(env, key, payload);
   return payload;
 }
-
+__name(putCachedNutrition, "putCachedNutrition");
 async function enrichWithNutrition(env, rows = []) {
   for (const row of rows) {
     const q = (row?.name || row?.original || "").trim();
@@ -2762,7 +1207,8 @@ async function enrichWithNutrition(env, rows = []) {
       if (hit) {
         try {
           await putCachedNutrition(env, q, hit);
-        } catch {}
+        } catch {
+        }
       }
     }
     if (hit?.nutrients) {
@@ -2777,21 +1223,18 @@ async function enrichWithNutrition(env, rows = []) {
   }
   return rows;
 }
-
+__name(enrichWithNutrition, "enrichWithNutrition");
 async function maybeReturnCachedResult(req, env, { place_id, title }) {
   if (!env?.R2_BUCKET) return null;
   const url = new URL(req.url);
   const force = url.searchParams.get("force_reanalyze") === "1";
   if (!place_id || !title || force) return null;
-
   const id = resultIdForDish(place_id, title);
   const key = `results/${id}.json`;
   const exists = await r2Head(env, key);
   if (!exists) return null;
-
   const obj = await env.R2_BUCKET.get(key);
   if (!obj) return null;
-
   const body = await obj.text();
   return new Response(body, {
     status: 200,
@@ -2803,61 +1246,7 @@ async function maybeReturnCachedResult(req, env, { place_id, title }) {
     }
   });
 }
-
-async function callVisionForText(env, imageUrl) {
-  if (!env.GCP_VISION_API_KEY) throw new Error("Missing GCP_VISION_API_KEY");
-  const endpoint = `https://vision.googleapis.com/v1/images:annotate?key=${env.GCP_VISION_API_KEY}`;
-
-  const imgRes = await fetch(imageUrl, {
-    headers: {
-      "User-Agent": "TummyBuddyWorker/1.0 (+https://tummybuddy.app)",
-      Accept: "image/*,*/*;q=0.8"
-    }
-  });
-  if (!imgRes.ok) throw new Error(`fetch image failed: ${imgRes.status}`);
-  const buf = await imgRes.arrayBuffer();
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-
-  const body = {
-    requests: [
-      {
-        image: { content: b64 },
-        features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
-        imageContext: { languageHints: ["en", "es"] }
-      }
-    ]
-  };
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "");
-    throw new Error(`Vision HTTP ${res.status}: ${msg.slice(0, 500)}`);
-  }
-
-  const data = await res.json();
-  const resp =
-    data && data.responses && data.responses[0] ? data.responses[0] : {};
-
-  const fullText =
-    (resp.fullTextAnnotation && resp.fullTextAnnotation.text) ||
-    (Array.isArray(resp.textAnnotations) &&
-      resp.textAnnotations[0] &&
-      resp.textAnnotations[0].description) ||
-    "";
-
-  const lines = fullText
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  return { fullText, lines, raw: resp };
-}
-
+__name(maybeReturnCachedResult, "maybeReturnCachedResult");
 async function handleDebugVision(request, env) {
   const url = new URL(request.url);
   const img = (url.searchParams.get("url") || "").trim();
@@ -2867,7 +1256,6 @@ async function handleDebugVision(request, env) {
       { ok: false, error: "Missing GCP_VISION_API_KEY" },
       { status: 500 }
     );
-
   const endpoint = `https://vision.googleapis.com/v1/images:annotate?key=${env.GCP_VISION_API_KEY}`;
   const body = {
     requests: [
@@ -2878,7 +1266,6 @@ async function handleDebugVision(request, env) {
       }
     ]
   };
-
   const r = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -2894,21 +1281,13 @@ async function handleDebugVision(request, env) {
     { status: r.ok ? 200 : 502 }
   );
 }
-
+__name(handleDebugVision, "handleDebugVision");
 function classifyStampKey(dish, place_id = "", lang = "en") {
-  const base = String(dish || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const pid = String(place_id || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const base = String(dish || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const pid = String(place_id || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return `classify/${lang}/${pid || "unknown"}/${base || "unknown"}.json`;
 }
-
+__name(classifyStampKey, "classifyStampKey");
 async function getClassifyStamp(env, key) {
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   if (!kv) return null;
@@ -2919,14 +1298,14 @@ async function getClassifyStamp(env, key) {
     return null;
   }
 }
-
+__name(getClassifyStamp, "getClassifyStamp");
 async function setClassifyStamp(env, key, payload, ttlSeconds = 6 * 3600) {
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   if (!kv) return false;
   try {
     await kv.put(
       key,
-      JSON.stringify({ savedAt: new Date().toISOString(), ...payload }),
+      JSON.stringify({ savedAt: (/* @__PURE__ */ new Date()).toISOString(), ...payload }),
       {
         expirationTtl: ttlSeconds
       }
@@ -2936,9 +1315,7 @@ async function setClassifyStamp(env, key, payload, ttlSeconds = 6 * 3600) {
     return false;
   }
 }
-
-// ---- Edamam Tier 1 (safe) ----
-// expects env.EDAMAM_APP_ID and env.EDAMAM_APP_KEY
+__name(setClassifyStamp, "setClassifyStamp");
 async function callEdamam(env, dish, cuisine = "", lang = "en") {
   const appId = (env.EDAMAM_APP_ID || "").trim();
   const appKey = (env.EDAMAM_APP_KEY || "").trim();
@@ -2950,7 +1327,6 @@ async function callEdamam(env, dish, cuisine = "", lang = "en") {
       provider: "edamam"
     };
   }
-
   const base = "https://api.edamam.com/api/recipes/v2";
   const u = new URL(base);
   u.searchParams.set("type", "public");
@@ -2958,9 +1334,7 @@ async function callEdamam(env, dish, cuisine = "", lang = "en") {
   u.searchParams.set("app_id", appId);
   u.searchParams.set("app_key", appKey);
   if (cuisine) u.searchParams.set("cuisineType", cuisine);
-
   const accountUser = "anon";
-
   try {
     const r = await fetch(u.toString(), {
       headers: {
@@ -2989,49 +1363,31 @@ async function callEdamam(env, dish, cuisine = "", lang = "en") {
     };
   }
 }
-
+__name(callEdamam, "callEdamam");
 function normalizeEdamamRecipe(rec) {
   const name = String(rec?.label || "").trim();
   const lines = Array.isArray(rec?.ingredientLines) ? rec.ingredientLines : [];
-  const ingredients = (Array.isArray(rec?.ingredients) ? rec.ingredients : [])
-    .map((it) => ({
-      name: String(it?.food || it?.text || "").trim(),
-      qty: typeof it?.quantity === "number" ? it.quantity : null,
-      unit: String(it?.measure || "").trim() || null
-    }))
-    .filter((x) => x.name);
-
+  const ingredients = (Array.isArray(rec?.ingredients) ? rec.ingredients : []).map((it) => ({
+    name: String(it?.food || it?.text || "").trim(),
+    qty: typeof it?.quantity === "number" ? it.quantity : null,
+    unit: String(it?.measure || "").trim() || null
+  })).filter((x) => x.name);
   const steps = lines.length ? [`Combine: ${lines.join("; ")}`] : [];
-
   return {
     recipe: { name: name || null, steps, notes: lines.length ? lines : null },
     ingredients
   };
 }
-
+__name(normalizeEdamamRecipe, "normalizeEdamamRecipe");
 function ingredientEntryToLine(entry) {
   if (typeof entry === "string") return entry.trim();
   if (!entry || typeof entry !== "object") return "";
-  const qty =
-    entry.qty ?? entry.quantity ?? entry.amount ?? entry.count ?? undefined;
+  const qty = entry.qty ?? entry.quantity ?? entry.amount ?? entry.count ?? void 0;
   const unit = entry.unit || entry.measure || entry.metricUnit || "";
-  const name =
-    entry.name ||
-    entry.product ||
-    entry.ingredient ||
-    entry.original ||
-    entry.food ||
-    entry.text ||
-    "";
-  const comment =
-    entry.comment ||
-    entry.preparation ||
-    entry.preparationNotes ||
-    entry.note ||
-    entry.extra ||
-    "";
+  const name = entry.name || entry.product || entry.ingredient || entry.original || entry.food || entry.text || "";
+  const comment = entry.comment || entry.preparation || entry.preparationNotes || entry.note || entry.extra || "";
   const parts = [];
-  if (qty !== undefined && qty !== null && qty !== "") {
+  if (qty !== void 0 && qty !== null && qty !== "") {
     parts.push(String(qty).trim());
   }
   if (unit) parts.push(String(unit).trim());
@@ -3041,52 +1397,23 @@ function ingredientEntryToLine(entry) {
   if (commentTxt) line = line ? `${line}, ${commentTxt}` : commentTxt;
   return line.trim();
 }
-
-function normalizeProviderRecipe(
-  payload = {},
-  fallbackDish = "",
-  provider = "unknown"
-) {
+__name(ingredientEntryToLine, "ingredientEntryToLine");
+function normalizeProviderRecipe(payload = {}, fallbackDish = "", provider = "unknown") {
   const base = payload && typeof payload === "object" ? { ...payload } : {};
-  const structuredCandidates = Array.isArray(base.ingredients_structured)
-    ? base.ingredients_structured
-    : Array.isArray(base.ingredients) &&
-        base.ingredients.every((row) => row && typeof row === "object")
-      ? base.ingredients
-      : null;
-  const rawIngredients = Array.isArray(base.ingredients)
-    ? base.ingredients
-    : Array.isArray(base.ingredients_lines)
-      ? base.ingredients_lines
-      : Array.isArray(structuredCandidates)
-        ? structuredCandidates
-        : [];
-  const ingredients = rawIngredients
-    .map((entry) => ingredientEntryToLine(entry))
-    .filter(Boolean);
-
+  const structuredCandidates = Array.isArray(base.ingredients_structured) ? base.ingredients_structured : Array.isArray(base.ingredients) && base.ingredients.every((row) => row && typeof row === "object") ? base.ingredients : null;
+  const rawIngredients = Array.isArray(base.ingredients) ? base.ingredients : Array.isArray(base.ingredients_lines) ? base.ingredients_lines : Array.isArray(structuredCandidates) ? structuredCandidates : [];
+  const ingredients = rawIngredients.map((entry) => ingredientEntryToLine(entry)).filter(Boolean);
   const recipeSrc = base.recipe || {};
   const recipe = {
     name: recipeSrc.name || recipeSrc.title || fallbackDish || null,
-    steps: Array.isArray(recipeSrc.steps)
-      ? recipeSrc.steps
-      : recipeSrc.instructions
-        ? [recipeSrc.instructions]
-        : [],
-    notes:
-      Array.isArray(recipeSrc.notes) && recipeSrc.notes.length
-        ? recipeSrc.notes
-        : recipeSrc.image
-          ? [recipeSrc.image]
-          : null
+    steps: Array.isArray(recipeSrc.steps) ? recipeSrc.steps : recipeSrc.instructions ? [recipeSrc.instructions] : [],
+    notes: Array.isArray(recipeSrc.notes) && recipeSrc.notes.length ? recipeSrc.notes : recipeSrc.image ? [recipeSrc.image] : null
   };
-
   const extras = { ...base };
   delete extras.ingredients;
   delete extras.ingredients_lines;
   delete extras.ingredients_structured;
   delete extras.recipe;
-
   return {
     ...extras,
     provider,
@@ -3095,22 +1422,13 @@ function normalizeProviderRecipe(
     ingredients_structured: structuredCandidates || null
   };
 }
-
-// ---- OpenAI Recipe fallback (safe) ----
-
-// === PATCH 3: Minimal Spoonacular recipe shim (skip if you already have one) ===
-// === PATCH A: provider adapters (map old names to new) ===
-// === PATCH C: OpenAI recipe extractor (JSON output) ===
-// Needs env.OPENAI_API_KEY
+__name(normalizeProviderRecipe, "normalizeProviderRecipe");
 async function callOpenAIRecipe(dish, env, opts = {}) {
   const key = env.OPENAI_API_KEY;
   if (!key) return { ingredients: [], reason: "OPENAI_API_KEY missing" };
-
-  const system =
-    'You extract probable ingredient lines for a named dish. Respond ONLY as strict JSON: {"ingredients": ["..."]}. No prose.';
+  const system = 'You extract probable ingredient lines for a named dish. Respond ONLY as strict JSON: {"ingredients": ["..."]}. No prose.';
   const user = `Dish: ${dish}
 Return 10-25 concise ingredient lines a home cook would list (no steps). Use plain names (e.g., "fettuccine", "heavy cream", "parmesan", "chicken breast", "garlic", "butter", "olive oil", "salt", "black pepper").`;
-
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -3142,80 +1460,21 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
     } catch {
       parsed = data && data.ingredients ? data : {};
     }
-    const ingredients = Array.isArray(parsed.ingredients)
-      ? parsed.ingredients.map((s) => String(s).trim()).filter(Boolean)
-      : [];
+    const ingredients = Array.isArray(parsed.ingredients) ? parsed.ingredients.map((s) => String(s).trim()).filter(Boolean) : [];
     return {
       ingredients,
       reason: ingredients.length ? "ok" : "no ingredients",
-      debug: data && data.__nonjson__ ? { nonjson: true } : undefined
+      debug: data && data.__nonjson__ ? { nonjson: true } : void 0
     };
   } catch (e) {
     return { ingredients: [], reason: String(e?.message || e) };
   }
 }
-
-// === PATCH C: OpenAI recipe extractor (JSON output) ===
-// Needs env.OPENAI_API_KEY
-
-async function callSpoonacularRecipe(dish, env) {
-  const key = env.SPOONACULAR_KEY;
-  if (!key) return { ingredients: [], reason: "SPOONACULAR_KEY missing" };
-
-  const searchUrl = new URL(
-    "https://api.spoonacular.com/recipes/complexSearch"
-  );
-  searchUrl.searchParams.set("query", dish);
-  searchUrl.searchParams.set("number", "1");
-  searchUrl.searchParams.set("addRecipeInformation", "true");
-  searchUrl.searchParams.set("fillIngredients", "true");
-  searchUrl.searchParams.set("instructionsRequired", "false");
-  searchUrl.searchParams.set("apiKey", key);
-
-  let search;
-  try {
-    const r = await fetch(searchUrl, { method: "GET" });
-    search = await parseResSafe(r);
-    if (!r.ok)
-      return {
-        ingredients: [],
-        reason: `spoonacular search http ${r.status}`,
-        debug: search
-      };
-  } catch (e) {
-    return {
-      ingredients: [],
-      reason: `spoonacular search err ${String(e?.message || e)}`
-    };
-  }
-
-  const item = search?.results?.[0];
-  if (!item) return { ingredients: [], reason: "no results" };
-
-  const ext = Array.isArray(item.extendedIngredients)
-    ? item.extendedIngredients
-    : [];
-  const ingredients = ext
-    .map((x) => {
-      const original = typeof x?.original === "string" ? x.original.trim() : "";
-      if (original) return original;
-      const fallback = [x?.amount, x?.unit, x?.nameClean || x?.name]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-      return fallback || null;
-    })
-    .filter(Boolean);
-
-  return { ingredients, reason: ingredients.length ? "ok" : "no ingredients" };
-}
-
+__name(callOpenAIRecipe, "callOpenAIRecipe");
 async function spoonacularFetch(env, dish, cuisine = "", lang = "en") {
   const apiKey = (env.SPOONACULAR_API_KEY || "").trim();
   if (!apiKey) return null;
-
   const searchUrl = `https://api.spoonacular.com/recipes/complexSearch?query=${encodeURIComponent(dish)}&number=1&addRecipeInformation=true&apiKey=${encodeURIComponent(apiKey)}`;
-
   try {
     const r = await fetch(searchUrl, {
       headers: { "x-api-key": apiKey, accept: "application/json" }
@@ -3228,10 +1487,7 @@ async function spoonacularFetch(env, dish, cuisine = "", lang = "en") {
     const data = await r.json();
     const res = data?.results?.[0];
     if (!res) return null;
-
-    let extended = Array.isArray(res.extendedIngredients)
-      ? res.extendedIngredients
-      : null;
+    let extended = Array.isArray(res.extendedIngredients) ? res.extendedIngredients : null;
     if (!extended || !extended.length) {
       try {
         const infoUrl = `https://api.spoonacular.com/recipes/${res.id}/information?includeNutrition=false&apiKey=${encodeURIComponent(apiKey)}`;
@@ -3240,9 +1496,7 @@ async function spoonacularFetch(env, dish, cuisine = "", lang = "en") {
         });
         if (infoRes.ok) {
           const info = await infoRes.json();
-          extended = Array.isArray(info.extendedIngredients)
-            ? info.extendedIngredients
-            : null;
+          extended = Array.isArray(info.extendedIngredients) ? info.extendedIngredients : null;
         } else {
           const t = await infoRes.text().catch(() => "");
           console.log(
@@ -3255,17 +1509,13 @@ async function spoonacularFetch(env, dish, cuisine = "", lang = "en") {
         console.log("Spoonacular info fetch failed:", e?.message || String(e));
       }
     }
-
-    const ingredientsLines = extended
-      ? extended.map((i) => i.original || i.name || "").filter(Boolean)
-      : [];
-
+    const ingredientsLines = extended ? extended.map((i) => i.original || i.name || "").filter(Boolean) : [];
     return {
       recipe: {
         title: res.title || dish,
         instructions: res.instructions || "",
         image: res.image || null,
-        cuisine: (res.cuisines && res.cuisines[0]) || cuisine || null
+        cuisine: res.cuisines && res.cuisines[0] || cuisine || null
       },
       ingredients: ingredientsLines,
       provider: "spoonacular"
@@ -3275,7 +1525,7 @@ async function spoonacularFetch(env, dish, cuisine = "", lang = "en") {
     return null;
   }
 }
-
+__name(spoonacularFetch, "spoonacularFetch");
 async function fetchFromEdamam(env, dish, cuisine = "", lang = "en") {
   await recordMetric(env, "provider:edamam:hit");
   try {
@@ -3300,7 +1550,7 @@ async function fetchFromEdamam(env, dish, cuisine = "", lang = "en") {
     return { ingredients: [], provider: "edamam", _skip: "edamam" };
   }
 }
-
+__name(fetchFromEdamam, "fetchFromEdamam");
 async function fetchFromSpoonacular(env, dish, cuisine = "", lang = "en") {
   await recordMetric(env, "provider:spoonacular:hit");
   try {
@@ -3314,7 +1564,7 @@ async function fetchFromSpoonacular(env, dish, cuisine = "", lang = "en") {
     return { ingredients: [], provider: "spoonacular", _skip: "spoonacular" };
   }
 }
-
+__name(fetchFromSpoonacular, "fetchFromSpoonacular");
 async function fetchFromOpenAI(env, dish, cuisine = "", lang = "en") {
   await recordMetric(env, "provider:openai:hit");
   try {
@@ -3339,13 +1589,11 @@ async function fetchFromOpenAI(env, dish, cuisine = "", lang = "en") {
     return { ingredients: [], provider: "openai", _skip: "openai" };
   }
 }
-
+__name(fetchFromOpenAI, "fetchFromOpenAI");
 async function callZestful(env, lines = []) {
   if (!lines?.length) return null;
-
   const host = (env.ZESTFUL_RAPID_HOST || "zestful.p.rapidapi.com").trim();
   const url = `https://${host}/parseIngredients`;
-
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -3356,41 +1604,27 @@ async function callZestful(env, lines = []) {
       },
       body: JSON.stringify({ ingredients: lines })
     });
-
     if (!res.ok) {
       const t = await res.text().catch(() => "");
       console.log("Zestful error", res.status, t.slice(0, 180));
       return null;
     }
     const data = await res.json();
-
     const parsed = (data.results || []).map((r, i) => ({
-      original:
-        lines[i] || r.ingredientRaw || r.ingredientParsed?.ingredient || "",
-      name:
-        r.ingredientParsed?.product ||
-        r.ingredientParsed?.ingredient ||
-        r.ingredient ||
-        r.name ||
-        "",
+      original: lines[i] || r.ingredientRaw || r.ingredientParsed?.ingredient || "",
+      name: r.ingredientParsed?.product || r.ingredientParsed?.ingredient || r.ingredient || r.name || "",
       qty: r.ingredientParsed?.quantity ?? r.quantity ?? null,
       unit: r.ingredientParsed?.unit ?? r.unit ?? null,
-      comment:
-        r.ingredientParsed?.preparationNotes ??
-        r.ingredientParsed?.comment ??
-        r.comment ??
-        null,
+      comment: r.ingredientParsed?.preparationNotes ?? r.ingredientParsed?.comment ?? r.comment ?? null,
       _conf: r.confidence ?? null
     }));
-
     return parsed.length ? parsed : null;
   } catch (err) {
     console.log("Zestful fail:", err?.message || String(err));
     return null;
   }
 }
-
-// --- Open Food Facts fallback ---
+__name(callZestful, "callZestful");
 async function callOFF(env, name) {
   const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(name)}&search_simple=1&action=process&json=1&page_size=1`;
   try {
@@ -3401,7 +1635,6 @@ async function callOFF(env, name) {
     const data = await res.json();
     const p = data?.products?.[0];
     if (!p) return null;
-
     return {
       description: p.product_name || p.generic_name || name,
       brand: p.brands || null,
@@ -3413,17 +1646,14 @@ async function callOFF(env, name) {
         carbs_g: p.nutriments.carbohydrates_100g ?? null,
         sugar_g: p.nutriments.sugars_100g ?? null,
         fiber_g: p.nutriments.fiber_100g ?? null,
-        sodium_mg:
-          p.nutriments.sodium_100g != null
-            ? p.nutriments.sodium_100g * 1000
-            : null
+        sodium_mg: p.nutriments.sodium_100g != null ? p.nutriments.sodium_100g * 1e3 : null
       }
     };
   } catch (err) {
     return null;
   }
 }
-
+__name(callOFF, "callOFF");
 function sumNutrition(rows = []) {
   const keys = [
     "energyKcal",
@@ -3444,9 +1674,9 @@ function sumNutrition(rows = []) {
   for (const k of keys) total[k] = Math.round(total[k] * 100) / 100;
   return total;
 }
-
+__name(sumNutrition, "sumNutrition");
 function extractMacrosFromFDC(full) {
-  const empty = () => ({
+  const empty = /* @__PURE__ */ __name(() => ({
     energyKcal: null,
     protein_g: null,
     fat_g: null,
@@ -3454,33 +1684,25 @@ function extractMacrosFromFDC(full) {
     sugar_g: null,
     fiber_g: null,
     sodium_mg: null
-  });
-
-  const scaleMacros = (macros, factor) => {
+  }), "empty");
+  const scaleMacros = /* @__PURE__ */ __name((macros, factor) => {
     if (!macros || !Number.isFinite(factor) || factor <= 0) return null;
     const out = empty();
     for (const key of Object.keys(out)) {
       const val = macros[key];
-      out[key] = val == null ? null : Math.round(val * factor * 1000) / 1000;
+      out[key] = val == null ? null : Math.round(val * factor * 1e3) / 1e3;
     }
     return out;
-  };
-
-  const deriveServing = () => {
+  }, "scaleMacros");
+  const deriveServing = /* @__PURE__ */ __name(() => {
     let grams = null;
     let unit = null;
     let size = null;
-
     const rawSize = Number(full?.servingSize);
     if (Number.isFinite(rawSize) && rawSize > 0) size = rawSize;
-
-    const rawUnit =
-      typeof full?.servingSizeUnit === "string"
-        ? full.servingSizeUnit.trim()
-        : "";
+    const rawUnit = typeof full?.servingSizeUnit === "string" ? full.servingSizeUnit.trim() : "";
     if (rawUnit) unit = rawUnit;
     if (size != null && rawUnit && rawUnit.toLowerCase() === "g") grams = size;
-
     const portions = Array.isArray(full?.foodPortions) ? full.foodPortions : [];
     let picked = null;
     for (const portion of portions) {
@@ -3489,16 +1711,12 @@ function extractMacrosFromFDC(full) {
       const desc = String(
         portion.portionDescription || portion.modifier || ""
       ).toLowerCase();
-      const isServing =
-        desc.includes("serving") ||
-        desc.includes("portion") ||
-        desc.includes("piece");
+      const isServing = desc.includes("serving") || desc.includes("portion") || desc.includes("piece");
       if (!picked || isServing) {
         picked = portion;
         if (isServing) break;
       }
     }
-
     if (picked) {
       if (grams == null) grams = Number(picked.gramWeight);
       if (!unit) {
@@ -3511,48 +1729,34 @@ function extractMacrosFromFDC(full) {
       if (size == null && Number.isFinite(picked.amount))
         size = Number(picked.amount);
     }
-
-    if (grams != null) grams = Math.round(grams * 1000) / 1000;
-
+    if (grams != null) grams = Math.round(grams * 1e3) / 1e3;
     if (grams == null && unit == null && size == null) return null;
     return {
       grams,
       unit: unit ? unit.toLowerCase() : null,
       size
     };
-  };
-
+  }, "deriveServing");
   const serving = deriveServing();
-  const servingGrams =
-    serving?.grams && Number.isFinite(serving.grams) && serving.grams > 0
-      ? serving.grams
-      : null;
-
+  const servingGrams = serving?.grams && Number.isFinite(serving.grams) && serving.grams > 0 ? serving.grams : null;
   const ln = full?.labelNutrients;
   if (ln) {
-    const v = (k) => ln[k]?.value ?? null;
-    const perServing = empty();
-    perServing.energyKcal =
-      v("calories") != null ? Math.round(v("calories")) : null;
-    perServing.protein_g = v("protein") != null ? Number(v("protein")) : null;
-    perServing.fat_g = v("fat") != null ? Number(v("fat")) : null;
-    perServing.carbs_g =
-      v("carbohydrates") != null ? Number(v("carbohydrates")) : null;
-    perServing.sugar_g = v("sugars") != null ? Number(v("sugars")) : null;
-    perServing.fiber_g = v("fiber") != null ? Number(v("fiber")) : null;
-    perServing.sodium_mg = v("sodium") != null ? Math.round(v("sodium")) : null;
-
-    const per100g = servingGrams
-      ? scaleMacros(perServing, 100 / servingGrams)
-      : null;
-
+    const v = /* @__PURE__ */ __name((k) => ln[k]?.value ?? null, "v");
+    const perServing2 = empty();
+    perServing2.energyKcal = v("calories") != null ? Math.round(v("calories")) : null;
+    perServing2.protein_g = v("protein") != null ? Number(v("protein")) : null;
+    perServing2.fat_g = v("fat") != null ? Number(v("fat")) : null;
+    perServing2.carbs_g = v("carbohydrates") != null ? Number(v("carbohydrates")) : null;
+    perServing2.sugar_g = v("sugars") != null ? Number(v("sugars")) : null;
+    perServing2.fiber_g = v("fiber") != null ? Number(v("fiber")) : null;
+    perServing2.sodium_mg = v("sodium") != null ? Math.round(v("sodium")) : null;
+    const per100g2 = servingGrams ? scaleMacros(perServing2, 100 / servingGrams) : null;
     return {
-      perServing,
-      per100g,
+      perServing: perServing2,
+      per100g: per100g2,
       serving
     };
   }
-
   const list = Array.isArray(full?.foodNutrients) ? full.foodNutrients : [];
   const rows = list.map((n) => {
     const name = (n.nutrient?.name || n.nutrientName || "").toLowerCase();
@@ -3561,8 +1765,7 @@ function extractMacrosFromFDC(full) {
     const value = n.amount ?? n.value ?? null;
     return { name, number, unit, value };
   });
-
-  const find = (preds) => {
+  const find = /* @__PURE__ */ __name((preds) => {
     for (const r of rows) {
       for (const p of preds) {
         if (typeof p === "string") {
@@ -3573,15 +1776,13 @@ function extractMacrosFromFDC(full) {
       }
     }
     return null;
-  };
-
+  }, "find");
   const energy = find(["energy (kcal)", "energy", { number: "1008" }]);
   let energyKcal = null;
   if (energy?.value != null) {
     if (energy.unit === "kj") energyKcal = energy.value / 4.184;
     else energyKcal = energy.value;
   }
-
   const prot = find(["protein", { number: "1003" }]);
   const fat = find(["total lipid (fat)", "fat", { number: "1004" }]);
   const carb = find([
@@ -3597,20 +1798,18 @@ function extractMacrosFromFDC(full) {
   ]);
   const fib = find(["fiber, total dietary", "fiber", { number: "1079" }]);
   const sod = find(["sodium, na", "sodium", { number: "1093" }]);
-
-  const norm = (r, to = "g") => {
+  const norm = /* @__PURE__ */ __name((r, to = "g") => {
     if (!r || r.value == null) return null;
     if (to === "g") {
-      if (r.unit === "mg") return r.value / 1000;
+      if (r.unit === "mg") return r.value / 1e3;
       return r.value;
     }
     if (to === "mg") {
-      if (r.unit === "g") return r.value * 1000;
+      if (r.unit === "g") return r.value * 1e3;
       return r.value;
     }
     return r.value;
-  };
-
+  }, "norm");
   const per100g = empty();
   per100g.energyKcal = energyKcal != null ? Math.round(energyKcal) : null;
   per100g.protein_g = norm(prot, "g");
@@ -3619,35 +1818,27 @@ function extractMacrosFromFDC(full) {
   per100g.sugar_g = norm(sug, "g");
   per100g.fiber_g = norm(fib, "g");
   per100g.sodium_mg = norm(sod, "mg");
-
-  const perServing = servingGrams
-    ? scaleMacros(per100g, servingGrams / 100)
-    : null;
-
+  const perServing = servingGrams ? scaleMacros(per100g, servingGrams / 100) : null;
   return {
     perServing: perServing || (per100g ? { ...per100g } : empty()),
     per100g,
     serving
   };
 }
-
-// --- USDA FoodData Central: search + prefer SR/Foundation + detail fetch ---
+__name(extractMacrosFromFDC, "extractMacrosFromFDC");
 async function callUSDAFDC(env, name) {
   const host = env.USDA_FDC_HOST || "api.nal.usda.gov";
   const key = env.USDA_FDC_API_KEY;
   if (!key || !name) return null;
-
   const searchUrl = `https://${host}/fdc/v1/foods/search?query=${encodeURIComponent(name)}&pageSize=5&dataType=SR%20Legacy,Survey%20(FNDDS),Foundation,Branded&api_key=${key}`;
   const sres = await fetch(searchUrl, {
     headers: { accept: "application/json" }
   });
   if (!sres.ok) return null;
-
   const sdata = await sres.json();
   const foods = Array.isArray(sdata?.foods) ? sdata.foods : [];
   if (!foods.length) return null;
-
-  const makeEmpty = () => ({
+  const makeEmpty = /* @__PURE__ */ __name(() => ({
     energyKcal: null,
     protein_g: null,
     fat_g: null,
@@ -3655,19 +1846,16 @@ async function callUSDAFDC(env, name) {
     sugar_g: null,
     fiber_g: null,
     sodium_mg: null
-  });
-
+  }), "makeEmpty");
   const lowerName = name.toLowerCase();
   const nameTokens = lowerName.split(/\s+/).filter(Boolean);
-  const matchThreshold = lowerName ? (nameTokens.length >= 2 ? 4 : 2) : 1;
-
-  const dataTypePriority = new Map([
+  const matchThreshold = lowerName ? nameTokens.length >= 2 ? 4 : 2 : 1;
+  const dataTypePriority = /* @__PURE__ */ new Map([
     ["sr legacy", 4],
     ["survey (fndds)", 3],
     ["foundation", 2],
     ["branded", 1]
   ]);
-
   const processedTerms = [
     "marinated",
     "brined",
@@ -3689,13 +1877,11 @@ async function callUSDAFDC(env, name) {
     "fully cooked",
     "smothered"
   ];
-
-  const looksProcessed = (text = "") => {
+  const looksProcessed = /* @__PURE__ */ __name((text = "") => {
     const lower = String(text || "").toLowerCase();
     return processedTerms.some((term) => lower.includes(term));
-  };
-
-  const scoreName = (text = "") => {
+  }, "looksProcessed");
+  const scoreName = /* @__PURE__ */ __name((text = "") => {
     const lower = String(text || "").toLowerCase();
     if (!lower) return 0;
     let score = 0;
@@ -3706,18 +1892,14 @@ async function callUSDAFDC(env, name) {
       if (lower.includes(token)) score += 1;
     }
     return score;
-  };
-
-  const qualityScore = (f) => {
+  }, "scoreName");
+  const qualityScore = /* @__PURE__ */ __name((f) => {
     const dt = (f.dataType || "").toLowerCase();
     const combined = [
       f.description,
       f.additionalDescriptions,
       f.ingredientStatement
-    ]
-      .filter(Boolean)
-      .join(" ");
-
+    ].filter(Boolean).join(" ");
     let score = (dataTypePriority.get(dt) || 0) * 10;
     score += scoreName(combined);
     if (!f.brandOwner) score += 1;
@@ -3726,14 +1908,11 @@ async function callUSDAFDC(env, name) {
       score += 2;
     if (looksProcessed(combined)) score -= 6;
     return score;
-  };
-
+  }, "qualityScore");
   foods.sort((a, b) => qualityScore(b) - qualityScore(a));
-
   let bestMatchEvenIfProcessed = null;
   let bestWithMacros = null;
   let firstPayload = null;
-
   for (const food of foods) {
     const detail = await fetch(
       `https://${host}/fdc/v1/food/${food.fdcId}?api_key=${key}`,
@@ -3744,52 +1923,38 @@ async function callUSDAFDC(env, name) {
     if (!detail.ok) continue;
     const full = await detail.json();
     const macros = extractMacrosFromFDC(full);
-    const nutrients = macros?.perServing
-      ? { ...macros.perServing }
-      : macros?.per100g
-        ? { ...macros.per100g }
-        : makeEmpty();
+    const nutrients = macros?.perServing ? { ...macros.perServing } : macros?.per100g ? { ...macros.per100g } : makeEmpty();
     const payload = {
       fdcId: full.fdcId,
       description: full.description,
       brand: full.brandOwner || null,
       dataType: full.dataType || null,
       nutrients,
-      nutrients_per_serving: macros?.perServing
-        ? { ...macros.perServing }
-        : null,
+      nutrients_per_serving: macros?.perServing ? { ...macros.perServing } : null,
       nutrients_per_100g: macros?.per100g ? { ...macros.per100g } : null,
       serving: macros?.serving || null,
       source: "USDA_FDC"
     };
-
     const combinedDesc = [
       full.description,
       full.additionalDescriptions,
       full.ingredientStatement
-    ]
-      .filter(Boolean)
-      .join(" ");
+    ].filter(Boolean).join(" ");
     const processed = looksProcessed(combinedDesc);
     const nameScore = scoreName(combinedDesc);
     const matches = nameScore >= matchThreshold;
-    const hasMacros =
-      nutrients.energyKcal != null || nutrients.protein_g != null;
-
+    const hasMacros = nutrients.energyKcal != null || nutrients.protein_g != null;
     if (!firstPayload) firstPayload = payload;
     if (!bestWithMacros && hasMacros) bestWithMacros = payload;
     if (!bestMatchEvenIfProcessed && hasMacros && matches)
       bestMatchEvenIfProcessed = payload;
-
     if (hasMacros && matches && !processed) {
       return payload;
     }
   }
-
   if (bestMatchEvenIfProcessed) return bestMatchEvenIfProcessed;
   if (bestWithMacros) return bestWithMacros;
   if (firstPayload) return firstPayload;
-
   const best = foods[0];
   if (!best) return null;
   return {
@@ -3804,52 +1969,18 @@ async function callUSDAFDC(env, name) {
     source: "USDA_FDC"
   };
 }
-
-// Calls our own /menu/uber-test INTERNALLY (no network), returns { ok, source, items: [...] }
-async function callUberForMenu(env, query, address, opts = {}, ctx) {
-  const params = new URLSearchParams({
-    query,
-    address,
-    maxRows: String(opts.maxRows || 250),
-    page: String(opts.page || 1),
-    us: "1",
-    locale: opts.locale || "en-US"
-  });
-
-  const innerReq = new Request(
-    `https://dummy.local/menu/uber-test?${params.toString()}`,
-    {
-      method: "GET",
-      headers: { accept: "application/json" }
-    }
-  );
-
-  const innerRes = await _worker_impl.fetch(innerReq, env, ctx);
-  if (!innerRes || !innerRes.ok) {
-    return { ok: false, error: `uber-test HTTP ${innerRes?.status || 500}` };
-  }
-  const js = await innerRes.json();
-
-  const items =
-    (js && js.data && Array.isArray(js.data.items) && js.data.items) ||
-    (Array.isArray(js.items) && js.items) ||
-    [];
-
-  return { ok: true, source: js?.source || "live", items };
-}
-
+__name(callUSDAFDC, "callUSDAFDC");
 async function r2WriteJSON(env, key, obj) {
   if (!env?.R2_BUCKET) throw new Error("R2_BUCKET not bound");
   await env.R2_BUCKET.put(key, JSON.stringify(obj), {
     httpMetadata: { contentType: "application/json" }
   });
 }
-
+__name(r2WriteJSON, "r2WriteJSON");
 async function handleDebugFetchBytes(request) {
   const u = new URL(request.url);
   const img = (u.searchParams.get("url") || "").trim();
   if (!img) return json({ ok: false, error: "Missing ?url=" }, { status: 400 });
-
   try {
     const r = await fetch(img, {
       headers: {
@@ -3860,12 +1991,10 @@ async function handleDebugFetchBytes(request) {
     const ct = r.headers.get("content-type") || "";
     const ab = await r.arrayBuffer();
     const len = ab.byteLength;
-
     const view = new Uint8Array(ab.slice(0, Math.min(2048, len)));
     let s = "";
     for (let i = 0; i < view.length; i++) s += String.fromCharCode(view[i]);
     const b64_head = btoa(s).slice(0, 120);
-
     return json({
       ok: true,
       status: r.status,
@@ -3877,24 +2006,15 @@ async function handleDebugFetchBytes(request) {
     return json({ ok: false, error: String(e?.message || e) }, { status: 502 });
   }
 }
-
-// Replace the old HTTP-based helper with a direct Queue send:
+__name(handleDebugFetchBytes, "handleDebugFetchBytes");
 async function enqueueDishDirect(env, payload) {
-  const id =
-    (globalThis.crypto?.randomUUID && crypto.randomUUID()) ||
-    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  // The consumer expects an `id` and the job body. Adjust keys to match your consumer.
+  const id = globalThis.crypto?.randomUUID && crypto.randomUUID() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const message = { id, ...payload };
   await env.ANALYSIS_QUEUE.send(JSON.stringify(message));
   return { ok: true, id };
 }
-
-// ---- Step 41.12: enqueue top items + write lean placeholders ----
-async function enqueueTopItems(
-  env,
-  topItems,
-  { place_id, cuisine, query, address, forceUS }
-) {
+__name(enqueueDishDirect, "enqueueDishDirect");
+async function enqueueTopItems(env, topItems, { place_id, cuisine, query, address, forceUS }) {
   const jobs = await Promise.allSettled(
     (Array.isArray(topItems) ? topItems : []).map(async (item) => {
       const dish_name = item.name || item.title || "Unknown Dish";
@@ -3905,8 +2025,7 @@ async function enqueueTopItems(
         dish_desc,
         cuisine
       });
-
-      const now = new Date().toISOString();
+      const now = (/* @__PURE__ */ new Date()).toISOString();
       const lean = {
         id,
         status: "queued",
@@ -3920,606 +2039,43 @@ async function enqueueTopItems(
         meta: { query, address, forceUS: !!forceUS }
       };
       await r2WriteJSON(env, `results/${id}.json`, lean);
-
       return { id, dish_name, status: ok ? "queued" : "error" };
     })
   );
-
-  const enqueued = jobs.map((j) =>
-    j.status === "fulfilled" ? j.value : { error: String(j.reason) }
+  const enqueued = jobs.map(
+    (j) => j.status === "fulfilled" ? j.value : { error: String(j.reason) }
   );
   return { enqueued };
 }
-
-async function handleMenuExtract(env, request, url, ctx) {
-  try {
-    const query = (
-      url.searchParams.get("q") ||
-      url.searchParams.get("query") ||
-      ""
-    ).trim();
-
-    const address = (url.searchParams.get("address") || "Miami, FL").trim();
-    const userId = (url.searchParams.get("user_id") || "").trim();
-    let cachedUserPrefs = null;
-    const getUserPrefs = async () => {
-      if (cachedUserPrefs) return cachedUserPrefs;
-      cachedUserPrefs = await loadUserPrefs(env, userId);
-      return cachedUserPrefs;
-    };
-
-    // NEW: optional web page that contains a menu image
-    const webUrlRaw = (url.searchParams.get("web_url") || "").trim();
-
-    let ocrUrl = (url.searchParams.get("ocr_url") || "").trim();
-    const forceReanalyze = url.searchParams.get("force_reanalyze") === "1";
-    const analyze = url.searchParams.get("analyze") === "1";
-    const debug = (url.searchParams.get("debug") || "").trim();
-    const ocrParse = url.searchParams.get("ocr_parse") === "1";
-    const forceLLM = url.searchParams.get("force_llm") === "1";
-    const dry = url.searchParams.get("dry") === "1";
-
-    // If caller gave a web page but no ocr_url, try to extract a good image link
-    if (!ocrUrl && webUrlRaw) {
-      let picked = null;
-
-      // First: try HTML parse (og:image, srcset, imgs)
-      try {
-        const html = await fetchHtml(env, webUrlRaw);
-        picked = pickMenuImageFromHtml(html, webUrlRaw);
-      } catch (e) {
-        // ignore here; we’ll try a heuristic next
-      }
-
-      // Second: if still nothing, try a direct-image heuristic (e.g., Imgur)
-      if (!picked) {
-        const guess = normalizeGalleryToDirectImage(webUrlRaw);
-        if (guess) picked = guess;
-      }
-
-      if (picked) {
-        ocrUrl = picked;
-        if (debug === "web") {
-          return json({
-            ok: true,
-            source: "web_adapter",
-            web_url: webUrlRaw,
-            picked_image_url: picked,
-            note: "picked_via_html_or_heuristic"
-          });
-        }
-      } else if (debug === "web") {
-        return json(
-          {
-            ok: false,
-            source: "web_adapter",
-            web_url: webUrlRaw,
-            error: "no_image_found"
-          },
-          { status: 404 }
-        );
-      }
-    }
-
-    if (ocrUrl && !isOcrEnabled(env)) {
-      return json(
-        {
-          ok: false,
-          error: "OCR tier is disabled. Set OCR_TIER_ENABLED=1 to enable.",
-          hint: "Remove ?ocr_url=... or enable the flag."
-        },
-        { status: 400 }
-      );
-    }
-
-    if (ocrUrl && isOcrEnabled(env)) {
-      try {
-        console.log("[OCR] calling Vision for:", ocrUrl);
-        const { fullText, lines, raw } = await callVisionForText(env, ocrUrl);
-
-        let parsed = null;
-        if (ocrParse) {
-          parsed = parseOCRToCandidates(fullText);
-        }
-
-        return json({
-          ok: true,
-          source: "ocr_vision_text",
-          received: {
-            query,
-            address,
-            ocr_url: ocrUrl,
-            force_reanalyze: forceReanalyze,
-            analyze
-          },
-          counts: { lines: lines.length, chars: fullText.length },
-          preview: fullText.slice(0, 200),
-          lines_first_20: lines.slice(0, 20),
-          ...(ocrParse
-            ? {
-                parsed_count: parsed.length,
-                parsed_first_10: parsed.slice(0, 10)
-              }
-            : {}),
-          ...(debug === "vision"
-            ? {
-                vision_keys: raw ? Object.keys(raw) : [],
-                vision_raw_first: raw || null
-              }
-            : {})
-        });
-      } catch (err) {
-        console.warn("[OCR] Vision error:", err);
-        return json(
-          {
-            ok: false,
-            source: "ocr_vision_text",
-            error: String(err?.message || err)
-          },
-          { status: 502 }
-        );
-      }
-    }
-
-    if (!query || !address) {
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          error: "Missing required parameters: query and address",
-          hint: "/menu/extract?query=McDonald's&address=Miami, FL"
-        }),
-        {
-          status: 400,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "access-control-allow-origin": "*"
-          }
-        }
-      );
-    }
-
-    let pickedSource = "pending";
-    let items = [];
-    let notes = {};
-    let uberResult = null;
-    let gItems = [];
-    let oItems = [];
-
-    if (dry) {
-      pickedSource = forceLLM ? "none" : "none";
-      const rawPrefs = await getUserPrefs();
-      const safePrefs =
-        rawPrefs && typeof rawPrefs === "object"
-          ? rawPrefs
-          : { allergens: [], fodmap: {} };
-      const itemsPersonal = Array.isArray(items)
-        ? items.map((it) => personalizeDishForUser({ ...it }, safePrefs))
-        : [];
-      return json(
-        {
-          ok: true,
-          source: pickedSource,
-          query,
-          address,
-          items: itemsPersonal,
-          user_prefs: safePrefs,
-          ...(debug ? { notes: { dry_mode: true } } : {})
-        },
-        { status: 200, headers: { "access-control-allow-origin": "*" } }
-      );
-    }
-
-    if (!forceLLM) {
-      try {
-        const uber = await callUberForMenu(
-          env,
-          query,
-          address,
-          { maxRows: 250, page: 1, locale: "en-US" },
-          ctx
-        );
-        uberResult = uber;
-        if (
-          uber &&
-          uber.ok &&
-          Array.isArray(uber.items) &&
-          uber.items.length > 0
-        ) {
-          pickedSource = "uber";
-        } else {
-          pickedSource = "none";
-          notes.uber = "empty";
-        }
-      } catch (e) {
-        pickedSource = "none";
-        notes.uber_error = String(e?.message || e);
-      }
-    } else {
-      notes.forced = "llm";
-      pickedSource = "none";
-    }
-
-    if (pickedSource === "none" || forceLLM) {
-      try {
-        const [grokRes, openaiRes] = await Promise.allSettled([
-          callGrokExtract(env, query, address),
-          callOpenAIExtract(env, query, address)
-        ]);
-
-        const grok =
-          grokRes.status === "fulfilled"
-            ? grokRes.value
-            : { ok: false, items: [], error: String(grokRes.reason) };
-        const openai =
-          openaiRes.status === "fulfilled"
-            ? openaiRes.value
-            : { ok: false, items: [], error: String(openaiRes.reason) };
-
-        gItems = normalizeLLMItems(grok.items, "grok");
-        oItems = normalizeLLMItems(openai.items, "openai");
-
-        if (gItems.length > 0 && oItems.length > 0) pickedSource = "mixed";
-        else if (gItems.length > 0) pickedSource = "grok";
-        else if (oItems.length > 0) pickedSource = "openai";
-        else pickedSource = "none";
-
-        if (debug) {
-          notes.grok_ok = !!grok.ok;
-          if (grok.error) notes.grok_error = grok.error;
-          if (grok.note) notes.grok_note = grok.note;
-          notes.openai_ok = !!openai.ok;
-          if (openai.error) notes.openai_error = openai.error;
-          if (openai.note) notes.openai_note = openai.note;
-        }
-      } catch (e) {
-        notes.llm_block_error = String(e?.message || e);
-        pickedSource = pickedSource === "pending" ? "none" : pickedSource;
-        items = Array.isArray(items) ? items : [];
-      }
-    }
-
-    const uberCanon =
-      pickedSource === "uber" || pickedSource === "mixed"
-        ? Array.isArray(uberResult?.items)
-          ? uberResult.items
-          : []
-        : [];
-
-    const llmCanon =
-      pickedSource === "grok" ||
-      pickedSource === "openai" ||
-      pickedSource === "mixed"
-        ? [...(gItems || []), ...(oItems || [])]
-        : [];
-
-    // ----- Auto-fallback: if Uber+LLM empty, try web_url -> OCR (even without ocr_url)
-    const totalPre =
-      (Array.isArray(uberCanon) ? uberCanon.length : 0) +
-      (Array.isArray(llmCanon) ? llmCanon.length : 0);
-    if (totalPre === 0 && !ocrUrl && webUrlRaw && isOcrEnabled(env)) {
-      let picked = null;
-      let fetchError = null;
-
-      try {
-        const html = await fetchHtml(env, webUrlRaw);
-        picked = pickMenuImageFromHtml(html, webUrlRaw);
-      } catch (e) {
-        fetchError = String(e?.message || e);
-      }
-
-      if (!picked) {
-        const guess = normalizeGalleryToDirectImage(webUrlRaw);
-        if (guess) picked = guess;
-      }
-
-      if (picked) {
-        ocrUrl = picked;
-        if (debug) {
-          const note = {
-            picked_image_url: picked,
-            note: "picked_via_html_or_heuristic"
-          };
-          if (fetchError) note.fetch_error = fetchError;
-          notes.web_adapter = note;
-        }
-      } else if (debug) {
-        const note = { error: "no_image_found" };
-        if (fetchError) note.fetch_error = fetchError;
-        notes.web_adapter = note;
-      }
-    }
-
-    // --- SMART OCR: only trigger if needed or explicitly forced ---
-    const forceOCR = url.searchParams.get("force_ocr") === "1";
-    let ocrItemsCanon = [];
-    const uberCount = Array.isArray(uberCanon) ? uberCanon.length : 0;
-    const llmCount = Array.isArray(llmCanon) ? llmCanon.length : 0;
-    const shouldTryOCR =
-      isOcrEnabled(env) &&
-      ocrUrl &&
-      (forceOCR || pickedSource === "none" || uberCount + llmCount === 0);
-
-    if (shouldTryOCR) {
-      try {
-        const ocrCandidates = await fetchOCRCandidates(env, ocrUrl);
-        ocrItemsCanon = Array.isArray(ocrCandidates)
-          ? ocrCandidates.map(toCanonFromOCR)
-          : [];
-        if (debug)
-          notes.ocr_items = Array.isArray(ocrItemsCanon)
-            ? ocrItemsCanon.length
-            : 0;
-        if (ocrItemsCanon.length) {
-          if (pickedSource === "none" || pickedSource === "pending")
-            pickedSource = "ocr";
-          else pickedSource = "mixed";
-        } else {
-          if (debug) notes.ocr_note = "ocr_no_items";
-        }
-      } catch (e) {
-        if (debug) notes.ocr_error = String(e?.message || e);
-      }
-    }
-
-    if (Array.isArray(uberCanon) && !uberCanon.length)
-      notes.uber_note = "no_uber_items";
-    if (Array.isArray(llmCanon) && !llmCanon.length)
-      notes.llm_note = "no_llm_items";
-
-    const merged = mergeCanonItems(uberCanon, llmCanon, ocrItemsCanon);
-    const MAX = 250;
-    items = merged.slice(0, MAX);
-
-    if (uberCanon.length && (gItems?.length || oItems?.length)) {
-      pickedSource = "mixed";
-    }
-
-    if (analyze && Array.isArray(items) && items.length) {
-      const top = rankCanon(items, Number(url.searchParams.get("top") || 25));
-      const place_id = url.searchParams.get("place_id") || "place.unknown";
-      const cuisine = url.searchParams.get("cuisine") || "";
-
-      const filteredTop = [];
-      for (const it of top) {
-        const cached = await maybeReturnCachedResult(request, env, {
-          place_id,
-          title: it.title || it.name
-        });
-        if (cached) {
-          try {
-            const cachedJson = JSON.parse(await cached.clone().text());
-            it.analysis = cachedJson;
-            it.source = "cache:r2";
-          } catch {}
-          continue;
-        }
-        filteredTop.push(it);
-      }
-
-      const shimUberShape = filteredTop.map((it) => ({
-        name: it.title || "",
-        description: it.description || "",
-        section: it.section || "",
-        price: typeof it.price_cents === "number" ? it.price_cents : null,
-        price_display: it.price_text || null
-      }));
-
-      const { enqueued } = await enqueueTopItems(env, shimUberShape, {
-        place_id,
-        cuisine,
-        query,
-        address,
-        forceUS: true
-      });
-
-      for (const dish of Array.isArray(items) ? items : []) {
-        if (!Array.isArray(dish.hits)) {
-          dish.hits = [];
-        }
-        if (dish.hits.length === 0) {
-          const inferredText = inferHitsFromText(
-            dish.title || dish.name || "",
-            dish.description || ""
-          );
-          if (inferredText.length) {
-            dish.hits = inferredText;
-          }
-        }
-        if (dish.hits.length === 0) {
-          const card = await fetchRecipeCard(
-            env,
-            dish.title || dish.name || query,
-            url.origin
-          );
-          if (card) {
-            if (Array.isArray(card.ingredients)) {
-              const inferredIngredients = inferHitsFromIngredients(
-                card.ingredients
-              );
-              if (inferredIngredients.length) dish.hits = inferredIngredients;
-            }
-            if (dish.hits.length === 0) {
-              const inferred = inferHitsFromRecipeCard(card);
-              if (inferred.length) dish.hits = inferred;
-            }
-          }
-        }
-      }
-
-      for (const dish of Array.isArray(top) ? top : []) {
-        if (!Array.isArray(dish.hits)) {
-          dish.hits = [];
-        }
-        if (dish.hits.length === 0) {
-          const inferredText = inferHitsFromText(
-            dish.title || dish.name || "",
-            dish.description || ""
-          );
-          if (inferredText.length) {
-            dish.hits = inferredText;
-          }
-        }
-        if (dish.hits.length === 0) {
-          const card = await fetchRecipeCard(
-            env,
-            dish.title || dish.name || query,
-            url.origin
-          );
-          if (card) {
-            if (Array.isArray(card.ingredients)) {
-              const inferredIngredients = inferHitsFromIngredients(
-                card.ingredients
-              );
-              if (inferredIngredients.length) dish.hits = inferredIngredients;
-            }
-            if (dish.hits.length === 0) {
-              const inferred = inferHitsFromRecipeCard(card);
-              if (inferred.length) dish.hits = inferred;
-            }
-          }
-        }
-      }
-      const rawPrefs = await getUserPrefs();
-      const safePrefs =
-        rawPrefs && typeof rawPrefs === "object"
-          ? rawPrefs
-          : { allergens: [], fodmap: {} };
-      const itemsPersonal = Array.isArray(items)
-        ? items.map((it) => personalizeDishForUser({ ...it }, safePrefs))
-        : [];
-      const topPersonal = Array.isArray(top)
-        ? top
-            .slice(0, 3)
-            .map((it) => personalizeDishForUser({ ...it }, safePrefs))
-        : [];
-      return json(
-        {
-          ok: true,
-          source: pickedSource,
-          query,
-          address,
-          total: items.length,
-          enqueued,
-          top_sample: topPersonal,
-          user_prefs: safePrefs,
-          items: itemsPersonal
-        },
-        { status: 200, headers: { "access-control-allow-origin": "*" } }
-      );
-    }
-
-    for (const dish of Array.isArray(items) ? items : []) {
-      if (!Array.isArray(dish.hits)) {
-        dish.hits = [];
-      }
-      if (dish.hits.length === 0) {
-        const inferred = inferHitsFromText(
-          dish.title || dish.name || "",
-          dish.description || ""
-        );
-        if (inferred.length) {
-          dish.hits = inferred;
-        }
-      }
-      if (dish.hits.length === 0) {
-        const card = await fetchRecipeCard(
-          env,
-          dish.title || dish.name || query,
-          url.origin
-        );
-        if (card) {
-          if (Array.isArray(card.ingredients)) {
-            const inferredIngredients = inferHitsFromIngredients(
-              card.ingredients
-            );
-            if (inferredIngredients.length) dish.hits = inferredIngredients;
-          }
-          if (dish.hits.length === 0) {
-            const inferredCard = inferHitsFromRecipeCard(card);
-            if (inferredCard.length) dish.hits = inferredCard;
-          }
-        }
-      }
-    }
-
-    const prefs = await getUserPrefs();
-    const safePrefs =
-      prefs && typeof prefs === "object"
-        ? prefs
-        : { allergens: [], fodmap: {} };
-    const itemsPersonal = Array.isArray(items)
-      ? items.map((it) => personalizeDishForUser(it, safePrefs))
-      : [];
-
-    return json(
-      {
-        ok: true,
-        source: pickedSource,
-        query,
-        address,
-        items: itemsPersonal,
-        user_prefs: safePrefs,
-        ...(debug ? { notes } : {})
-      },
-      { status: 200, headers: { "access-control-allow-origin": "*" } }
-    );
-  } catch (fatal) {
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: "extract_handler_failed",
-        message: String(fatal?.message || fatal)
-      }),
-      {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "access-control-allow-origin": "*"
-        }
-      }
-    );
-  }
-}
-
+__name(enqueueTopItems, "enqueueTopItems");
 async function handleRecipeResolve(env, request, url, ctx) {
   const method = request.method || "GET";
-  let dish =
-    url.searchParams.get("dish") || url.searchParams.get("title") || "";
+  let dish = url.searchParams.get("dish") || url.searchParams.get("title") || "";
   let place_id = url.searchParams.get("place_id") || "";
   let cuisine = url.searchParams.get("cuisine") || "";
   let lang = url.searchParams.get("lang") || "en";
   let body = {};
-
-  const providersParse = (
-    env.PROVIDERS_PARSE ||
-    env.provider_parse ||
-    "zestful,openai"
-  )
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-
+  const providersParse = (env.PROVIDERS_PARSE || env.provider_parse || "zestful,openai").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   const recipeProviderFns = {
     edamam: fetchFromEdamam,
     spoonacular: fetchFromSpoonacular,
     openai: fetchFromOpenAI
   };
-
   const parseProviderFns = {
-    zestful: async (env, ingLines) => callZestful(env, ingLines),
-    openai: async () => null // placeholder (skip for now)
+    zestful: /* @__PURE__ */ __name(async (env2, ingLines2) => callZestful(env2, ingLines2), "zestful"),
+    openai: /* @__PURE__ */ __name(async () => null, "openai")
+    // placeholder (skip for now)
   };
-
   if (method === "POST") {
     try {
       body = await request.json();
-    } catch {}
+    } catch {
+    }
     dish = String(body.dish || body.title || dish || "");
     place_id = String(body.place_id || place_id || "");
     cuisine = String(body.cuisine || cuisine || "");
     lang = String(body.lang || lang || "en");
   }
-
   if (!dish.trim()) {
     return new Response(
       JSON.stringify({
@@ -4536,7 +2092,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     );
   }
-
   const cacheKey = recipeCacheKey(dish, lang);
   const force = url.searchParams.get("force_reanalyze") === "1";
   const classify = url.searchParams.get("classify") === "1";
@@ -4548,19 +2103,13 @@ async function handleRecipeResolve(env, request, url, ctx) {
   let out = null;
   let selectedProvider = null;
   let cacheHit = false;
-
   const cached = await recipeCacheRead(env, cacheKey);
   if (cached && cached.recipe && Array.isArray(cached.ingredients) && !force) {
     cacheHit = true;
     pickedSource = cached.from || cached.provider || "cache";
     recipe = cached.recipe;
-    ingredients = Array.isArray(cached.ingredients)
-      ? [...cached.ingredients]
-      : [];
-    notes =
-      typeof cached.notes === "object" && cached.notes
-        ? { ...cached.notes }
-        : {};
+    ingredients = Array.isArray(cached.ingredients) ? [...cached.ingredients] : [];
+    notes = typeof cached.notes === "object" && cached.notes ? { ...cached.notes } : {};
     out = {
       ...cached,
       cache: true,
@@ -4568,7 +2117,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       ingredients
     };
     selectedProvider = pickedSource;
-
     if (wantShape === "recipe_card") {
       const dishTitle = dish;
       const rc = {
@@ -4582,15 +2130,12 @@ async function handleRecipeResolve(env, request, url, ctx) {
           unit: i.unit ?? null
         })),
         recipe: {
-          steps:
-            recipe?.steps && Array.isArray(recipe.steps) ? recipe.steps : [],
-          notes:
-            recipe?.notes && Array.isArray(recipe.notes) ? recipe.notes : null
+          steps: recipe?.steps && Array.isArray(recipe.steps) ? recipe.steps : [],
+          notes: recipe?.notes && Array.isArray(recipe.notes) ? recipe.notes : null
         },
-        molecular: { compounds: [], organs: {}, organ_summary: {} } // will fill if Premium
+        molecular: { compounds: [], organs: {}, organ_summary: {} }
+        // will fill if Premium
       };
-
-      // Premium gate (same logic as non-cached branch)
       let isPremium = false;
       const gateParams = new URLSearchParams(url.search);
       const userId = (gateParams.get("user_id") || "").trim();
@@ -4600,11 +2145,37 @@ async function handleRecipeResolve(env, request, url, ctx) {
         const tier = await env.LEXICON_CACHE.get(kvKey);
         isPremium = String(tier || "").toLowerCase() === "premium";
       }
-
       if (isPremium && Array.isArray(ingredients) && ingredients.length) {
+        let headlineFor = function({ plus = 0, minus = 0 }) {
+          if (minus > 0 && plus === 0) return "\u26A0\uFE0F Risk";
+          if (plus > 0 && minus === 0) return "\u{1F44D} Benefit";
+          if (plus > 0 && minus > 0) return "\u2194\uFE0F Mixed";
+          return "\u2139\uFE0F Neutral";
+        }, humanizeOrgans = function(summary) {
+          const tips = [];
+          for (const [org, { plus = 0, minus = 0 }] of Object.entries(
+            summary
+          )) {
+            const Org = org.charAt(0).toUpperCase() + org.slice(1);
+            let line = `${Org}: `;
+            if (minus > 0 && plus === 0)
+              line += "may bother sensitive tummies\u2014consider smaller portions or swaps.";
+            else if (plus > 0 && minus === 0)
+              line += "generally friendly in normal portions.";
+            else if (plus > 0 && minus > 0)
+              line += "mixed signal\u2014portion size and add-ons matter.";
+            else line += "no clear signal\u2014use your judgment.";
+            tips.push(line);
+          }
+          return tips;
+        }, titleize = function(s) {
+          return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+        };
+        __name(headlineFor, "headlineFor");
+        __name(humanizeOrgans, "humanizeOrgans");
+        __name(titleize, "titleize");
         const foundCompounds = [];
         const organMap = {};
-        // Quick bridge: map common ingredients to likely compounds before DB lookups
         const BRIDGE = {
           garlic: ["allicin"],
           "olive oil": ["oleocanthal"],
@@ -4617,13 +2188,11 @@ async function handleRecipeResolve(env, request, url, ctx) {
           parsley: ["apigenin"],
           nutmeg: ["myristicin"]
         };
-        const seenCompounds = new Set();
+        const seenCompounds = /* @__PURE__ */ new Set();
         for (const ing of ingredients) {
           const term = (ing?.name || "").toLowerCase().trim();
           if (!term) continue;
-
-          // Use ingredient term + any bridged compound hints
-          const searchTerms = [term, ...(BRIDGE[term] || [])];
+          const searchTerms = [term, ...BRIDGE[term] || []];
           for (const sTerm of searchTerms) {
             const cRes = await env.D1_DB.prepare(
               `SELECT id, name, common_name, cid
@@ -4631,25 +2200,18 @@ async function handleRecipeResolve(env, request, url, ctx) {
                         WHERE LOWER(name) = ? OR LOWER(common_name) = ?
                            OR LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
                         ORDER BY name LIMIT 5`
-            )
-              .bind(sTerm, sTerm, `%${sTerm}%`, `%${sTerm}%`)
-              .all();
-
+            ).bind(sTerm, sTerm, `%${sTerm}%`, `%${sTerm}%`).all();
             const comps = cRes?.results || [];
             for (const c of comps) {
               const key = (c.name || "").toLowerCase();
               if (seenCompounds.has(key)) continue;
               seenCompounds.add(key);
-
               const eRes = await env.D1_DB.prepare(
                 `SELECT organ, effect, strength, notes
                           FROM compound_organ_effects
                           WHERE compound_id = ?`
-              )
-                .bind(c.id)
-                .all();
+              ).bind(c.id).all();
               const effs = eRes?.results || [];
-
               foundCompounds.push({
                 name: c.name,
                 from_ingredient: ing.name,
@@ -4668,9 +2230,8 @@ async function handleRecipeResolve(env, request, url, ctx) {
             }
           }
         }
-        // De-duplicate organ effects (ignore notes)
         for (const [org, list] of Object.entries(organMap)) {
-          const seen = new Set();
+          const seen = /* @__PURE__ */ new Set();
           organMap[org] = list.filter((row) => {
             const key = `${org}|${row.compound}|${row.effect}`.toLowerCase();
             if (seen.has(key)) return false;
@@ -4680,9 +2241,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
         }
         const organSummary = {};
         for (const [org, list] of Object.entries(organMap)) {
-          let plus = 0,
-            minus = 0,
-            neutral = 0;
+          let plus = 0, minus = 0, neutral = 0;
           for (const row of list) {
             if (row.effect === "benefit") plus++;
             else if (row.effect === "risk") minus++;
@@ -4690,54 +2249,21 @@ async function handleRecipeResolve(env, request, url, ctx) {
           }
           organSummary[org] = { plus, minus, neutral };
         }
-        // Build human headlines from organ_summary
-        function headlineFor({ plus = 0, minus = 0 }) {
-          if (minus > 0 && plus === 0) return "⚠️ Risk";
-          if (plus > 0 && minus === 0) return "👍 Benefit";
-          if (plus > 0 && minus > 0) return "↔️ Mixed";
-          return "ℹ️ Neutral";
-        }
         const organ_headlines = Object.entries(organSummary).map(
-          ([org, counts]) =>
-            `${org[0].toUpperCase()}${org.slice(1)}: ${headlineFor(counts)}`
+          ([org, counts]) => `${org[0].toUpperCase()}${org.slice(1)}: ${headlineFor(counts)}`
         );
-
-        // UI: organ icons (fallback to 🧬)
         const ORG_ICON = {
-          heart: "❤️",
-          gut: "🦠",
-          liver: "🧪",
-          brain: "🧠",
-          immune: "🛡️"
+          heart: "\u2764\uFE0F",
+          gut: "\u{1F9A0}",
+          liver: "\u{1F9EA}",
+          brain: "\u{1F9E0}",
+          immune: "\u{1F6E1}\uFE0F"
         };
         rc.molecular_icons = Object.keys(organSummary).reduce((m, org) => {
-          m[org] = ORG_ICON[org] || "🧬";
+          m[org] = ORG_ICON[org] || "\u{1F9EC}";
           return m;
         }, {});
-
-        // Humanized Biology: simple, friendly tips per organ
-        function humanizeOrgans(summary) {
-          const tips = [];
-          for (const [org, { plus = 0, minus = 0 }] of Object.entries(
-            summary
-          )) {
-            const Org = org.charAt(0).toUpperCase() + org.slice(1);
-            let line = `${Org}: `;
-            if (minus > 0 && plus === 0)
-              line +=
-                "may bother sensitive tummies—consider smaller portions or swaps.";
-            else if (plus > 0 && minus === 0)
-              line += "generally friendly in normal portions.";
-            else if (plus > 0 && minus > 0)
-              line += "mixed signal—portion size and add-ons matter.";
-            else line += "no clear signal—use your judgment.";
-            tips.push(line);
-          }
-          return tips;
-        }
         rc.molecular_human = { organ_tips: humanizeOrgans(organSummary) };
-
-        // ---- Polishing block: overall summary + sentiment + version/timestamp ----
         const totals = Object.entries(organSummary).reduce(
           (a, [org, c]) => {
             a.plus += c.plus || 0;
@@ -4748,10 +2274,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
           },
           { plus: 0, minus: 0, riskOrgs: [], benefitOrgs: [] }
         );
-
-        function titleize(s) {
-          return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-        }
         const riskStr = totals.riskOrgs.map(titleize).join(", ");
         const benefitStr = totals.benefitOrgs.map(titleize).join(", ");
         let overall_label = "Neutral";
@@ -4759,69 +2281,38 @@ async function handleRecipeResolve(env, request, url, ctx) {
         else if (totals.plus > 0 && totals.minus === 0)
           overall_label = "Supportive";
         else if (totals.plus > 0 && totals.minus > 0) overall_label = "Mixed";
-
-        const summary_sentence =
-          overall_label === "Caution"
-            ? `⚠️ May bother ${riskStr || "sensitive tummies"}.`
-            : overall_label === "Supportive"
-              ? `👍 Generally friendly for ${benefitStr || "wellbeing"} in normal portions.`
-              : overall_label === "Mixed"
-                ? `↔️ Mixed signal — supportive for ${benefitStr || "some organs"}, but caution for ${riskStr || "others"}.`
-                : `ℹ️ No clear signal — use your judgment.`;
-
-        // Add polished fields
+        const summary_sentence = overall_label === "Caution" ? `\u26A0\uFE0F May bother ${riskStr || "sensitive tummies"}.` : overall_label === "Supportive" ? `\u{1F44D} Generally friendly for ${benefitStr || "wellbeing"} in normal portions.` : overall_label === "Mixed" ? `\u2194\uFE0F Mixed signal \u2014 supportive for ${benefitStr || "some organs"}, but caution for ${riskStr || "others"}.` : `\u2139\uFE0F No clear signal \u2014 use your judgment.`;
         rc.molecular_human = {
-          ...(rc.molecular_human || {}),
+          ...rc.molecular_human || {},
           summary: summary_sentence,
           sentiment: overall_label
         };
-
-        // Version + timestamp for the card payload
         rc.payload_version = "recipe_card.v1.1";
-        rc.generated_at = new Date().toISOString();
-
-        // Optional: tweak the badge when gated vs premium (keep your existing logic if present)
+        rc.generated_at = (/* @__PURE__ */ new Date()).toISOString();
         if (rc?.molecular?.compounds?.length >= 0 && !rc.molecular.gated) {
-          rc.molecular_badge = `Molecular Insights: ${rc.molecular.compounds.length} compounds • ${Object.keys(rc.molecular.organ_summary || {}).length} organs`;
+          rc.molecular_badge = `Molecular Insights: ${rc.molecular.compounds.length} compounds \u2022 ${Object.keys(rc.molecular.organ_summary || {}).length} organs`;
         } else if (rc?.molecular?.gated) {
           rc.molecular_badge = "Molecular Insights: upgrade for details";
         }
-
-        // include in payload
         rc.molecular = {
           compounds: foundCompounds,
           organs: organMap,
           organ_summary: organSummary,
           organ_headlines
         };
-        rc.molecular_badge = `Molecular Insights: ${foundCompounds.length} compounds • ${Object.keys(organSummary).length} organs`;
-
-        // Flags & counts (must run after rc.molecular is set)
-        rc.has_molecular =
-          !rc?.molecular?.gated &&
-          Array.isArray(rc?.molecular?.compounds) &&
-          rc.molecular.compounds.length > 0;
-
+        rc.molecular_badge = `Molecular Insights: ${foundCompounds.length} compounds \u2022 ${Object.keys(organSummary).length} organs`;
+        rc.has_molecular = !rc?.molecular?.gated && Array.isArray(rc?.molecular?.compounds) && rc.molecular.compounds.length > 0;
         rc.molecular_counts = {
-          compounds: Array.isArray(rc?.molecular?.compounds)
-            ? rc.molecular.compounds.length
-            : 0,
-          organs: rc?.molecular?.organ_summary
-            ? Object.keys(rc.molecular.organ_summary).length
-            : 0
+          compounds: Array.isArray(rc?.molecular?.compounds) ? rc.molecular.compounds.length : 0,
+          organs: rc?.molecular?.organ_summary ? Object.keys(rc.molecular.organ_summary).length : 0
         };
-
-        // If caller asked to classify, enqueue a job and include enqueued[]
         const wantClassify = url.searchParams.get("classify") === "1";
         if (wantClassify) {
           const dishTitleCard = rc?.dish?.name || dish || "Unknown Dish";
           const payload = {
             place_id: place_id || "place.unknown",
             dish_name: dishTitleCard,
-            dish_desc:
-              (Array.isArray(rc?.recipe?.notes)
-                ? rc.recipe.notes.join("; ")
-                : rc?.recipe?.steps?.[0] || "") || "",
+            dish_desc: (Array.isArray(rc?.recipe?.notes) ? rc.recipe.notes.join("; ") : rc?.recipe?.steps?.[0] || "") || "",
             cuisine: cuisine || "",
             ingredients: (rc?.ingredients || []).map((i) => ({
               name: i.name,
@@ -4830,8 +2321,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
             }))
           };
           const { ok: enqOk, id } = await enqueueDishDirect(env, payload);
-          rc.enqueued =
-            enqOk && id ? [{ id, dish_name: payload.dish_name }] : [];
+          rc.enqueued = enqOk && id ? [{ id, dish_name: payload.dish_name }] : [];
         }
       } else {
         rc.molecular = {
@@ -4842,8 +2332,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
         };
         rc.molecular_badge = "Molecular Insights: upgrade for details";
       }
-
-      // attach dish nutrition to the card
       if (!out?.nutrition_summary && Array.isArray(out?.ingredients_parsed)) {
         out.nutrition_summary = sumNutrition(out.ingredients_parsed);
       }
@@ -4857,7 +2345,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
           `${Math.round(rc.nutrition_summary.sodium_mg)} mg sodium`
         ];
       }
-
       return new Response(JSON.stringify(rc, null, 2), {
         status: 200,
         headers: {
@@ -4867,7 +2354,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       });
     }
   } else {
-    // Provider loop (deterministic order)
     let lastAttempt = null;
     for (const p of providerOrder(env)) {
       const fn = recipeProviderFns[p];
@@ -4882,11 +2368,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
       if (candidate) {
         lastAttempt = candidate;
       }
-      if (
-        candidate &&
-        Array.isArray(candidate.ingredients) &&
-        candidate.ingredients.length
-      ) {
+      if (candidate && Array.isArray(candidate.ingredients) && candidate.ingredients.length) {
         out = candidate;
         selectedProvider = candidate.provider || p;
         break;
@@ -4899,14 +2381,8 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     }
   }
-
   if (!cacheHit) {
-    if (
-      selectedProvider &&
-      out &&
-      Array.isArray(out.ingredients) &&
-      out.ingredients.length
-    ) {
+    if (selectedProvider && out && Array.isArray(out.ingredients) && out.ingredients.length) {
       recipe = out.recipe || recipe;
       pickedSource = selectedProvider;
     } else {
@@ -4916,28 +2392,16 @@ async function handleRecipeResolve(env, request, url, ctx) {
       if (out?.reason) notes.provider_reason = out.reason;
     }
   }
-
   const wantParse = url.searchParams.get("parse") !== "0";
-  // Normalize to lines no matter which provider filled 'out'
-  const sourceLines = Array.isArray(out?.ingredients)
-    ? out.ingredients
-    : Array.isArray(out?.ingredients_lines)
-      ? out.ingredients_lines
-      : [];
-
-  const ingLines = Array.isArray(sourceLines)
-    ? sourceLines.map(ingredientEntryToLine).filter(Boolean)
-    : [];
-
+  const sourceLines = Array.isArray(out?.ingredients) ? out.ingredients : Array.isArray(out?.ingredients_lines) ? out.ingredients_lines : [];
+  const ingLines = Array.isArray(sourceLines) ? sourceLines.map(ingredientEntryToLine).filter(Boolean) : [];
   if (!out) out = {};
   out.ingredients_lines = ingLines;
-
   let parsed = null;
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   const dailyCap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
-
   if (wantParse && ingLines.length && env.ZESTFUL_RAPID_KEY) {
-    const cached = [];
+    const cached2 = [];
     const missingIdx = [];
     if (kv) {
       for (let i = 0; i < ingLines.length; i++) {
@@ -4945,13 +2409,13 @@ async function handleRecipeResolve(env, request, url, ctx) {
         let row = null;
         try {
           row = await kv.get(k, "json");
-        } catch {}
-        if (row) cached[i] = row;
+        } catch {
+        }
+        if (row) cached2[i] = row;
         else missingIdx.push(i);
       }
     }
-
-    let filled = cached.slice();
+    let filled = cached2.slice();
     if (missingIdx.length === ingLines.length || !kv) {
       const linesToParse = ingLines;
       const toParse = linesToParse.length;
@@ -5034,10 +2498,8 @@ async function handleRecipeResolve(env, request, url, ctx) {
         await incZestfulCount(env, toParse);
       }
     }
-
     if (filled.filter(Boolean).length === ingLines.length) parsed = filled;
   }
-
   if (!parsed && wantParse && ingLines.length) {
     for (const p of providersParse) {
       if (p === "zestful") continue;
@@ -5054,38 +2516,26 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     }
   }
-
   if (parsed?.length) {
     await enrichWithNutrition(env, parsed);
     ingredients = parsed.map((row) => ({
       name: row.name || row.original || "",
-      qty:
-        typeof row.qty === "number"
-          ? row.qty
-          : row.qty != null
-            ? Number(row.qty) || null
-            : null,
+      qty: typeof row.qty === "number" ? row.qty : row.qty != null ? Number(row.qty) || null : null,
       unit: row.unit || null,
       comment: row.comment || row.preparationNotes || null
     }));
     out.ingredients_parsed = parsed;
     out.nutrition_summary = sumNutrition(parsed);
-  } else if (
-    Array.isArray(out?.ingredients_structured) &&
-    out.ingredients_structured.length
-  ) {
+  } else if (Array.isArray(out?.ingredients_structured) && out.ingredients_structured.length) {
     ingredients = out.ingredients_structured.map((row) => ({
       name: row.name || row.original || "",
       qty: row.qty ?? row.quantity ?? null,
       unit: row.unit ?? null,
       comment: row.comment || row.preparation || row.preparationNotes || null
     }));
-  } else if (
-    Array.isArray(out?.ingredients) &&
-    out.ingredients.every(
-      (x) => x && typeof x === "object" && ("name" in x || "original" in x)
-    )
-  ) {
+  } else if (Array.isArray(out?.ingredients) && out.ingredients.every(
+    (x) => x && typeof x === "object" && ("name" in x || "original" in x)
+  )) {
     ingredients = out.ingredients.map((row) => ({
       name: row.name || row.original || "",
       qty: row.qty ?? row.quantity ?? null,
@@ -5100,7 +2550,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       comment: null
     }));
   }
-
   if (!cacheHit && recipe && Array.isArray(ingredients) && ingredients.length) {
     await recipeCacheWrite(env, cacheKey, {
       recipe,
@@ -5108,26 +2557,15 @@ async function handleRecipeResolve(env, request, url, ctx) {
       from: pickedSource
     });
   }
-
   const responseSource = cacheHit ? "cache" : pickedSource;
-
-  // --- normalize cached payloads to the new shape ---
   if (out) {
     if (out.recipe && !out.recipe.title && out.recipe.name) {
       out.recipe.title = out.recipe.name;
     }
-    if (
-      Array.isArray(out.ingredients_structured) &&
-      out.ingredients_structured.length
-    ) {
+    if (Array.isArray(out.ingredients_structured) && out.ingredients_structured.length) {
       out.ingredients_parsed = out.ingredients_structured;
-      if (
-        !Array.isArray(out.ingredients_lines) ||
-        !out.ingredients_lines.length
-      ) {
-        out.ingredients_lines = out.ingredients_structured
-          .map((x) => ingredientEntryToLine(x))
-          .filter(Boolean);
+      if (!Array.isArray(out.ingredients_lines) || !out.ingredients_lines.length) {
+        out.ingredients_lines = out.ingredients_structured.map((x) => ingredientEntryToLine(x)).filter(Boolean);
       }
     }
     if (!Array.isArray(out.ingredients_lines)) {
@@ -5138,7 +2576,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
         if (looksStructured) {
           out.ingredients_parsed = out.ingredients;
           out.ingredients_lines = out.ingredients.map((x) => {
-            const qty = x.qty !== undefined && x.qty !== null ? `${x.qty}` : "";
+            const qty = x.qty !== void 0 && x.qty !== null ? `${x.qty}` : "";
             const unit = x.unit ? ` ${x.unit}` : "";
             const name = x.name || "";
             const comment = x.comment ? `, ${x.comment}` : "";
@@ -5152,7 +2590,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     }
   }
-
   if (classify && recipe && Array.isArray(ingredients) && ingredients.length) {
     const stampKey = classifyStampKey(dish, place_id, lang);
     const recent = await getClassifyStamp(env, stampKey);
@@ -5179,16 +2616,11 @@ async function handleRecipeResolve(env, request, url, ctx) {
         }
       );
     }
-
-    const classifySource =
-      out?.ingredients_parsed || out?.ingredients_lines || ingredients;
+    const classifySource = out?.ingredients_parsed || out?.ingredients_lines || ingredients;
     const payload = {
       place_id: place_id || "place.unknown",
       dish_name: dish,
-      dish_desc:
-        (Array.isArray(recipe?.notes)
-          ? recipe.notes.join("; ")
-          : recipe?.steps?.[0] || "") || "",
+      dish_desc: (Array.isArray(recipe?.notes) ? recipe.notes.join("; ") : recipe?.steps?.[0] || "") || "",
       cuisine: cuisine || "",
       ingredients: (Array.isArray(classifySource) ? classifySource : []).map(
         (i) => {
@@ -5204,7 +2636,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       )
     };
     const { ok: enqueuedOk, id } = await enqueueDishDirect(env, payload);
-
     if (enqueuedOk && id) {
       await setClassifyStamp(
         env,
@@ -5213,7 +2644,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
         6 * 3600
       );
     }
-
     return new Response(
       JSON.stringify({
         ok: true,
@@ -5235,11 +2665,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     );
   }
-
   if (out && !out.provider) {
-    out.provider = out.cache ? "cache" : (out.provider ?? null);
+    out.provider = out.cache ? "cache" : out.provider ?? null;
   }
-
   const reply = {
     ok: true,
     source: responseSource,
@@ -5250,35 +2678,18 @@ async function handleRecipeResolve(env, request, url, ctx) {
     cache: cacheHit,
     recipe,
     ingredients,
-    ...(out?.ingredients_lines
-      ? { ingredients_lines: out.ingredients_lines }
-      : {}),
-    ...(out?.ingredients_parsed
-      ? { ingredients_parsed: out.ingredients_parsed }
-      : {}),
-    ...(Object.keys(notes).length ? { notes } : {})
+    ...out?.ingredients_lines ? { ingredients_lines: out.ingredients_lines } : {},
+    ...out?.ingredients_parsed ? { ingredients_parsed: out.ingredients_parsed } : {},
+    ...Object.keys(notes).length ? { notes } : {}
   };
-
   out = out ? { ...out, ...reply } : { ...reply };
-
   if (wantShape === "likely_recipe" || wantShape === "likely_recipe_md") {
-    const ingForCookbook =
-      (out?.ingredients_lines && out.ingredients_lines.length
-        ? out.ingredients_lines
-        : ingredients) || [];
-    const stepSource =
-      (Array.isArray(recipe?.steps) && recipe.steps.length
-        ? recipe.steps
-        : Array.isArray(out?.recipe?.steps)
-          ? out.recipe.steps
-          : []) || [];
-    const servingInfo =
-      recipe && typeof recipe === "object"
-        ? {
-            servings: recipe.servings ?? recipe.yield ?? null,
-            grams: recipe.grams ?? null
-          }
-        : null;
+    const ingForCookbook = (out?.ingredients_lines && out.ingredients_lines.length ? out.ingredients_lines : ingredients) || [];
+    const stepSource = (Array.isArray(recipe?.steps) && recipe.steps.length ? recipe.steps : Array.isArray(out?.recipe?.steps) ? out.recipe.steps : []) || [];
+    const servingInfo = recipe && typeof recipe === "object" ? {
+      servings: recipe.servings ?? recipe.yield ?? null,
+      grams: recipe.grams ?? null
+    } : null;
     const md = formatLikelyRecipeMarkdown({
       dishName: dish,
       rawIngredients: ingForCookbook,
@@ -5293,49 +2704,37 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     });
   }
-
-  // ==== OPTIONAL SHAPE: RecipeCard ===================================
-  // If caller requests ?shape=recipe_card, return the fixed UI payload.
   if (wantShape === "recipe_card") {
-    const dishTitle =
-      dish || body?.dish || url.searchParams.get("dish") || "Unknown Dish";
+    const dishTitle = dish || body?.dish || url.searchParams.get("dish") || "Unknown Dish";
     const rc = {
       ok: true,
       component: "RecipeCard",
       version: "v1",
       dish: { name: dishTitle, cuisine: cuisine || null },
-      ingredients: Array.isArray(ingredients)
-        ? ingredients.map((i) => ({
-            name: i.name,
-            qty: i.qty ?? null,
-            unit: i.unit ?? null
-          }))
-        : [],
+      ingredients: Array.isArray(ingredients) ? ingredients.map((i) => ({
+        name: i.name,
+        qty: i.qty ?? null,
+        unit: i.unit ?? null
+      })) : [],
       recipe: {
         steps: recipe?.steps && Array.isArray(recipe.steps) ? recipe.steps : [],
-        notes:
-          recipe?.notes && Array.isArray(recipe.notes) ? recipe.notes : null
+        notes: recipe?.notes && Array.isArray(recipe.notes) ? recipe.notes : null
       },
-      molecular: { compounds: [], organs: {}, organ_summary: {} } // filled only for Premium
+      molecular: { compounds: [], organs: {}, organ_summary: {} }
+      // filled only for Premium
     };
-
-    // Premium enrichment (ingredient -> compounds -> organ effects)
     const gateParams = new URLSearchParams(url.search);
     const userId = (gateParams.get("user_id") || "").trim();
     let isPremium = false;
     if (gateParams.get("dev") === "1") isPremium = true;
     else if (userId) {
       const kvKey = `tier/user:${userId}`;
-      const tier = await (env.LEXICON_CACHE
-        ? env.LEXICON_CACHE.get(kvKey)
-        : null);
+      const tier = await (env.LEXICON_CACHE ? env.LEXICON_CACHE.get(kvKey) : null);
       isPremium = String(tier || "").toLowerCase() === "premium";
     }
-
     if (isPremium && Array.isArray(ingredients) && ingredients.length) {
       const foundCompounds = [];
       const organMap = {};
-      // Quick bridge: map common ingredients to likely compounds before DB lookups
       const BRIDGE = {
         garlic: ["allicin"],
         "olive oil": ["oleocanthal"],
@@ -5348,31 +2747,24 @@ async function handleRecipeResolve(env, request, url, ctx) {
         parsley: ["apigenin"],
         nutmeg: ["myristicin"]
       };
-      const seenCompounds = new Set();
+      const seenCompounds = /* @__PURE__ */ new Set();
       for (const ing of ingredients) {
         const term = (ing?.name || "").toLowerCase().trim();
         if (!term) continue;
-
         const cRes = await env.D1_DB.prepare(
           `SELECT id, name, common_name, cid
            FROM compounds
            WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
            ORDER BY name LIMIT 5`
-        )
-          .bind(`%${term}%`, `%${term}%`)
-          .all();
-
+        ).bind(`%${term}%`, `%${term}%`).all();
         const comps = cRes?.results || [];
         for (const c of comps) {
           const eRes = await env.D1_DB.prepare(
             `SELECT organ, effect, strength, notes
              FROM compound_organ_effects
              WHERE compound_id = ?`
-          )
-            .bind(c.id)
-            .all();
+          ).bind(c.id).all();
           const effs = eRes?.results || [];
-
           foundCompounds.push({
             name: c.name,
             from_ingredient: ing.name,
@@ -5390,12 +2782,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
           }
         }
       }
-
       const organSummary = {};
       for (const [org, list] of Object.entries(organMap)) {
-        let plus = 0,
-          minus = 0,
-          neutral = 0;
+        let plus = 0, minus = 0, neutral = 0;
         for (const row of list) {
           if (row.effect === "benefit") plus++;
           else if (row.effect === "risk") minus++;
@@ -5403,7 +2792,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
         }
         organSummary[org] = { plus, minus, neutral };
       }
-
       rc.molecular = {
         compounds: foundCompounds,
         organs: organMap,
@@ -5417,8 +2805,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
         gated: true
       };
     }
-
-    // attach dish nutrition to the card
     if (!out?.nutrition_summary && Array.isArray(out?.ingredients_parsed)) {
       out.nutrition_summary = sumNutrition(out.ingredients_parsed);
     }
@@ -5432,7 +2818,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
         `${Math.round(rc.nutrition_summary.sodium_mg)} mg sodium`
       ];
     }
-
     return new Response(JSON.stringify(rc, null, 2), {
       status: 200,
       headers: {
@@ -5441,13 +2826,10 @@ async function handleRecipeResolve(env, request, url, ctx) {
       }
     });
   }
-  // ==================================================================
-
   if (out) {
     if (!out.provider && out.cache) out.provider = "cache";
     if (!out.provider && !out.cache) out.provider = "unknown";
   }
-
   if (wantShape === "insights_feed") {
     if (!out?.nutrition_summary && Array.isArray(out?.ingredients_parsed)) {
       out.nutrition_summary = sumNutrition(out.ingredients_parsed);
@@ -5461,7 +2843,6 @@ async function handleRecipeResolve(env, request, url, ctx) {
       ];
     }
   }
-
   return new Response(JSON.stringify(out), {
     status: 200,
     headers: {
@@ -5470,21 +2851,11 @@ async function handleRecipeResolve(env, request, url, ctx) {
     }
   });
 }
-
-// ========== Uber Eats (RapidAPI) — Address + GPS job/search, retries & polling ==========
-async function fetchMenuFromUberEats(
-  env,
-  query,
-  address = "Miami, FL, USA",
-  maxRows = 15,
-  lat = null,
-  lng = null,
-  radius = 5000
-) {
+__name(handleRecipeResolve, "handleRecipeResolve");
+async function fetchMenuFromUberEats(env, query, address = "Miami, FL, USA", maxRows = 15, lat = null, lng = null, radius = 5e3) {
   const rapidKey = env.RAPIDAPI_KEY;
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const base = `https://${host}`;
-
   async function postJob() {
     const url = `${base}/api/job`;
     const body = {
@@ -5503,8 +2874,8 @@ async function fetchMenuFromUberEats(
     });
     return res;
   }
-
-  async function postJobByLocation() {
+  __name(postJob, "postJob");
+  async function postJobByLocation2() {
     const url = `${base}/api/job/location`;
     const body = {
       scraper: {
@@ -5512,8 +2883,7 @@ async function fetchMenuFromUberEats(
         query,
         locale: "en-US",
         page: 1,
-        location:
-          lat != null && lng != null ? { latitude: lat, longitude: lng } : null,
+        location: lat != null && lng != null ? { latitude: lat, longitude: lng } : null,
         radius
       }
     };
@@ -5530,7 +2900,7 @@ async function fetchMenuFromUberEats(
     });
     return res;
   }
-
+  __name(postJobByLocation2, "postJobByLocation");
   async function getById(id) {
     const url = `${base}/api/job/${encodeURIComponent(id)}`;
     const res = await fetch(url, {
@@ -5544,17 +2914,12 @@ async function fetchMenuFromUberEats(
     });
     return res;
   }
-
-  // 1) create job once
+  __name(getById, "getById");
   const create = await postJob();
   const created = await create.json();
-  const jobId =
-    created?.data?.jobId || created?.jobId || created?.id || created?.data?.id;
+  const jobId = created?.data?.jobId || created?.jobId || created?.id || created?.data?.id;
   if (!jobId) throw new Error("UberEats: no jobId returned");
-
-  // 2) poll job until results
-  let tries = 0,
-    resultsPayload = null;
+  let tries = 0, resultsPayload = null;
   while (tries++ < 10) {
     const res = await fetch(`${base}/api/job/${jobId}`, {
       headers: {
@@ -5564,60 +2929,45 @@ async function fetchMenuFromUberEats(
         "User-Agent": "TummyBuddyWorker/1.0"
       }
     });
-
     let j = {};
     try {
       j = await res.clone().json();
     } catch {
-      await res.text().catch(() => {});
+      await res.text().catch(() => {
+      });
     } finally {
       if (res.body && typeof res.body.cancel === "function") {
         res.body.cancel();
       }
     }
-
-    const results =
-      j?.data?.results || j?.results || j?.data?.data?.results || [];
+    const results = j?.data?.results || j?.results || j?.data?.data?.results || [];
     if (Array.isArray(results) && results.length) {
       resultsPayload = j;
       break;
     }
-    await sleep(800 * tries); // backoff
+    await sleep(800 * tries);
   }
-
   if (!resultsPayload)
     throw new Error("UberEats: job finished with no results");
-  let parsed = resultsPayload; // keep using `parsed` below
-
-  const hasCandidates =
-    (Array.isArray(parsed?.data?.results) && parsed.data.results.length) ||
-    (Array.isArray(parsed?.results) && parsed.results.length) ||
-    (Array.isArray(parsed?.data?.data?.results) &&
-      parsed.data.data.results.length);
-
+  let parsed = resultsPayload;
+  const hasCandidates = Array.isArray(parsed?.data?.results) && parsed.data.results.length || Array.isArray(parsed?.results) && parsed.results.length || Array.isArray(parsed?.data?.data?.results) && parsed.data.data.results.length;
   if (!hasCandidates && lat != null && lng != null) {
-    const resLoc = await postJobByLocation();
+    const resLoc = await postJobByLocation2();
     const ctypeLoc = (resLoc.headers.get("content-type") || "").toLowerCase();
     if (ctypeLoc.includes("application/json")) {
       const locJson = await resLoc.json();
       if (resLoc.ok) parsed = locJson;
     }
   }
-
   return parsed;
 }
-
-// ---- UBER EATS: CREATE A LOCATION-BASED JOB (robust path-fallback) ----
-async function postJobByLocation(
-  { query, lat, lng, radius = 6000, maxRows = 25 },
-  env
-) {
+__name(fetchMenuFromUberEats, "fetchMenuFromUberEats");
+async function postJobByLocation({ query, lat, lng, radius = 6e3, maxRows = 25 }, env) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const key = env.RAPIDAPI_KEY;
   if (!key) throw new Error("Missing RAPIDAPI_KEY");
   if (!host) throw new Error("Missing UBER_RAPID_HOST");
   if (lat == null || lng == null) throw new Error("Missing lat/lng");
-
   const candidatePaths = [
     "/api/job/location",
     "/api/jobs/location",
@@ -5626,7 +2976,6 @@ async function postJobByLocation(
     "/api/job",
     "/location"
   ];
-
   const body = {
     query: query || "",
     latitude: Number(lat),
@@ -5634,7 +2983,6 @@ async function postJobByLocation(
     radius: Number(radius),
     max: Number(maxRows) || 25
   };
-
   async function attemptOnce(url) {
     const res = await fetch(url, {
       method: "POST",
@@ -5646,20 +2994,17 @@ async function postJobByLocation(
       body: JSON.stringify(body)
     });
     const text = await res.text();
-    const safeErr = () => {
+    const safeErr = /* @__PURE__ */ __name(() => {
       if (text && text.startsWith("<"))
         return `UberEats non-JSON response (${res.status}): ${text.slice(0, 120)}...`;
       return `UberEats ${res.status}: ${text}`;
-    };
+    }, "safeErr");
     if (res.status === 429) {
-      const retryAfter =
-        Number(res.headers.get("retry-after")) ||
-        Number(res.headers.get("x-ratelimit-reset")) ||
-        0;
-      const waitMs = retryAfter > 0 ? retryAfter * 1000 : 1500;
+      const retryAfter = Number(res.headers.get("retry-after")) || Number(res.headers.get("x-ratelimit-reset")) || 0;
+      const waitMs = retryAfter > 0 ? retryAfter * 1e3 : 1500;
       await sleep(waitMs);
       throw new Error(
-        `RETRYABLE_429:${Math.max(0, Math.floor(waitMs / 1000))}`
+        `RETRYABLE_429:${Math.max(0, Math.floor(waitMs / 1e3))}`
       );
     }
     if ([502, 503, 504].includes(res.status)) throw new Error(safeErr());
@@ -5673,23 +3018,21 @@ async function postJobByLocation(
     }
     return js;
   }
-
+  __name(attemptOnce, "attemptOnce");
   let lastErr;
   for (const p of candidatePaths) {
     const url = `https://${host}${p}`;
     for (let i = 0; i < 4; i++) {
       try {
         const js = await attemptOnce(url);
-        const jobId =
-          js?.job_id || js?.id || js?.jobId || js?.data?.job_id || js?.data?.id;
+        const jobId = js?.job_id || js?.id || js?.jobId || js?.data?.job_id || js?.data?.id;
         if (!jobId) return js;
         return { ok: true, job_id: jobId, raw: js, path: p };
       } catch (err) {
         lastErr = err;
         const msg = String(err?.message || err);
         if (msg === "HARD_404") break;
-        const retryable =
-          msg.includes("RETRYABLE_429") || /UberEats (502|503|504)/.test(msg);
+        const retryable = msg.includes("RETRYABLE_429") || /UberEats (502|503|504)/.test(msg);
         if (!retryable) break;
         const backoff = 400 * (i + 1) + Math.floor(Math.random() * 200);
         await sleep(backoff);
@@ -5700,18 +3043,13 @@ async function postJobByLocation(
     lastErr ? String(lastErr) : "UberEats: no working location endpoint found."
   );
 }
-
-// ---- UBER EATS: SEARCH BY GPS (fallback when job/location 404s) ----
-async function searchNearbyCandidates(
-  { query, lat, lng, radius = 6000, maxRows = 25 },
-  env
-) {
+__name(postJobByLocation, "postJobByLocation");
+async function searchNearbyCandidates({ query, lat, lng, radius = 6e3, maxRows = 25 }, env) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const key = env.RAPIDAPI_KEY;
   if (!key) throw new Error("Missing RAPIDAPI_KEY");
   if (!host) throw new Error("Missing UBER_RAPID_HOST");
   if (lat == null || lng == null) throw new Error("Missing lat/lng");
-
   const candidatePaths = [
     "/api/search",
     "/api/restaurants/search",
@@ -5719,8 +3057,7 @@ async function searchNearbyCandidates(
     "/api/search/location",
     "/search"
   ];
-
-  const params = (p) => {
+  const params = /* @__PURE__ */ __name((p) => {
     const u = new URL(`https://${host}${p}`);
     u.searchParams.set("latitude", String(Number(lat)));
     u.searchParams.set("longitude", String(Number(lng)));
@@ -5728,28 +3065,24 @@ async function searchNearbyCandidates(
     u.searchParams.set("radius", String(Number(radius)));
     u.searchParams.set("max", String(Number(maxRows) || 25));
     return u.toString();
-  };
-
+  }, "params");
   async function attemptOnce(url) {
     const res = await fetch(url, {
       method: "GET",
       headers: { "x-rapidapi-key": key, "x-rapidapi-host": host }
     });
     const text = await res.text();
-    const safeErr = () => {
+    const safeErr = /* @__PURE__ */ __name(() => {
       if (text && text.startsWith("<"))
         return `UberEats non-JSON response (${res.status}): ${text.slice(0, 120)}...`;
       return `UberEats ${res.status}: ${text}`;
-    };
+    }, "safeErr");
     if (res.status === 429) {
-      const retryAfter =
-        Number(res.headers.get("retry-after")) ||
-        Number(res.headers.get("x-ratelimit-reset")) ||
-        0;
-      const waitMs = retryAfter > 0 ? retryAfter * 1000 : 1200;
+      const retryAfter = Number(res.headers.get("retry-after")) || Number(res.headers.get("x-ratelimit-reset")) || 0;
+      const waitMs = retryAfter > 0 ? retryAfter * 1e3 : 1200;
       await sleep(waitMs);
       throw new Error(
-        `RETRYABLE_429:${Math.max(0, Math.floor(waitMs / 1000))}`
+        `RETRYABLE_429:${Math.max(0, Math.floor(waitMs / 1e3))}`
       );
     }
     if (res.status === 404) throw new Error("HARD_404");
@@ -5763,7 +3096,7 @@ async function searchNearbyCandidates(
     }
     return js;
   }
-
+  __name(attemptOnce, "attemptOnce");
   for (const p of candidatePaths) {
     const url = params(p);
     for (let i = 0; i < 4; i++) {
@@ -5776,41 +3109,23 @@ async function searchNearbyCandidates(
           data?.data?.restaurants,
           Array.isArray(data) ? data : null
         ].filter(Boolean);
-
         const flat = [];
         for (const arr of arrays) {
           for (const it of arr) {
             flat.push({
-              id:
-                it?.id ||
-                it?.uuid ||
-                it?.storeUuid ||
-                it?.storeId ||
-                it?.restaurantId ||
-                it?.slug ||
-                it?.url,
-              title:
-                it?.title ||
-                it?.name ||
-                it?.displayName ||
-                it?.storeName ||
-                it?.restaurantName,
+              id: it?.id || it?.uuid || it?.storeUuid || it?.storeId || it?.restaurantId || it?.slug || it?.url,
+              title: it?.title || it?.name || it?.displayName || it?.storeName || it?.restaurantName,
               raw: it
             });
           }
         }
-
-        const seen = new Set();
-        const clean = flat
-          .filter((x) => x && x.title)
-          .filter((x) => {
-            const k = (x.title + "|" + (x.id || "")).toLowerCase();
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          })
-          .slice(0, Number(maxRows) || 25);
-
+        const seen = /* @__PURE__ */ new Set();
+        const clean = flat.filter((x) => x && x.title).filter((x) => {
+          const k = (x.title + "|" + (x.id || "")).toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        }).slice(0, Number(maxRows) || 25);
         return {
           ok: true,
           pathTried: p,
@@ -5820,8 +3135,7 @@ async function searchNearbyCandidates(
         };
       } catch (err) {
         const msg = String(err?.message || err);
-        const retryable =
-          msg.includes("RETRYABLE_429") || /UberEats (502|503|504)/.test(msg);
+        const retryable = msg.includes("RETRYABLE_429") || /UberEats (502|503|504)/.test(msg);
         if (!retryable) break;
         await sleep(400 * (i + 1) + Math.floor(Math.random() * 200));
       }
@@ -5829,21 +3143,14 @@ async function searchNearbyCandidates(
   }
   return { ok: false, error: "No working GPS search endpoint found." };
 }
-
-// ---- UBER EATS: CREATE A JOB BY ADDRESS (exact vendor format) ----
-async function postJobByAddress(
-  { query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null },
-  env
-) {
+__name(searchNearbyCandidates, "searchNearbyCandidates");
+async function postJobByAddress({ query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null }, env) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const key = env.RAPIDAPI_KEY || env.RAPID_API_KEY;
   if (!key) throw new Error("Missing RAPIDAPI_KEY");
   if (!host) throw new Error("Missing UBER_RAPID_HOST");
   if (!address) throw new Error("Missing address");
-
   const url = `https://${host}/api/job`;
-
-  // ✅ Exact body per vendor docs
   const body = {
     scraper: {
       maxRows: Number(maxRows) || 15,
@@ -5852,9 +3159,8 @@ async function postJobByAddress(
       locale: String(locale || "en-US"),
       page: Number(page) || 1
     },
-    ...(webhook ? { webhook } : {})
+    ...webhook ? { webhook } : {}
   };
-
   async function attemptOnce() {
     const res = await fetch(url, {
       method: "POST",
@@ -5866,51 +3172,42 @@ async function postJobByAddress(
       },
       body: JSON.stringify(body)
     });
-
     const text = await res.text();
-    const safeErr = () => {
+    const safeErr = /* @__PURE__ */ __name(() => {
       if (text && text.startsWith("<"))
         return `UberEats non-JSON response (${res.status}): ${text.slice(0, 120)}...`;
       return `UberEats ${res.status}: ${text}`;
-    };
-
+    }, "safeErr");
     if (res.status === 429) {
-      const retryAfter =
-        Number(res.headers.get("retry-after")) ||
-        Number(res.headers.get("x-ratelimit-reset")) ||
-        0;
-      const waitMs = retryAfter > 0 ? retryAfter * 1000 : 1500;
+      const retryAfter = Number(res.headers.get("retry-after")) || Number(res.headers.get("x-ratelimit-reset")) || 0;
+      const waitMs = retryAfter > 0 ? retryAfter * 1e3 : 1500;
       await new Promise((r) => setTimeout(r, waitMs));
       throw new Error(
-        `RETRYABLE_429:${Math.max(0, Math.floor(waitMs / 1000))}`
+        `RETRYABLE_429:${Math.max(0, Math.floor(waitMs / 1e3))}`
       );
     }
     if ([500, 502, 503, 504].includes(res.status)) throw new Error(safeErr());
     if (!res.ok) throw new Error(safeErr());
-
     let js;
     try {
       js = JSON.parse(text);
     } catch {
       throw new Error("UberEats: response was not JSON.");
     }
-    return js; // may contain returnvalue.data OR id/job_id
+    return js;
   }
-
+  __name(attemptOnce, "attemptOnce");
   for (let i = 0; i < 6; i++) {
     try {
       const js = await attemptOnce();
-
       const immediateData = js?.returnvalue?.data;
       if (immediateData) return { ok: true, immediate: true, raw: js };
-
       const jobId = js?.id || js?.job_id || js?.data?.id;
       if (!jobId) return { ok: true, immediate: true, raw: js };
       return { ok: true, job_id: jobId, raw: js };
     } catch (e) {
       const msg = String(e?.message || e);
-      const retryable =
-        msg.includes("RETRYABLE") || /UberEats (500|502|503|504)/.test(msg);
+      const retryable = msg.includes("RETRYABLE") || /UberEats (500|502|503|504)/.test(msg);
       if (!retryable) throw e;
       const backoff = 500 * Math.pow(1.8, i) + Math.floor(Math.random() * 300);
       await new Promise((r) => setTimeout(r, backoff));
@@ -5918,9 +3215,8 @@ async function postJobByAddress(
   }
   throw new Error("UberEats: address job failed after retries.");
 }
-
-// ---- U.S. helpers (address hinting + result filtering) ----
-const US_STATES = new Set([
+__name(postJobByAddress, "postJobByAddress");
+var US_STATES = /* @__PURE__ */ new Set([
   "AL",
   "AK",
   "AZ",
@@ -5981,29 +3277,13 @@ const US_STATES = new Set([
 function looksLikeUSAddress(addr) {
   const raw = String(addr || "");
   const s = raw.toLowerCase();
-  // crude: contains "usa" / "united states" / ", us" OR uppercase state code
   return /usa|united states|, us\b/.test(s) || /\b[A-Z]{2}\b/.test(raw);
 }
+__name(looksLikeUSAddress, "looksLikeUSAddress");
 function isUSRow(row) {
-  const country = (
-    row?.location?.country ||
-    row?.location?.geo?.country ||
-    row?.country ||
-    ""
-  )
-    .toString()
-    .toLowerCase();
-  const region = (
-    row?.location?.region ||
-    row?.location?.geo?.region ||
-    row?.region ||
-    ""
-  )
-    .toString()
-    .toUpperCase();
-  const currency = (row?.currencyCode || row?.currency || "")
-    .toString()
-    .toUpperCase();
+  const country = (row?.location?.country || row?.location?.geo?.country || row?.country || "").toString().toLowerCase();
+  const region = (row?.location?.region || row?.location?.geo?.region || row?.region || "").toString().toUpperCase();
+  const currency = (row?.currencyCode || row?.currency || "").toString().toUpperCase();
   const url = String(row?.url || row?.link || "").toLowerCase();
   if (country === "united states" || country === "us" || country === "usa")
     return true;
@@ -6012,24 +3292,19 @@ function isUSRow(row) {
   if (/\/us\//.test(url)) return true;
   return false;
 }
+__name(isUSRow, "isUSRow");
 function filterRowsUS(rows, force) {
   if (!Array.isArray(rows)) return [];
   const filtered = rows.filter(isUSRow);
-  return force && filtered.length > 0
-    ? filtered
-    : filtered.length
-      ? filtered
-      : rows;
+  return force && filtered.length > 0 ? filtered : filtered.length ? filtered : rows;
 }
-
-// ---- UBER EATS: POLL A JOB UNTIL COMPLETED ----
+__name(filterRowsUS, "filterRowsUS");
 async function pollUberJobUntilDone({ jobId, env, maxTries = 12 }) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const key = env.RAPIDAPI_KEY;
   if (!key) throw new Error("Missing RAPIDAPI_KEY");
   if (!host) throw new Error("Missing UBER_RAPID_HOST");
   if (!jobId) throw new Error("Missing jobId");
-
   for (let i = 0; i < maxTries; i++) {
     const res = await fetch(
       `https://${host}/api/job/${encodeURIComponent(jobId)}`,
@@ -6042,7 +3317,6 @@ async function pollUberJobUntilDone({ jobId, env, maxTries = 12 }) {
         }
       }
     );
-
     const text = await res.text();
     if (!res.ok) {
       if ([429, 500, 502, 503, 504].includes(res.status)) {
@@ -6051,7 +3325,6 @@ async function pollUberJobUntilDone({ jobId, env, maxTries = 12 }) {
       }
       throw new Error(`UberEats ${res.status}: ${text.slice(0, 200)}`);
     }
-
     let js;
     try {
       js = JSON.parse(text);
@@ -6063,64 +3336,14 @@ async function pollUberJobUntilDone({ jobId, env, maxTries = 12 }) {
   }
   throw new Error("UberEats: poll timed out before completion.");
 }
-
-// ---- POST /api/job exactly like the working debug route ----
-async function runAddressJobRaw(
-  {
-    query = "seafood",
-    address = "South Miami, FL, USA",
-    maxRows = 3,
-    locale = "en-US",
-    page = 1
-  },
-  env
-) {
-  const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
-  const key = env.RAPIDAPI_KEY || "";
-  const body = {
-    scraper: {
-      maxRows: Number(maxRows) || 3,
-      query,
-      address,
-      locale,
-      page: Number(page) || 1
-    }
-  };
-
-  const res = await fetch(`https://${host}/api/job`, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      "x-rapidapi-key": key,
-      "x-rapidapi-host": host
-    },
-    body: JSON.stringify(body)
-  });
-
-  const text = await res.text();
-  let js;
-  try {
-    js = JSON.parse(text);
-  } catch {
-    js = null;
-  }
-  return { status: res.status, text, json: js };
-}
-
-// ---- Choose the single best restaurant match by title similarity ----
+__name(pollUberJobUntilDone, "pollUberJobUntilDone");
 function pickBestRestaurant({ rows, query }) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
   const q = (query || "").trim().toLowerCase();
-
   function norm(s) {
-    return String(s || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .replace(/[^\p{L}\p{N}\s&'-]/gu, "")
-      .trim();
+    return String(s || "").toLowerCase().replace(/\s+/g, " ").replace(/[^\p{L}\p{N}\s&'-]/gu, "").trim();
   }
-
+  __name(norm, "norm");
   function scoreRow(r) {
     const title = norm(r?.title || r?.name || r?.displayName || r?.storeName);
     if (!q || !title) return 0;
@@ -6134,7 +3357,7 @@ function pickBestRestaurant({ rows, query }) {
     const ratio = overlap / Math.max(1, qtoks.size);
     return Math.round(60 * ratio);
   }
-
+  __name(scoreRow, "scoreRow");
   let best = null;
   for (const r of rows) {
     const s = scoreRow(r);
@@ -6142,19 +3365,13 @@ function pickBestRestaurant({ rows, query }) {
   }
   return best?.row || null;
 }
-
-// [38.6] — explain how we score/choose the best restaurant
+__name(pickBestRestaurant, "pickBestRestaurant");
 function explainRestaurantChoices({ rows, query, limit = 10 }) {
   const q = (query || "").trim().toLowerCase();
-
   function norm(s) {
-    return String(s || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .replace(/[^\p{L}\p{N}\s&'-]/gu, "")
-      .trim();
+    return String(s || "").toLowerCase().replace(/\s+/g, " ").replace(/[^\p{L}\p{N}\s&'-]/gu, "").trim();
   }
-
+  __name(norm, "norm");
   function scoreRow(r) {
     const title = norm(
       r?.title || r?.name || r?.displayName || r?.storeName || ""
@@ -6176,7 +3393,7 @@ function explainRestaurantChoices({ rows, query, limit = 10 }) {
       denom: qtoks.size
     };
   }
-
+  __name(scoreRow, "scoreRow");
   const explained = (Array.isArray(rows) ? rows : []).map((r) => {
     const s = scoreRow(r);
     return {
@@ -6186,20 +3403,17 @@ function explainRestaurantChoices({ rows, query, limit = 10 }) {
       url: r?.url || null,
       score: s.score,
       match_kind: s.kind,
-      ...(s.overlap != null ? { overlap: s.overlap, tokens: s.denom } : {})
+      ...s.overlap != null ? { overlap: s.overlap, tokens: s.denom } : {}
     };
   });
-
   explained.sort((a, b) => b.score - a.score);
   const top = explained.slice(0, Math.max(1, limit));
   const winner = top[0] || null;
   return { winner, top };
 }
-
-// ========== Lexicon & Shards (KV-backed with live fallback) ==========
-const INDEX_KV_KEY = "shards/INDEX.json";
-
-const STATIC_INGREDIENT_SHARDS = [
+__name(explainRestaurantChoices, "explainRestaurantChoices");
+var INDEX_KV_KEY = "shards/INDEX.json";
+var STATIC_INGREDIENT_SHARDS = [
   "en_global_ingredients",
   "en_global_oils_fats",
   "en_global_noodles_pastas",
@@ -6212,13 +3426,11 @@ const STATIC_INGREDIENT_SHARDS = [
   "en_global_beverages",
   "en_global_cheeses_expanded"
 ];
-
 async function refreshShardIndex(env) {
   const base = normalizeBase(env.LEXICON_API_URL);
   const key = env.LEXICON_API_KEY;
   if (!base || !key)
     throw new Error("Missing LEXICON_API_URL or LEXICON_API_KEY");
-
   const candidates = [`${base}/v1/index`, `${base}/v1/shards`];
   let text = null;
   const statusTried = [];
@@ -6239,27 +3451,25 @@ async function refreshShardIndex(env) {
       error: "No index endpoint succeeded",
       tried: statusTried
     };
-
   const js = parseJsonSafe(text, null);
   if (!js)
     return { ok: false, error: "Index JSON invalid", tried: statusTried };
-
   if (env.LEXICON_CACHE) {
     await env.LEXICON_CACHE.put(INDEX_KV_KEY, text, { expirationTtl: 86400 });
   }
   const size = Array.isArray(js) ? js.length : Object.keys(js).length;
   return { ok: true, tried: statusTried, index_len: size };
 }
-
+__name(refreshShardIndex, "refreshShardIndex");
 async function readShardIndexFromKV(env) {
   if (!env.LEXICON_CACHE) return null;
   const raw = await env.LEXICON_CACHE.get(INDEX_KV_KEY);
   if (!raw) return null;
   return parseJsonSafe(raw, null);
 }
-
+__name(readShardIndexFromKV, "readShardIndexFromKV");
 function pickIngredientShardNamesFromIndex(indexJson) {
-  const names = new Set();
+  const names = /* @__PURE__ */ new Set();
   if (Array.isArray(indexJson)) {
     for (const n of indexJson) {
       const s = String(n || "").trim();
@@ -6281,27 +3491,24 @@ function pickIngredientShardNamesFromIndex(indexJson) {
   if (names.size === 0) for (const s of STATIC_INGREDIENT_SHARDS) names.add(s);
   return Array.from(names);
 }
-
+__name(pickIngredientShardNamesFromIndex, "pickIngredientShardNamesFromIndex");
 async function loadIngredientShards(env) {
   const used_shards = [];
   const used_shards_meta = {};
   const entriesAll = [];
-
   const indexJson = await readShardIndexFromKV(env);
   const names = pickIngredientShardNamesFromIndex(indexJson) || [];
   const list = names.length ? names : STATIC_INGREDIENT_SHARDS;
-
   for (const name of list) {
     let shard = null;
     const key = `shards/${name}.json`;
-
     if (env.LEXICON_CACHE) {
       try {
         const cached = await env.LEXICON_CACHE.get(key);
         shard = cached ? parseJsonSafe(cached, null) : null;
-      } catch {}
+      } catch {
+      }
     }
-
     if (!shard) {
       const base = normalizeBase(env.LEXICON_API_URL);
       const apiKey = env.LEXICON_API_KEY;
@@ -6317,7 +3524,8 @@ async function loadIngredientShards(env) {
                 await env.LEXICON_CACHE.put(key, JSON.stringify(shard), {
                   expirationTtl: 86400
                 });
-              } catch {}
+              } catch {
+              }
             }
           }
         } catch (err) {
@@ -6329,7 +3537,6 @@ async function loadIngredientShards(env) {
         }
       }
     }
-
     if (shard && Array.isArray(shard.entries)) {
       used_shards.push(name);
       used_shards_meta[name] = {
@@ -6339,22 +3546,11 @@ async function loadIngredientShards(env) {
       for (const e of shard.entries) entriesAll.push(e);
     }
   }
-
   return { used_shards, used_shards_meta, entriesAll };
 }
-
-// ---- MINI FALLBACK TERMS (disabled; lexicon-only) ----
-const FALLBACK_INGREDIENTS = [];
-
-function fallbackEntriesFromText(_corpus) {
-  // Super-brain mode: NO manual fallback list.
-  // All hits must come from Lexicon shards (entriesAll) or lexicon API.
-  return [];
-}
-
-// --- Tidy helpers ---
+__name(loadIngredientShards, "loadIngredientShards");
 function tidyIngredientHits(hits, limit = 25) {
-  const byCanon = new Map();
+  const byCanon = /* @__PURE__ */ new Map();
   for (const h of hits) {
     const key = lc(h.canonical || h.term || "");
     if (!key) continue;
@@ -6362,11 +3558,9 @@ function tidyIngredientHits(hits, limit = 25) {
     if (!prev || scoreHit(h) > scoreHit(prev)) byCanon.set(key, h);
   }
   const out = Array.from(byCanon.values()).sort((a, b) => {
-    const sa = scoreHit(a),
-      sb = scoreHit(b);
+    const sa = scoreHit(a), sb = scoreHit(b);
     if (sb !== sa) return sb - sa;
-    const la = (a.term || "").length,
-      lb = (b.term || "").length;
+    const la = (a.term || "").length, lb = (b.term || "").length;
     if (lb !== la) return lb - la;
     return (a.canonical || a.term || "").localeCompare(
       b.canonical || b.term || ""
@@ -6374,7 +3568,7 @@ function tidyIngredientHits(hits, limit = 25) {
   });
   return out.slice(0, limit);
 }
-
+__name(tidyIngredientHits, "tidyIngredientHits");
 function scoreHit(h) {
   const classes = Array.isArray(h.classes) ? h.classes.map(lc) : [];
   let s = 0;
@@ -6388,61 +3582,40 @@ function scoreHit(h) {
     s += Math.max(-1, Math.min(1, h.weight - 0.5));
   return s;
 }
-
-// ========== Queue Consumer + HTTP Router ==========
-const _worker_impl = {
+__name(scoreHit, "scoreHit");
+var _worker_impl = {
   // ---- Queue consumer: pulls messages from tb-dish-analysis-queue ----
   async queue(batch, env, ctx) {
     console.log("[QUEUE] handler enter", {
-      batchSize: (batch && batch.messages && batch.messages.length) || 0
+      batchSize: batch && batch.messages && batch.messages.length || 0
     });
     for (const msg of batch.messages) {
       let id = null;
       try {
-        const job =
-          typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
-        const body = (job && job.body) || job || {};
+        const job = typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
+        const body = job && job.body || job || {};
         const {
           kind,
           user_id,
           dish,
           dish_name,
           ingredients,
-          organ_levels,
+          organ_levels: organ_levels2,
           organ_top_drivers,
           tummy_barometer,
           calories_kcal = null,
           created_at
         } = body;
-        // --- Minimal meal_log handler: write to D1 and ACK ---
         if (kind === "meal_log") {
           try {
-            const dishName = dish || dish_name || job?.dish_name || "unknown";
+            const dishName2 = dish || dish_name || job?.dish_name || "unknown";
             const userId = user_id || job?.user_id || "UNKNOWN_USER";
-            const createdAt =
-              created_at || job?.created_at || new Date().toISOString();
+            const createdAt = created_at || job?.created_at || (/* @__PURE__ */ new Date()).toISOString();
             const calories = job?.calories_kcal ?? calories_kcal ?? null;
-
-            const organLevelsObj =
-              organ_levels ||
-              body?.organ_levels ||
-              (body?.organs_summary && body.organs_summary.levels) ||
-              (job?.organs_summary && job.organs_summary.levels) ||
-              {};
-            const topDriversObj =
-              organ_top_drivers ||
-              body?.organ_top_drivers ||
-              (body?.organs_summary && body.organs_summary.top_drivers) ||
-              (job?.organs_summary && job.organs_summary.top_drivers) ||
-              {};
-            const tummyBarometer =
-              tummy_barometer ||
-              body?.tummy_barometer ||
-              job?.tummy_barometer ||
-              barometerFromOrgans(organLevelsObj);
-
-            const ingredientList =
-              ingredients || body?.ingredients || job?.ingredients || [];
+            const organLevelsObj = organ_levels2 || body?.organ_levels || body?.organs_summary && body.organs_summary.levels || job?.organs_summary && job.organs_summary.levels || {};
+            const topDriversObj = organ_top_drivers || body?.organ_top_drivers || body?.organs_summary && body.organs_summary.top_drivers || job?.organs_summary && job.organs_summary.top_drivers || {};
+            const tummyBarometer = tummy_barometer || body?.tummy_barometer || job?.tummy_barometer || barometerFromOrgans(organLevelsObj);
+            const ingredientList = ingredients || body?.ingredients || job?.ingredients || [];
             const ingredientsJson = JSON.stringify(ingredientList);
             const organLevelsJson = JSON.stringify(organLevelsObj);
             const topDriversJson = JSON.stringify(topDriversObj);
@@ -6451,26 +3624,21 @@ const _worker_impl = {
               has_top: !!Object.keys(topDriversObj).length
             });
             console.log("[CONSUMER] calories_kcal =", calories);
-
             if (!env.D1_DB) throw new Error("D1_DB not bound");
-
             await env.D1_DB.prepare(
               `INSERT INTO user_meal_logs
        (user_id, dish, ingredients_json, organ_levels_json, top_drivers_json, calories_kcal, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
-            )
-              .bind(
-                userId,
-                dishName,
-                ingredientsJson,
-                organLevelsJson,
-                topDriversJson,
-                calories,
-                createdAt
-              )
-              .run();
+            ).bind(
+              userId,
+              dishName2,
+              ingredientsJson,
+              organLevelsJson,
+              topDriversJson,
+              calories,
+              createdAt
+            ).run();
             await recordMetric(env, "d1:user_meal_logs:insert_ok");
-
             console.log("[QUEUE] meal_log wrote to D1:", {
               dish,
               userId,
@@ -6485,7 +3653,6 @@ const _worker_impl = {
             continue;
           }
         }
-        // 47.1: Skip if result already exists in R2
         const dummyUrl = new URL("https://dummy.local/cache-check");
         if (job?.force_reanalyze)
           dummyUrl.searchParams.set("force_reanalyze", "1");
@@ -6502,16 +3669,11 @@ const _worker_impl = {
           msg.ack();
           continue;
         }
-
         id = job?.id || crypto.randomUUID();
         const key = `jobs/${id}.json`;
-
         console.log("[QUEUE] received:", { id, dish: job?.dish_name });
-
-        // Load shards (venue + ingredients)
         const venueShard = await getShardFromKV(env, "venue_mitigations");
-        const { used_shards, used_shards_meta, entriesAll } =
-          await loadIngredientShards(env);
+        const { used_shards, used_shards_meta, entriesAll } = await loadIngredientShards(env);
         if (venueShard.ok) {
           used_shards.push("venue_mitigations");
           used_shards_meta["venue_mitigations"] = {
@@ -6519,26 +3681,15 @@ const _worker_impl = {
             entries_len: venueShard.entries.length
           };
         }
-
-        // Build text corpus
         const dishName = lc(job?.dish_name);
         const dishDesc = lc(job?.dish_desc || job?.dish_description || "");
         const cuisine = lc(job?.cuisine || "");
-        const ingNames = Array.isArray(job?.ingredients)
-          ? job.ingredients
-              .map((i) => i?.name || "")
-              .filter(Boolean)
-              .join(" ")
-          : "";
-        const corpus = [dishName, dishDesc, cuisine, lc(ingNames)]
-          .filter(Boolean)
-          .join(" ");
-
-        // Ingredient matching from KV shards
+        const ingNames = Array.isArray(job?.ingredients) ? job.ingredients.map((i) => i?.name || "").filter(Boolean).join(" ") : "";
+        const corpus = [dishName, dishDesc, cuisine, lc(ingNames)].filter(Boolean).join(" ");
         const ingredient_hits_raw = [];
-        const seenCanon = new Set();
+        const seenCanon = /* @__PURE__ */ new Set();
         if (entriesAll.length > 0) {
-          const stoplist = new Set([
+          const stoplist = /* @__PURE__ */ new Set([
             "and",
             "with",
             "of",
@@ -6551,13 +3702,9 @@ const _worker_impl = {
             const canonical = lc(
               entry?.canonical ?? entry?.name ?? entry?.term ?? ""
             );
-            const classes = Array.isArray(entry?.classes)
-              ? entry.classes.map(lc)
-              : [];
+            const classes = Array.isArray(entry?.classes) ? entry.classes.map(lc) : [];
             const tags = Array.isArray(entry?.tags) ? entry.tags.map(lc) : [];
-            const weight =
-              typeof entry?.weight === "number" ? entry.weight : undefined;
-
+            const weight = typeof entry?.weight === "number" ? entry.weight : void 0;
             const terms = entryTerms(entry).filter((t) => !stoplist.has(t));
             let matchedTerm = null;
             for (const t of terms) {
@@ -6568,38 +3715,26 @@ const _worker_impl = {
               }
             }
             if (!matchedTerm) continue;
-
             const canonKey = canonical || matchedTerm;
             if (seenCanon.has(canonKey)) continue;
             seenCanon.add(canonKey);
-
             ingredient_hits_raw.push({
               term: matchedTerm,
               canonical: canonical || matchedTerm,
               classes,
               tags,
               weight,
-              allergens: Array.isArray(entry?.allergens)
-                ? entry.allergens
-                : undefined,
+              allergens: Array.isArray(entry?.allergens) ? entry.allergens : void 0,
               fodmap: entry?.fodmap ?? entry?.fodmap_level,
               source: "kv_multi_shards"
             });
           }
         }
-
-        // Fallback preview/application when shards are skinny
         const FALLBACK_TRIGGER = getEnvInt(env, "FALLBACK_TRIGGER_UNDER", 50);
-        const fallback_debug = []; // no manual fallback in super-brain mode
+        const fallback_debug = [];
         let ingredient_hits = ingredient_hits_raw.slice();
-        // NOTE: entriesAll length no longer triggers any hard-coded additions.
-        // All ingredient_hits must come from Lexicon shards/API only.
-
-        // Tidy (dedupe + prioritize + top N)
         const HITS_LIMIT = getEnvInt(env, "HITS_LIMIT", 25);
         ingredient_hits = tidyIngredientHits(ingredient_hits, HITS_LIMIT);
-
-        // ---- Primary brain: Lexicon API (always runs first) ----
         let lexiconResult = null;
         try {
           lexiconResult = await callLexicon(
@@ -6614,8 +3749,6 @@ const _worker_impl = {
           };
           console.log("[LEXICON] error:", e?.message || e);
         }
-
-        // Prefer Lexicon hits if present; else local ingredient_hits.
         let resolvedHits = [];
         if (lexiconResult?.ok && Array.isArray(lexiconResult?.data?.hits)) {
           resolvedHits = lexiconResult.data.hits.map((h) => ({
@@ -6623,7 +3756,7 @@ const _worker_impl = {
             canonical: h.canonical,
             classes: Array.isArray(h.classes) ? h.classes : [],
             tags: Array.isArray(h.tags) ? h.tags : [],
-            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
+            allergens: Array.isArray(h.allergens) ? h.allergens : void 0,
             fodmap: h.fodmap ?? h.fodmap_level
           }));
         } else {
@@ -6632,13 +3765,11 @@ const _worker_impl = {
             canonical: h.canonical,
             classes: Array.isArray(h.classes) ? h.classes : [],
             tags: Array.isArray(h.tags) ? h.tags : [],
-            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
+            allergens: Array.isArray(h.allergens) ? h.allergens : void 0,
             fodmap: h.fodmap ?? h.fodmap_level
           }));
         }
-
         const scoring = scoreDishFromHits(resolvedHits);
-
         const legacyFlags = deriveFlags(ingredient_hits);
         const tb_score = scoring.tummy_barometer;
         const flags = {
@@ -6647,8 +3778,6 @@ const _worker_impl = {
           fodmap: scoring.flags.fodmap
         };
         const sentences = buildHumanSentences(flags, tb_score);
-
-        // ---- Secondary (fallback) call: RapidAPI mirror (simple counter) ----
         let rapidResult = null;
         try {
           rapidResult = await callRapid(
@@ -6663,8 +3792,6 @@ const _worker_impl = {
           };
           console.log("[RAPID] error:", e?.message || e);
         }
-
-        // Stats (best-effort)
         try {
           await bumpDaily(env, { jobs: 1 });
           if (lexiconResult?.ok) {
@@ -6691,8 +3818,6 @@ const _worker_impl = {
             e?.message || String(e)
           );
         }
-
-        // Persist record to R2
         if (env.R2_BUCKET) {
           const lean = {
             id,
@@ -6720,14 +3845,11 @@ const _worker_impl = {
             sentences,
             rapidResult
           };
-
           const resultsKey = `results/${id}.json`;
           await env.R2_BUCKET.put(resultsKey, JSON.stringify(lean, null, 2), {
             httpMetadata: { contentType: "application/json" }
           });
         }
-
-        // KV bookmarks
         if (env.LEXICON_CACHE) {
           await env.LEXICON_CACHE.put("last_job_id", id, {
             expirationTtl: 3600
@@ -6736,15 +3858,11 @@ const _worker_impl = {
             expirationTtl: 3600
           });
         }
-
-        // D1 log
         if (env.D1_DB) {
           try {
             await env.D1_DB.prepare(
               "INSERT INTO logs (kind, ref, created_at) VALUES (?, ?, ?)"
-            )
-              .bind("dish_job", key, Date.now())
-              .run();
+            ).bind("dish_job", key, Date.now()).run();
             await recordMetric(env, "d1:logs:insert_ok");
           } catch (e2) {
             await recordMetric(env, "d1:logs:insert_fail");
@@ -6754,7 +3872,6 @@ const _worker_impl = {
             );
           }
         }
-
         console.log("[QUEUE] done:", { id, dish: job?.dish_name });
         msg.ack();
       } catch (e3) {
@@ -6763,23 +3880,17 @@ const _worker_impl = {
       }
     }
   },
-
   // ---- HTTP routes (health + debug + enqueue + results + uber-test) ----
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    // async fire-and-forget metrics logging
     try {
-      const bodyPreview =
-        request.method === "POST"
-          ? (await request.clone().text()).slice(0, 300)
-          : "";
+      const bodyPreview = request.method === "POST" ? (await request.clone().text()).slice(0, 300) : "";
       const logPayload = JSON.stringify({
         ts: Date.now(),
         method: request.method,
         path: url.pathname,
         user_id: url.searchParams.get("user_id") || null,
-        correlation_id:
-          request.headers.get("x-correlation-id") || crypto.randomUUID(),
+        correlation_id: request.headers.get("x-correlation-id") || crypto.randomUUID(),
         preview: bodyPreview
       });
       ctx.waitUntil(
@@ -6797,18 +3908,15 @@ const _worker_impl = {
     }
     const pathname = normPathname(url);
     const searchParams = url.searchParams;
-
     if (!(pathname === "/healthz" && request.method === "GET")) {
       const limited = await rateLimit(env, request, { limit: 60 });
       if (limited) return limited;
     }
-
     if (pathname === "/healthz" && request.method === "GET") {
       return handleHealthz(env);
     }
-
     if (pathname === "/pipeline/analyze-dish" && request.method === "POST") {
-      const body = (await readJsonSafe(request)) || {};
+      const body = await readJsonSafe(request) || {};
       let {
         dishName,
         restaurantName,
@@ -6817,82 +3925,51 @@ const _worker_impl = {
         menuSection = null
       } = body || {};
       let forceLLM = false;
-
-      dishName =
-        dishName ||
-        body?.dish ||
-        body?.title ||
-        body?.name ||
-        "";
-
+      dishName = dishName || body?.dish || body?.title || body?.name || "";
       if (!dishName || typeof dishName !== "string" || !dishName.trim()) {
         return okJson({ ok: false, error: "dishName is required" }, 400);
       }
-
-      const correlationId =
-        request.headers.get("x-correlation-id") ||
-        (crypto && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `tb-${Date.now()}`);
-
+      const correlationId = request.headers.get("x-correlation-id") || (crypto && crypto.randomUUID ? crypto.randomUUID() : `tb-${Date.now()}`);
       console.log(
         "bindings",
         JSON.stringify({
           recipe_core: !!env.recipe_core,
-          recipe_core_fetch:
-            env.recipe_core && typeof env.recipe_core.fetch === "function",
+          recipe_core_fetch: env.recipe_core && typeof env.recipe_core.fetch === "function",
           allergen_organs: !!env.allergen_organs,
-          allergen_organs_fetch:
-            env.allergen_organs &&
-            typeof env.allergen_organs.fetch === "function",
+          allergen_organs_fetch: env.allergen_organs && typeof env.allergen_organs.fetch === "function",
           ai: !!env.AI
         })
       );
-
-      // --- CANONICAL NAME FALLBACK (LLM NORMALIZATION) ---
       let originalName = dishName;
       let canonicalDishName = dishName;
-
-      // If dish name is too branded, vague, or short → canonicalize
       if (!dishName || dishName.trim().length < 3 || /big mac|baconator|cheesy|loaded|signature|special/i.test(dishName)) {
         try {
-          const llmRes = await env.AI.run('@cf/meta/llama-3.2-11b-instruct', {
+          const llmRes = await env.AI.run("@cf/meta/llama-3.2-11b-instruct", {
             prompt: `You are helping normalize restaurant menu items into generic dish names 
 for recipe databases like Edamam or Spoonacular.
 
 Dish name: "${dishName}"
-Menu section: "${menuSection || ''}"
-Menu description: "${menuDescription || ''}"
+Menu section: "${menuSection || ""}"
+Menu description: "${menuDescription || ""}"
 
 Rewrite this into a generic, descriptive food name that captures the likely key ingredients 
 (e.g. "double bacon cheeseburger", "mozzarella pizza with buffalo sauce").
 
 Return ONLY the improved dish name, no explanations.`
           });
-
-          if (llmRes && typeof llmRes === 'string' && llmRes.trim().length > 0) {
+          if (llmRes && typeof llmRes === "string" && llmRes.trim().length > 0) {
             canonicalDishName = llmRes.trim();
-            console.log('canonicalDishName:', canonicalDishName);
+            console.log("canonicalDishName:", canonicalDishName);
           }
         } catch (err) {
-          console.log('Canonicalization failed, using original name.');
+          console.log("Canonicalization failed, using original name.");
           canonicalDishName = dishName;
         }
-
         forceLLM = true;
       }
-
-      // replace dishName sent to recipe core
       dishName = canonicalDishName;
-
-      // STEP 1: recipe-core /recipe/resolve
-      const recipeResolveUrl = env.recipe_core
-        ? "https://recipe-core/recipe/resolve"
-        : "https://tb-recipe-core.tummybuddy.workers.dev/recipe/resolve";
-      const recipeFetcher =
-        (env.recipe_core && typeof env.recipe_core.fetch === "function")
-          ? env.recipe_core.fetch.bind(env.recipe_core)
-          : fetch;
+      const recipeResolveUrl = env.recipe_core ? "https://recipe-core/recipe/resolve" : "https://tb-recipe-core.tummybuddy.workers.dev/recipe/resolve";
+      const recipeFetcher = env.recipe_core && typeof env.recipe_core.fetch === "function" ? env.recipe_core.fetch.bind(env.recipe_core) : fetch;
       const recipeResp = await recipeFetcher(recipeResolveUrl, {
         method: "POST",
         headers: {
@@ -6907,7 +3984,6 @@ Return ONLY the improved dish name, no explanations.`
           forceLLM
         })
       });
-
       const recipeText = await recipeResp.text();
       let recipe;
       try {
@@ -6919,21 +3995,11 @@ Return ONLY the improved dish name, no explanations.`
           raw: recipeText
         };
       }
-
-      // STEP 2: recipe-core /ingredients/normalize
-      const ingredientLines = Array.isArray(recipe?.recipe?.ingredients)
-        ? recipe.recipe.ingredients
-            .map((row) =>
-              row.text ||
-              `${row.qty ?? row.quantity ?? ""} ${row.unit || ""} ${row.name || ""}`.trim()
-            )
-            .filter(Boolean)
-        : [];
-
+      const ingredientLines = Array.isArray(recipe?.recipe?.ingredients) ? recipe.recipe.ingredients.map(
+        (row) => row.text || `${row.qty ?? row.quantity ?? ""} ${row.unit || ""} ${row.name || ""}`.trim()
+      ).filter(Boolean) : [];
       const normResp = await recipeFetcher(
-        env.recipe_core
-          ? "https://recipe-core/ingredients/normalize"
-          : "https://tb-recipe-core.tummybuddy.workers.dev/ingredients/normalize",
+        env.recipe_core ? "https://recipe-core/ingredients/normalize" : "https://tb-recipe-core.tummybuddy.workers.dev/ingredients/normalize",
         {
           method: "POST",
           headers: {
@@ -6943,7 +4009,6 @@ Return ONLY the improved dish name, no explanations.`
           body: JSON.stringify({ lines: ingredientLines })
         }
       );
-
       const normText = await normResp.text();
       let normalized;
       try {
@@ -6955,16 +4020,8 @@ Return ONLY the improved dish name, no explanations.`
           raw: normText
         };
       }
-
-      // STEP 3: build ingredients array for organs_core
       let ingredients = [];
-
-      if (
-        normalized &&
-        Array.isArray(normalized.items) &&
-        normalized.items.length > 0
-      ) {
-        // Normal path: use fully-normalized items (Zestful/USDA/molecular, when present)
+      if (normalized && Array.isArray(normalized.items) && normalized.items.length > 0) {
         ingredients = normalized.items.map((row) => ({
           name: row.name || row.original || "",
           qty: row.qty ?? null,
@@ -6972,8 +4029,6 @@ Return ONLY the improved dish name, no explanations.`
           comment: row.comment || null
         }));
       } else if (Array.isArray(recipe?.recipe?.ingredients)) {
-        // Fallback path (current reality): use heuristic/Edamam/Spoonacular recipe ingredients
-        // so organs_core + Lexicon have rich text to work with.
         ingredients = recipe.recipe.ingredients.map((row) => ({
           // Prefer the full text as 'name' so normalizeIngredientsArray picks up
           // things like "wheat burger bun (contains gluten)", "American cheese slices (dairy)".
@@ -6985,33 +4040,22 @@ Return ONLY the improved dish name, no explanations.`
       } else {
         ingredients = [];
       }
-
-      // Build ingredient list for per-ingredient Lex visibility
       const ingredientsForLex = (() => {
         if (normalized && Array.isArray(normalized.items) && normalized.items.length) {
-          return normalized.items
-            .map((it) => it.name || it.text || it.original || "")
-            .filter((s) => !!s && s.trim().length > 1);
+          return normalized.items.map((it) => it.name || it.text || it.original || "").filter((s) => !!s && s.trim().length > 1);
         }
         if (recipe && recipe.recipe && Array.isArray(recipe.recipe.ingredients)) {
-          return recipe.recipe.ingredients
-            .map((i) => i.name || i.text || "")
-            .filter((s) => !!s && s.trim().length > 1);
+          return recipe.recipe.ingredients.map((i) => i.name || i.text || "").filter((s) => !!s && s.trim().length > 1);
         }
-        const parts = [body.dishName, body.menuDescription]
-          .filter(Boolean)
-          .map((s) => s.trim());
+        const parts = [body.dishName, body.menuDescription].filter(Boolean).map((s) => s.trim());
         return parts.length ? parts : [];
       })();
-
       const lexPerIngredient = await classifyIngredientsWithLex(
         env,
         ingredientsForLex,
         "en"
       );
       const allIngredientLexHits = lexPerIngredient.allHits || [];
-
-      // STEP 3.5: precompute Lexicon hits to pass downstream
       let lex = null;
       let finalLexHits = [];
       try {
@@ -7020,16 +4064,11 @@ Return ONLY the improved dish name, no explanations.`
         if (menuDescription) lexParts.push(menuDescription);
         if (Array.isArray(recipe?.recipe?.ingredients)) {
           lexParts.push(
-            recipe.recipe.ingredients
-              .map((row) => row.text || row.name || "")
-              .filter(Boolean)
-              .join(", ")
+            recipe.recipe.ingredients.map((row) => row.text || row.name || "").filter(Boolean).join(", ")
           );
         }
         const lexText = lexParts.filter(Boolean).join(". ");
-
         if (lexText) {
-          // callLexicon already knows how to use LEXICON_API_URL + LEXICON_API_KEY
           lex = await callLexicon(env, lexText, "en");
           const rawHits = Array.isArray(lex?.data?.hits) ? lex.data.hits : [];
           const hits = rawHits.map((h) => ({
@@ -7037,7 +4076,7 @@ Return ONLY the improved dish name, no explanations.`
             canonical: h.canonical,
             classes: Array.isArray(h.classes) ? h.classes : [],
             tags: Array.isArray(h.tags) ? h.tags : [],
-            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
+            allergens: Array.isArray(h.allergens) ? h.allergens : void 0,
             fodmap: h.fodmap ?? h.fodmap_level,
             lactose_band: h.lactose_band || null,
             milk_source: h.milk_source || null
@@ -7046,23 +4085,11 @@ Return ONLY the improved dish name, no explanations.`
           finalLexHits = finalLexHitsLocal;
         }
       } catch (e) {
-        // swallow lex errors here; later debug block records if needed
       }
-
       const blobHits = finalLexHits || [];
-      const primaryLexHits =
-        allIngredientLexHits && allIngredientLexHits.length
-          ? allIngredientLexHits
-          : blobHits;
-
-      // STEP 4: allergen-organs /organs/assess
-      const allergenUrl = env.allergen_organs
-        ? "https://allergen-organs/organs/assess"
-        : "https://tb-allergen-organs-production.tummybuddy.workers.dev/organs/assess";
-      const allergenFetcher =
-        (env.allergen_organs && typeof env.allergen_organs.fetch === "function")
-          ? env.allergen_organs.fetch.bind(env.allergen_organs)
-          : fetch;
+      const primaryLexHits = allIngredientLexHits && allIngredientLexHits.length ? allIngredientLexHits : blobHits;
+      const allergenUrl = env.allergen_organs ? "https://allergen-organs/organs/assess" : "https://tb-allergen-organs-production.tummybuddy.workers.dev/organs/assess";
+      const allergenFetcher = env.allergen_organs && typeof env.allergen_organs.fetch === "function" ? env.allergen_organs.fetch.bind(env.allergen_organs) : fetch;
       const organsResp = await allergenFetcher(allergenUrl, {
         method: "POST",
         headers: {
@@ -7075,7 +4102,6 @@ Return ONLY the improved dish name, no explanations.`
           lex_hits: primaryLexHits
         })
       });
-
       const organsText = await organsResp.text();
       let organs;
       try {
@@ -7087,24 +4113,15 @@ Return ONLY the improved dish name, no explanations.`
           raw: organsText
         };
       }
-
-      // STEP 5 — Lexicon super-brain: FODMAP + allergens (no manual short list)
       try {
         if (!organs || typeof organs !== "object") organs = {};
         if (!organs.flags) organs.flags = {};
         if (!Array.isArray(organs.flags.allergens)) organs.flags.allergens = [];
-
-        // Attach raw lexicon payload for debugging (optional)
         if (!organs.debug) organs.debug = {};
         organs.debug.lexicon_raw = lex || null;
-
         if (lex && lex.ok) {
-          // Normalize lex hits into the shape expected by scoreDishFromHits
           const hits = primaryLexHits;
-
           const scoring = scoreDishFromHits(hits);
-
-          // ---- FODMAP from lexicon only ----
           if (scoring.flags && scoring.flags.fodmap) {
             organs.flags.fodmap = {
               level: scoring.flags.fodmap,
@@ -7112,21 +4129,11 @@ Return ONLY the improved dish name, no explanations.`
               source: "lexicon"
             };
           }
-
-          // ---- Allergens from lexicon only ----
-          const existing = Array.isArray(organs.flags.allergens)
-            ? organs.flags.allergens.slice()
-            : [];
+          const existing = Array.isArray(organs.flags.allergens) ? organs.flags.allergens.slice() : [];
           const existingKinds = new Set(
-            existing
-              .map((a) => (a && typeof a.kind === "string" ? a.kind : null))
-              .filter(Boolean)
+            existing.map((a) => a && typeof a.kind === "string" ? a.kind : null).filter(Boolean)
           );
-
-          const lexAllergenKinds = Array.isArray(scoring.flags?.allergens)
-            ? scoring.flags.allergens
-            : [];
-
+          const lexAllergenKinds = Array.isArray(scoring.flags?.allergens) ? scoring.flags.allergens : [];
           for (const k of lexAllergenKinds) {
             const kind = String(k || "").toLowerCase();
             if (!kind || existingKinds.has(kind)) continue;
@@ -7137,15 +4144,10 @@ Return ONLY the improved dish name, no explanations.`
               source: "lexicon"
             });
           }
-
           organs.flags.allergens = existing;
-
-          // ---- Lactose level from lexicon ----
           const lactoseInfo = extractLactoseFromHits(hits);
           if (lactoseInfo) {
             organs.flags.lactose = lactoseInfo;
-
-            // If lactose is not "none", ensure milk allergen is present
             if (lactoseInfo.level !== "none") {
               const hasMilk = organs.flags.allergens.some(
                 (a) => a && a.kind === "milk"
@@ -7164,8 +4166,6 @@ Return ONLY the improved dish name, no explanations.`
         if (!organs.debug) organs.debug = {};
         organs.debug.lexicon_error = String(e?.message || e);
       }
-
-      // STEP 6: final combined response
       return okJson(
         {
           ok: true,
@@ -7176,7 +4176,7 @@ Return ONLY the improved dish name, no explanations.`
           normalized,
           organs,
           debug: {
-            ...(organs && organs.debug ? organs.debug : {}),
+            ...organs && organs.debug ? organs.debug : {},
             lex_blob_raw: lex,
             lex_blob_hits: blobHits,
             lex_per_ingredient: lexPerIngredient,
@@ -7186,7 +4186,6 @@ Return ONLY the improved dish name, no explanations.`
         200
       );
     }
-
     if (pathname === "/organs/from-dish" && request.method === "GET") {
       const id = _cid(request.headers);
       const init = { method: "GET", headers: new Headers(request.headers) };
@@ -7215,36 +4214,20 @@ Return ONLY the improved dish name, no explanations.`
     if (pathname === "/debug/brain-health" && request.method === "GET") {
       const urlBase = new URL(request.url).origin;
       const results = {};
-
       results.gateway = {
         ok: true,
         env: env?.ENV || "production",
         built_at: env?.BUILT_AT || "n/a",
         base: urlBase
       };
-
-      const restaurantFetch =
-        env.restaurant_core?.fetch?.bind(env.restaurant_core) || null;
-      const recipeFetch =
-        env.recipe_core?.fetch?.bind(env.recipe_core) || null;
-      const allergenFetch =
-        env.allergen_organs?.fetch?.bind(env.allergen_organs) || null;
-      const metricsFetch =
-        env.metrics_core?.fetch?.bind(env.metrics_core) || null;
-
-      const restaurantUrl =
-        env.RESTAURANT_CORE_URL ||
-        "https://tb-restaurant-core.internal/debug/whoami";
-      const recipeUrl =
-        env.RECIPE_CORE_URL ||
-        "https://tb-recipe-core.internal/debug/whoami";
-      const allergenUrl =
-        env.ALLERGEN_ORGANS_URL ||
-        "https://tb-allergen-organs.internal/debug/whoami";
-      const metricsUrl =
-        env.METRICS_CORE_URL ||
-        "https://tb-metrics-core.internal/debug/whoami";
-
+      const restaurantFetch = env.restaurant_core?.fetch?.bind(env.restaurant_core) || null;
+      const recipeFetch = env.recipe_core?.fetch?.bind(env.recipe_core) || null;
+      const allergenFetch = env.allergen_organs?.fetch?.bind(env.allergen_organs) || null;
+      const metricsFetch = env.metrics_core?.fetch?.bind(env.metrics_core) || null;
+      const restaurantUrl = env.RESTAURANT_CORE_URL || "https://tb-restaurant-core.internal/debug/whoami";
+      const recipeUrl = env.RECIPE_CORE_URL || "https://tb-recipe-core.internal/debug/whoami";
+      const allergenUrl = env.ALLERGEN_ORGANS_URL || "https://tb-allergen-organs.internal/debug/whoami";
+      const metricsUrl = env.METRICS_CORE_URL || "https://tb-metrics-core.internal/debug/whoami";
       results.restaurant_core = await callJson(restaurantUrl, {
         fetcher: restaurantFetch
       }).catch((e) => ({
@@ -7269,14 +4252,7 @@ Return ONLY the improved dish name, no explanations.`
         ok: false,
         error: String(e)
       }));
-
-      const overallOk =
-        results.gateway.ok &&
-        results.restaurant_core.ok &&
-        results.recipe_core.ok &&
-        results.allergen_organs.ok &&
-        results.metrics_core.ok;
-
+      const overallOk = results.gateway.ok && results.restaurant_core.ok && results.recipe_core.ok && results.allergen_organs.ok && results.metrics_core.ok;
       return new Response(
         JSON.stringify(
           {
@@ -7294,26 +4270,19 @@ Return ONLY the improved dish name, no explanations.`
     }
     if (pathname === "/debug/edamam-recipe") {
       const dish = (url.searchParams.get("dish") || "Chicken Alfredo").trim();
-      const debugUser =
-        (url.searchParams.get("user_id") || "").trim() || "anon";
-      const edamam =
-        typeof callEdamamRecipe === "function"
-          ? await callEdamamRecipe(dish, env, { user_id: debugUser })
-          : { error: "callEdamamRecipe not available" };
+      const debugUser = (url.searchParams.get("user_id") || "").trim() || "anon";
+      const edamam = typeof callEdamamRecipe === "function" ? await callEdamamRecipe(dish, env, { user_id: debugUser }) : { error: "callEdamamRecipe not available" };
       return okJson({ dish, edamam });
     }
     if (pathname === "/debug/edamam-nutrition" && request.method === "POST") {
       const body = await readJsonSafe(request);
-      const edamam =
-        typeof callEdamamNutritionAnalyze === "function"
-          ? await callEdamamNutritionAnalyze(
-              {
-                title: body?.title || "Recipe",
-                ingr: Array.isArray(body?.lines) ? body.lines : []
-              },
-              env
-            )
-          : { error: "callEdamamNutritionAnalyze not available" };
+      const edamam = typeof callEdamamNutritionAnalyze === "function" ? await callEdamamNutritionAnalyze(
+        {
+          title: body?.title || "Recipe",
+          ingr: Array.isArray(body?.lines) ? body.lines : []
+        },
+        env
+      ) : { error: "callEdamamNutritionAnalyze not available" };
       return okJson(edamam);
     }
     if (pathname === "/user/meals/recent") {
@@ -7326,9 +4295,7 @@ Return ONLY the improved dish name, no explanations.`
         return okJson({ ok: false, error: "user_id is required" }, 400);
       if (!env.D1_DB)
         return okJson({ ok: false, error: "D1_DB not bound" }, 500);
-
       const ORGANS = await getOrgans(env);
-
       const { results } = await env.D1_DB.prepare(
         `SELECT id, user_id, dish,
             ingredients_json,
@@ -7340,72 +4307,52 @@ Return ONLY the improved dish name, no explanations.`
      WHERE user_id = ?
      ORDER BY datetime(created_at) DESC
      LIMIT ?`
-      )
-        .bind(userId, limit)
-        .all();
-
-      const levelToBar = (s) =>
-        ({
-          "High Benefit": 80,
-          Benefit: 40,
-          Neutral: 0,
-          Caution: -40,
-          "High Caution": -80
-        })[s] ?? 0;
-      const levelToColor = (s) =>
-        ({
-          "High Benefit": "#16a34a",
-          Benefit: "#22c55e",
-          Neutral: "#a1a1aa",
-          Caution: "#f59e0b",
-          "High Caution": "#dc2626"
-        })[s] ?? "#a1a1aa";
-      const barometerToColor = (n) =>
-        n >= 40
-          ? "#16a34a"
-          : n > 0
-            ? "#22c55e"
-            : n === 0
-              ? "#a1a1aa"
-              : n <= -40
-                ? "#dc2626"
-                : "#f59e0b";
-      const titleFor = (key) => {
+      ).bind(userId, limit).all();
+      const levelToBar = /* @__PURE__ */ __name((s) => ({
+        "High Benefit": 80,
+        Benefit: 40,
+        Neutral: 0,
+        Caution: -40,
+        "High Caution": -80
+      })[s] ?? 0, "levelToBar");
+      const levelToColor = /* @__PURE__ */ __name((s) => ({
+        "High Benefit": "#16a34a",
+        Benefit: "#22c55e",
+        Neutral: "#a1a1aa",
+        Caution: "#f59e0b",
+        "High Caution": "#dc2626"
+      })[s] ?? "#a1a1aa", "levelToColor");
+      const barometerToColor = /* @__PURE__ */ __name((n) => n >= 40 ? "#16a34a" : n > 0 ? "#22c55e" : n === 0 ? "#a1a1aa" : n <= -40 ? "#dc2626" : "#f59e0b", "barometerToColor");
+      const titleFor = /* @__PURE__ */ __name((key) => {
         if (!key) return "";
         const nice = key.replace(/_/g, " ");
         return nice.charAt(0).toUpperCase() + nice.slice(1);
-      };
+      }, "titleFor");
       const items = [];
       for (const row of results || []) {
-        const organ_levels = safeJson(row.organ_levels_json, {});
+        const organ_levels2 = safeJson(row.organ_levels_json, {});
         const top_drivers = safeJson(row.top_drivers_json, {});
         const organ_bars = Object.fromEntries(
-          Object.entries(organ_levels).map(([k, v]) => [k, levelToBar(v)])
+          Object.entries(organ_levels2).map(([k, v]) => [k, levelToBar(v)])
         );
         const organ_colors = Object.fromEntries(
-          Object.entries(organ_levels).map(([k, v]) => [k, levelToColor(v)])
+          Object.entries(organ_levels2).map(([k, v]) => [k, levelToColor(v)])
         );
-        const tummy = computeBarometerFromLevelsAll(ORGANS, organ_levels);
+        const tummy = computeBarometerFromLevelsAll(ORGANS, organ_levels2);
         const barometer_color = barometerToColor(tummy);
         const insight_lines = ORGANS.map((key) => {
-          if (!organ_levels[key]) return null;
-          const drivers = Array.isArray(top_drivers[key])
-            ? top_drivers[key]
-            : [];
+          if (!organ_levels2[key]) return null;
+          const drivers = Array.isArray(top_drivers[key]) ? top_drivers[key] : [];
           if (!drivers.length) return null;
           return `${titleFor(key)}: ${drivers.join(", ")}`;
-        })
-          .filter(Boolean)
-          .slice(0, 3);
-        const dish_summary = `${
-          tummy >= 60 ? "🟢" : tummy >= 40 ? "🟡" : "🟠"
-        } ${insight_lines[0] || "See details"}`;
+        }).filter(Boolean).slice(0, 3);
+        const dish_summary = `${tummy >= 60 ? "\u{1F7E2}" : tummy >= 40 ? "\u{1F7E1}" : "\u{1F7E0}"} ${insight_lines[0] || "See details"}`;
         const item = {
           id: row.id,
           user_id: row.user_id,
           dish: row.dish,
           ingredients: safeJson(row.ingredients_json, []),
-          organ_levels,
+          organ_levels: organ_levels2,
           organ_bars,
           organ_colors,
           top_drivers,
@@ -7429,18 +4376,13 @@ Return ONLY the improved dish name, no explanations.`
         ok: true,
         reason: test?.reason,
         calories: test?.calories ?? test?.nutrition?.calories ?? null,
-        has_ingredients: Array.isArray(test?.ingredients)
-          ? test.ingredients.length
-          : 0
+        has_ingredients: Array.isArray(test?.ingredients) ? test.ingredients.length : 0
       });
     }
-
-    // Enqueue (producer)
     if (request.method === "POST" && pathname === "/enqueue") {
       const body = await request.json().catch(() => ({}));
       const id = body?.id || crypto.randomUUID();
       body.id = id;
-
       if (!env.ANALYSIS_QUEUE)
         return jsonResponse(
           { ok: false, error: "ANALYSIS_QUEUE not bound" },
@@ -7449,22 +4391,18 @@ Return ONLY the improved dish name, no explanations.`
       await env.ANALYSIS_QUEUE.send(body);
       return jsonResponse({ ok: true, id });
     }
-
     if (pathname === "/health") {
       const version = getVersion(env);
       return new Response(JSON.stringify({ ok: true, version }), {
         headers: { "content-type": "application/json" }
       });
     }
-
     if (pathname === "/debug/vision") {
       return handleDebugVision(request, env);
     }
-
     if (pathname === "/debug/fetch-bytes") {
       return handleDebugFetchBytes(request);
     }
-
     if (pathname === "/metrics") {
       if (!env.D1_DB) {
         return json({ ok: false, error: "D1_DB not bound" }, { status: 500 });
@@ -7488,21 +4426,17 @@ Return ONLY the improved dish name, no explanations.`
         recent: recent?.results || []
       });
     }
-
     if (pathname === "/meta") {
-      const ctx = {
-        served_at: new Date().toISOString(),
+      const ctx2 = {
+        served_at: (/* @__PURE__ */ new Date()).toISOString(),
         version: getVersion(env)
       };
       const bootAt = await ensureBootTime(env);
-      const uptime_seconds = bootAt
-        ? Math.max(0, Math.floor((Date.now() - Date.parse(bootAt)) / 1000))
-        : null;
-
+      const uptime_seconds = bootAt ? Math.max(0, Math.floor((Date.now() - Date.parse(bootAt)) / 1e3)) : null;
       const body = {
         ok: true,
-        version: ctx.version,
-        served_at: ctx.served_at,
+        version: ctx2.version,
+        served_at: ctx2.served_at,
         uptime_seconds,
         bindings: {
           r2: !!env.R2_BUCKET,
@@ -7515,35 +4449,32 @@ Return ONLY the improved dish name, no explanations.`
           lexicon_api_key: !!env.LEXICON_API_KEY
         }
       };
-
       const rid = newRequestId();
       return jsonResponseWithTB(
-        withBodyAnalytics(body, ctx, rid, { endpoint: "meta" }),
+        withBodyAnalytics(body, ctx2, rid, { endpoint: "meta" }),
         200,
-        { ctx, rid, source: "meta", cache: "" }
+        { ctx: ctx2, rid, source: "meta", cache: "" }
       );
     }
-
     if (pathname === "/debug/status") {
-      const ctx = {
-        served_at: new Date().toISOString(),
+      const ctx2 = {
+        served_at: (/* @__PURE__ */ new Date()).toISOString(),
         version: getVersion(env)
       };
-      const status = (await readStatusKV(env)) || {
+      const status = await readStatusKV(env) || {
         updated_at: null,
         counts: {}
       };
       const rid = newRequestId();
-      const body = withBodyAnalytics({ ok: true, status }, ctx, rid, {
+      const body = withBodyAnalytics({ ok: true, status }, ctx2, rid, {
         endpoint: "debug-status"
       });
       return jsonResponseWithTB(body, 200, {
-        ctx,
+        ctx: ctx2,
         rid,
         source: "debug-status"
       });
     }
-
     if (pathname === "/debug/ping") {
       const version = getVersion(env);
       return new Response(
@@ -7563,7 +4494,6 @@ Return ONLY the improved dish name, no explanations.`
         { headers: { "content-type": "application/json" } }
       );
     }
-
     if (pathname === "/debug/env") {
       return json({
         ZESTFUL_DAILY_CAP: env.ZESTFUL_DAILY_CAP || null,
@@ -7576,7 +4506,6 @@ Return ONLY the improved dish name, no explanations.`
         has_FDC_KEY: !!env.USDA_FDC_API_KEY
       });
     }
-
     if (pathname === "/debug/fdc") {
       const name = url.searchParams.get("name") || "";
       if (!name)
@@ -7584,7 +4513,6 @@ Return ONLY the improved dish name, no explanations.`
       const hit = await callUSDAFDC(env, name);
       return json({ ok: !!hit, name, hit });
     }
-
     if (pathname === "/debug/fdc-cache") {
       if (!env?.R2_BUCKET)
         return json(
@@ -7598,7 +4526,6 @@ Return ONLY the improved dish name, no explanations.`
         parseInt(u.searchParams.get("limit") || "50", 10),
         200
       );
-
       if (name) {
         const key = `nutrition/${normKey(name)}.json`;
         const head = await r2Head(env, key);
@@ -7607,7 +4534,6 @@ Return ONLY the improved dish name, no explanations.`
         const data = obj ? await obj.json().catch(() => null) : null;
         return json({ ok: true, cached: !!data, key, data });
       }
-
       const listing = await env.R2_BUCKET.list({ prefix, limit });
       return json({
         ok: true,
@@ -7621,7 +4547,6 @@ Return ONLY the improved dish name, no explanations.`
         }))
       });
     }
-
     if (pathname === "/debug/off") {
       const u = new URL(request.url);
       const name = (u.searchParams.get("name") || "").trim();
@@ -7630,23 +4555,16 @@ Return ONLY the improved dish name, no explanations.`
       const hit = await callOFF(env, name);
       return json({ ok: true, name, hit });
     }
-
     if (pathname === "/debug/last") {
-      const id = env.LEXICON_CACHE
-        ? await env.LEXICON_CACHE.get("last_job_id")
-        : null;
-      const ts = env.LEXICON_CACHE
-        ? await env.LEXICON_CACHE.get("last_job_ts")
-        : null;
+      const id = env.LEXICON_CACHE ? await env.LEXICON_CACHE.get("last_job_id") : null;
+      const ts = env.LEXICON_CACHE ? await env.LEXICON_CACHE.get("last_job_ts") : null;
       return jsonResponse({ ok: true, last_job_id: id, last_job_ts: ts });
     }
-
     if (pathname === "/debug/job") {
       const id = searchParams.get("id");
       if (!id) return jsonResponse({ ok: false, error: "missing id" }, 400);
       if (!env.R2_BUCKET)
         return jsonResponse({ ok: false, error: "R2 not bound" }, 500);
-
       const keyNew = `jobs/${id}.json`;
       const keyOld = `results/${id}.json`;
       let obj = await env.R2_BUCKET.get(keyNew);
@@ -7663,7 +4581,6 @@ Return ONLY the improved dish name, no explanations.`
       const body = await obj.text();
       return jsonResponse({ ok: true, key: keyUsed, data: JSON.parse(body) });
     }
-
     if (pathname === "/debug/config") {
       const rapidHost = cleanHost(env.RAPIDAPI_HOST);
       const lexBase = normalizeBase(env.LEXICON_API_URL);
@@ -7679,7 +4596,6 @@ Return ONLY the improved dish name, no explanations.`
         has_r2: !!env.R2_BUCKET
       });
     }
-
     if (pathname === "/debug/llm-config") {
       return jsonResponse({
         ok: true,
@@ -7693,7 +4609,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       });
     }
-
     if (pathname === "/debug/ping-lexicon") {
       const lexBase = normalizeBase(env.LEXICON_API_URL);
       const urlToCall = buildLexiconAnalyzeURL(lexBase);
@@ -7703,7 +4618,6 @@ Return ONLY the improved dish name, no explanations.`
           { ok: false, error: "Missing LEXICON_API_URL or LEXICON_API_KEY" },
           400
         );
-
       const tryXKey = await fetch(urlToCall, {
         method: "POST",
         headers: {
@@ -7730,17 +4644,16 @@ Return ONLY the improved dish name, no explanations.`
           normalize: { diacritics: "fold" }
         })
       }).catch((e) => ({ ok: false, status: 0, _err: e?.message }));
-
       let bodyX = "";
       try {
         bodyX = typeof tryXKey.text === "function" ? await tryXKey.text() : "";
-      } catch {}
+      } catch {
+      }
       let bodyB = "";
       try {
-        bodyB =
-          typeof tryBearer.text === "function" ? await tryBearer.text() : "";
-      } catch {}
-
+        bodyB = typeof tryBearer.text === "function" ? await tryBearer.text() : "";
+      } catch {
+      }
       return jsonResponse({
         ok: (tryXKey?.ok || tryBearer?.ok) ?? false,
         url_called: urlToCall,
@@ -7759,25 +4672,21 @@ Return ONLY the improved dish name, no explanations.`
         }
       });
     }
-
     if (pathname === "/debug/read-kv-shard") {
       const name = (searchParams.get("name") || "").trim();
       if (!name) return jsonResponse({ ok: false, error: "missing name" }, 400);
       if (!env.LEXICON_CACHE)
         return jsonResponse({ ok: false, error: "KV not bound" }, 500);
-
       const key = `shards/${name}.json`;
       const raw = await env.LEXICON_CACHE.get(key);
       if (!raw)
         return jsonResponse({ ok: false, error: "not_in_kv", key }, 404);
-
       let js;
       try {
         js = JSON.parse(raw);
       } catch {
         return jsonResponse({ ok: false, error: "bad_json" }, 500);
       }
-
       const total = Array.isArray(js?.entries) ? js.entries.length : 0;
       const sample = Array.isArray(js?.entries) ? js.entries.slice(0, 25) : [];
       return jsonResponse({
@@ -7796,15 +4705,10 @@ Return ONLY the improved dish name, no explanations.`
         }))
       });
     }
-
     if (pathname === "/debug/warm-lexicon") {
-      const list = lc(searchParams.get("names") || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const list = lc(searchParams.get("names") || "").split(",").map((s) => s.trim()).filter(Boolean);
       if (!list.length)
         return jsonResponse({ ok: false, error: "missing names" }, 400);
-
       const base = normalizeBase(env.LEXICON_API_URL);
       const key = env.LEXICON_API_KEY;
       if (!base || !key)
@@ -7812,21 +4716,18 @@ Return ONLY the improved dish name, no explanations.`
           { ok: false, error: "Missing LEXICON_API_URL or LEXICON_API_KEY" },
           400
         );
-
       const out = [];
       for (const name of list) {
-        const url = `${base}/v1/shards/${name}`;
+        const url2 = `${base}/v1/shards/${name}`;
         try {
-          const r = await fetch(url, { headers: { "x-api-key": key } });
+          const r = await fetch(url2, { headers: { "x-api-key": key } });
           if (!r.ok) {
-            out.push({ shard: name, url, status: r.status, ok: false });
+            out.push({ shard: name, url: url2, status: r.status, ok: false });
             continue;
           }
           const text = await r.text();
           const js = parseJsonSafe(text, null);
-          const entries_len = Array.isArray(js?.entries)
-            ? js.entries.length
-            : 0;
+          const entries_len = Array.isArray(js?.entries) ? js.entries.length : 0;
           if (env.LEXICON_CACHE) {
             await env.LEXICON_CACHE.put(`shards/${name}.json`, text, {
               expirationTtl: 86400
@@ -7834,7 +4735,7 @@ Return ONLY the improved dish name, no explanations.`
           }
           out.push({
             shard: name,
-            url,
+            url: url2,
             status: 200,
             ok: true,
             entries_len,
@@ -7843,7 +4744,7 @@ Return ONLY the improved dish name, no explanations.`
         } catch (e) {
           out.push({
             shard: name,
-            url,
+            url: url2,
             status: 0,
             ok: false,
             error: e?.message || String(e)
@@ -7852,15 +4753,11 @@ Return ONLY the improved dish name, no explanations.`
       }
       return jsonResponse({ ok: true, warmed: out });
     }
-
     if (pathname === "/debug/refresh-ingredient-shards") {
       try {
         const idx = await refreshShardIndex(env);
         const indexFromKV = await readShardIndexFromKV(env);
-        const names = indexFromKV
-          ? pickIngredientShardNamesFromIndex(indexFromKV)
-          : STATIC_INGREDIENT_SHARDS;
-
+        const names = indexFromKV ? pickIngredientShardNamesFromIndex(indexFromKV) : STATIC_INGREDIENT_SHARDS;
         const base = normalizeBase(env.LEXICON_API_URL);
         const key = env.LEXICON_API_KEY;
         if (!base || !key)
@@ -7868,21 +4765,18 @@ Return ONLY the improved dish name, no explanations.`
             { ok: false, error: "Missing LEXICON_API_URL or LEXICON_API_KEY" },
             400
           );
-
         const warmed = [];
         for (const name of names) {
-          const url = `${base}/v1/shards/${name}`;
+          const url2 = `${base}/v1/shards/${name}`;
           try {
-            const r = await fetch(url, { headers: { "x-api-key": key } });
+            const r = await fetch(url2, { headers: { "x-api-key": key } });
             if (!r.ok) {
-              warmed.push({ shard: name, url, status: r.status, ok: false });
+              warmed.push({ shard: name, url: url2, status: r.status, ok: false });
               continue;
             }
             const text = await r.text();
             const js = parseJsonSafe(text, null);
-            const entries_len = Array.isArray(js?.entries)
-              ? js.entries.length
-              : 0;
+            const entries_len = Array.isArray(js?.entries) ? js.entries.length : 0;
             if (env.LEXICON_CACHE) {
               await env.LEXICON_CACHE.put(`shards/${name}.json`, text, {
                 expirationTtl: 86400
@@ -7890,7 +4784,7 @@ Return ONLY the improved dish name, no explanations.`
             }
             warmed.push({
               shard: name,
-              url,
+              url: url2,
               status: 200,
               ok: true,
               entries_len,
@@ -7899,14 +4793,13 @@ Return ONLY the improved dish name, no explanations.`
           } catch (e) {
             warmed.push({
               shard: name,
-              url,
+              url: url2,
               status: 0,
               ok: false,
               error: e?.message || String(e)
             });
           }
         }
-
         return jsonResponse({
           ok: true,
           index_refresh: idx,
@@ -7917,8 +4810,6 @@ Return ONLY the improved dish name, no explanations.`
         return jsonResponse({ ok: false, error: e?.message || String(e) }, 500);
       }
     }
-
-    // --- Public lean results with CORS: GET /results/<id>.json (+ preflight) ---
     if (pathname.startsWith("/results/")) {
       const CORS = {
         "Access-Control-Allow-Origin": "*",
@@ -7927,7 +4818,6 @@ Return ONLY the improved dish name, no explanations.`
       };
       if (request.method === "OPTIONS")
         return new Response(null, { status: 204, headers: CORS });
-
       if (request.method === "GET") {
         if (!env.R2_BUCKET) {
           return new Response(
@@ -7956,15 +4846,12 @@ Return ONLY the improved dish name, no explanations.`
         let payload = null;
         try {
           payload = JSON.parse(body);
-        } catch {}
-
+        } catch {
+        }
         if (payload) {
           const userId = (url.searchParams.get("user_id") || "").trim();
           const rawPrefs = await loadUserPrefs(env, userId);
-          const safePrefs =
-            rawPrefs && typeof rawPrefs === "object"
-              ? rawPrefs
-              : { allergens: [], fodmap: {} };
+          const safePrefs = rawPrefs && typeof rawPrefs === "object" ? rawPrefs : { allergens: [], fodmap: {} };
           const pills = derivePillsForUser(payload.ingredient_hits, safePrefs);
           payload.pills_user = pills;
           if (payload.dish && typeof payload.dish === "object") {
@@ -7980,7 +4867,6 @@ Return ONLY the improved dish name, no explanations.`
             }
           });
         }
-
         return new Response(body, {
           status: 200,
           headers: {
@@ -7991,16 +4877,10 @@ Return ONLY the improved dish name, no explanations.`
         });
       }
     }
-
-    // --- DEBUG: RapidAPI health check ---
     if (pathname === "/debug/rapid") {
-      const host =
-        env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+      const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
       const key = env.RAPIDAPI_KEY || "";
-      let status = 0,
-        text = "",
-        probe;
-
+      let status = 0, text = "", probe;
       async function tryPath(p) {
         const res = await fetch(`https://${host}${p}`, {
           headers: {
@@ -8011,7 +4891,7 @@ Return ONLY the improved dish name, no explanations.`
         });
         return { status: res.status, text: await res.text(), path: p };
       }
-
+      __name(tryPath, "tryPath");
       try {
         probe = await tryPath("/health");
         if (probe.status === 404) probe = await tryPath("/health/public");
@@ -8020,7 +4900,6 @@ Return ONLY the improved dish name, no explanations.`
       } catch (e) {
         text = String(e);
       }
-
       return new Response(
         JSON.stringify(
           {
@@ -8037,26 +4916,18 @@ Return ONLY the improved dish name, no explanations.`
         { headers: { "content-type": "application/json" } }
       );
     }
-
-    // --- DEBUG: direct RapidAPI POST to /api/job ---
     if (pathname === "/debug/rapid-job") {
-      const host =
-        env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+      const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
       const key = env.RAPIDAPI_KEY || "";
-
       const q = searchParams.get("query") || "seafood";
       const addr = searchParams.get("address") || "South Miami, FL, USA";
       const max = Number(searchParams.get("maxRows") || 3);
       const locale = searchParams.get("locale") || "en-US";
       const page = Number(searchParams.get("page") || 1);
-
       const body = {
         scraper: { maxRows: max, query: q, address: addr, locale, page }
       };
-
-      let status = 0,
-        text = "",
-        js = null;
+      let status = 0, text = "", js = null;
       try {
         const res = await fetch(`https://${host}/api/job`, {
           method: "POST",
@@ -8072,11 +4943,11 @@ Return ONLY the improved dish name, no explanations.`
         text = await res.text();
         try {
           js = JSON.parse(text);
-        } catch {}
+        } catch {
+        }
       } catch (e) {
         text = String(e);
       }
-
       return new Response(
         JSON.stringify(
           {
@@ -8093,14 +4964,11 @@ Return ONLY the improved dish name, no explanations.`
         { headers: { "content-type": "application/json" } }
       );
     }
-
     if (pathname === "/debug/r2-list") {
       const prefix = searchParams.get("prefix") || "";
       const limit = Number(searchParams.get("limit") || "25");
-      const cursor = searchParams.get("cursor") || undefined;
-
+      const cursor = searchParams.get("cursor") || void 0;
       const listing = await env.R2_BUCKET.list({ prefix, limit, cursor });
-
       return jsonResponse({
         ok: true,
         prefix,
@@ -8114,15 +4982,12 @@ Return ONLY the improved dish name, no explanations.`
         }))
       });
     }
-
     if (pathname === "/debug/r2-get") {
       const key = searchParams.get("key");
       if (!key) return jsonResponse({ ok: false, error: "missing ?key=" }, 400);
-
       const obj = await env.R2_BUCKET.get(key);
       if (!obj)
         return jsonResponse({ ok: false, error: "not_found", key }, 404);
-
       const text = await obj.text();
       try {
         return jsonResponse({ ok: true, key, json: JSON.parse(text) });
@@ -8133,28 +4998,39 @@ Return ONLY the improved dish name, no explanations.`
         });
       }
     }
-
     if (pathname === "/menu/extract" && request.method === "GET") {
-      const url = new URL(request.url);
-      const placeId = url.searchParams.get("placeId") || "";
-      const urlParam = url.searchParams.get("url") || "";
-
-      const result = await restaurantCore.extractMenu(env, {
-        placeId,
-        url: urlParam
+      const url2 = new URL(request.url);
+      const search = url2.search || "";
+      const upstreamUrl = "https://tb-restaurant-core.internal/menu/extract" + search;
+      const upstreamResp = await env.restaurant_core.fetch(upstreamUrl, {
+        method: "GET",
+        headers: request.headers
       });
-
-      return okJson(result);
+      return upstreamResp;
     }
     if (pathname === "/recipe/resolve")
       return handleRecipeResolve(env, request, url, ctx);
-
-    // Cleaner Uber Eats test endpoint (returns flattened items)
     if (pathname === "/menu/uber-test" && request.method === "GET") {
-      let ctx = makeCtx(env);
+      let ctx2 = makeCtx(env);
       let rid = newRequestId();
-      let trace = {}; // ensure 'trace' exists immediately
+      let trace = {};
       try {
+        let setWarn = function(msg) {
+          if (!msg) return;
+          _warnMsg = _warnMsg ? `${_warnMsg} ${msg}` : String(msg);
+        }, respondTB = function(body, status = 200, opts = {}, extraHeaders = {}) {
+          const source = body?.source || opts.source || "";
+          const cache = body?.cache || opts.cache || "";
+          const warning = Boolean(body?.warning || opts.warning);
+          return jsonResponseWithTB(
+            body,
+            status,
+            { ctx: ctx2, rid, source, cache, warning },
+            extraHeaders
+          );
+        };
+        __name(setWarn, "setWarn");
+        __name(respondTB, "respondTB");
         const query = searchParams.get("query") || "";
         const addressRaw = searchParams.get("address") || "";
         const locale = searchParams.get("locale") || "en-US";
@@ -8166,41 +5042,16 @@ Return ONLY the improved dish name, no explanations.`
         const latNum = lat !== null ? parseFloat(lat) : null;
         const lngNum = lng !== null ? parseFloat(lng) : null;
         const debug = searchParams.get("debug");
-        const forceUSFlag =
-          searchParams.get("us") === "1" || looksLikeUSAddress(addressRaw);
-        // [41.2] — analytics context + ids + trace
+        const forceUSFlag = searchParams.get("us") === "1" || looksLikeUSAddress(addressRaw);
         trace = makeTrace("uber-test", searchParams, env);
-        // --- make warning + respondTB available BEFORE any early returns (like debug=limits)
         let _warnMsg = null;
-        function setWarn(msg) {
-          if (!msg) return;
-          _warnMsg = _warnMsg ? `${_warnMsg} ${msg}` : String(msg);
-        }
-        const warnPart = () => (_warnMsg ? { warning: _warnMsg } : {});
-        function respondTB(body, status = 200, opts = {}, extraHeaders = {}) {
-          // body should already be run through withBodyAnalytics(...) before calling here
-          const source = body?.source || opts.source || "";
-          const cache = body?.cache || opts.cache || "";
-          const warning = Boolean(body?.warning || opts.warning);
-          return jsonResponseWithTB(
-            body,
-            status,
-            { ctx, rid, source, cache, warning },
-            extraHeaders
-          );
-        }
-        trace.host =
-          trace.host ||
-          env.UBER_RAPID_HOST ||
-          "uber-eats-scraper-api.p.rapidapi.com"; // [38.9]
-
-        // [40.3] — local rate-limit simulation
+        const warnPart = /* @__PURE__ */ __name(() => _warnMsg ? { warning: _warnMsg } : {}, "warnPart");
+        trace.host = trace.host || env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
         if (searchParams.get("debug") === "ratelimit") {
           const secs = Number(searchParams.get("after") || 42);
           trace.used_path = "debug-ratelimit";
-          return rateLimitResponse(ctx, rid, trace, secs, "debug-ratelimit");
+          return rateLimitResponse(ctx2, rid, trace, secs, "debug-ratelimit");
         }
-        // [39.1a] Early validation: require ?query for address/GPS search
         if (!isNonEmptyString(query)) {
           await bumpStatusKV(env, { errors_4xx: 1 });
           return errorResponseWith(
@@ -8215,7 +5066,7 @@ Return ONLY the improved dish name, no explanations.`
               ]
             },
             400,
-            ctx,
+            ctx2,
             {
               "X-TB-Source": "input-missing",
               trace: safeTrace(trace)
@@ -8223,7 +5074,7 @@ Return ONLY the improved dish name, no explanations.`
             rid
           );
         }
-        if ((lat && !lng) || (!lat && lng)) {
+        if (lat && !lng || !lat && lng) {
           await bumpStatusKV(env, { errors_4xx: 1 });
           return errorResponseWith(
             {
@@ -8236,7 +5087,7 @@ Return ONLY the improved dish name, no explanations.`
               ]
             },
             400,
-            ctx,
+            ctx2,
             {
               "X-TB-Source": "input-missing",
               trace: safeTrace(trace)
@@ -8244,7 +5095,6 @@ Return ONLY the improved dish name, no explanations.`
             rid
           );
         }
-        // [38.8] — quick QA view of effective limits
         if (debug === "limits") {
           const snap = limitsSnapshot({ maxRows, radius });
           await bumpStatusKV(env, { debug: 1 });
@@ -8257,16 +5107,13 @@ Return ONLY the improved dish name, no explanations.`
                 address: addressRaw,
                 limits: snap
               },
-              ctx,
+              ctx2,
               rid,
               trace
             ),
             200
           );
         }
-        // [38.3] — warning collector (already defined above; kept for clarity)
-
-        // --- Menu cache lookup ---
         const cacheKey = cacheKeyForMenu(query, addressRaw, !!forceUSFlag);
         const wantDebugCache = debug === "cache";
         let cacheStatus = "miss";
@@ -8275,24 +5122,21 @@ Return ONLY the improved dish name, no explanations.`
         let cacheAgeSec = null;
         try {
           cached = await readMenuFromCache(env, cacheKey);
-          // [38.7] compute cache age (seconds)
           cacheAgeSec = null;
           if (cached?.savedAt) {
             cacheAgeSec = Math.max(
               0,
-              Math.floor((Date.now() - Date.parse(cached.savedAt)) / 1000)
+              Math.floor((Date.now() - Date.parse(cached.savedAt)) / 1e3)
             );
           }
-          // [38.3] age warning for cached data (>20h considered stale-ish)
           if (cached?.savedAt) {
             const ageSec = Math.max(
               0,
-              (Date.now() - Date.parse(cached.savedAt)) / 1000
+              (Date.now() - Date.parse(cached.savedAt)) / 1e3
             );
             if (ageSec > 20 * 3600)
               setWarn("Cached data is older than ~20 hours (may be stale).");
           }
-          // Allow inspecting the cached payload directly
           if (wantDebugCache) {
             return respondTB(
               withBodyAnalytics(
@@ -8304,38 +5148,29 @@ Return ONLY the improved dish name, no explanations.`
                   ...cached,
                   ...warnPart()
                 },
-                ctx,
+                ctx2,
                 rid,
                 trace
               ),
               200
             );
           }
-
-          // If cache has usable items, hydrate them as a fast-path
           if (cached?.data) {
-            cachedItems = Array.isArray(cached.data.items)
-              ? cached.data.items
-              : null;
+            cachedItems = Array.isArray(cached.data.items) ? cached.data.items : null;
             if (cachedItems) cacheStatus = "hit";
-
-            // Hydrate a local flattenedItems from cache so the same enqueue logic can use it
             if (cachedItems) {
-              const flattenedItems = cachedItems;
-              // If the caller requested analysis, run the enqueue block against flattenedItems
-              // (this mirrors the enqueue behavior used for live fetches).
+              const flattenedItems2 = cachedItems;
               const wantAnalyze = searchParams.get("analyze") === "1";
-              let enqueued = [];
-              if (flattenedItems && wantAnalyze) {
+              let enqueued2 = [];
+              if (flattenedItems2 && wantAnalyze) {
                 const top = filterAndRankItems(
-                  flattenedItems,
+                  flattenedItems2,
                   searchParams,
                   env
                 );
-                const place_id =
-                  searchParams.get("place_id") || "place.unknown";
+                const place_id = searchParams.get("place_id") || "place.unknown";
                 const cuisine = searchParams.get("cuisine") || "";
-                ({ enqueued } = await enqueueTopItems(env, top, {
+                ({ enqueued: enqueued2 } = await enqueueTopItems(env, top, {
                   place_id,
                   cuisine,
                   query,
@@ -8343,12 +5178,10 @@ Return ONLY the improved dish name, no explanations.`
                   forceUS: !!forceUSFlag
                 }));
               }
-
-              // If analyze was requested we consumed the cache and can return it with enqueued[]
-              if (flattenedItems && wantAnalyze) {
+              if (flattenedItems2 && wantAnalyze) {
                 const address = addressRaw;
                 const forceUS = !!forceUSFlag;
-                trace.used_path = "/api/job"; // [38.9]
+                trace.used_path = "/api/job";
                 await bumpStatusKV(env, { cache: 1 });
                 return respondTB(
                   withBodyAnalytics(
@@ -8361,12 +5194,12 @@ Return ONLY the improved dish name, no explanations.`
                         query,
                         address,
                         forceUS,
-                        items: flattenedItems.slice(0, maxRows)
+                        items: flattenedItems2.slice(0, maxRows)
                       },
-                      enqueued,
+                      enqueued: enqueued2,
                       ...warnPart()
                     },
-                    ctx,
+                    ctx2,
                     rid,
                     trace
                   ),
@@ -8376,27 +5209,19 @@ Return ONLY the improved dish name, no explanations.`
             }
           }
         } catch (e) {
-          // ignore cache errors and proceed to live
         }
-
-        // Address-based job path
         if (addressRaw) {
-          // US hint: append ", USA" once if forcing US but address lacks it
           let address = addressRaw;
           if (forceUSFlag && !/usa|united states/i.test(address))
             address = `${addressRaw}, USA`;
-
           const job = await postJobByAddress(
             { query, address, maxRows, locale, page },
             env
           );
-
-          // Immediate data
           if (job?.immediate) {
-            let rows = job.raw?.returnvalue?.data || [];
-            const rowsUS = filterRowsUS(rows, forceUSFlag);
-            const titles = rowsUS.map((r) => r?.title).filter(Boolean);
-
+            let rows2 = job.raw?.returnvalue?.data || [];
+            const rowsUS2 = filterRowsUS(rows2, forceUSFlag);
+            const titles = rowsUS2.map((r) => r?.title).filter(Boolean);
             if (debug === "titles") {
               return respondTB(
                 withBodyAnalytics(
@@ -8407,37 +5232,32 @@ Return ONLY the improved dish name, no explanations.`
                     titles,
                     ...warnPart()
                   },
-                  ctx,
+                  ctx2,
                   rid,
                   trace
                 ),
                 200
               );
             }
-
-            // [38.11b] debug=1 preview for address-immediate
             if (debug === "1") {
               trace.used_path = "/api/job";
               await bumpStatusKV(env, { debug: 1 });
               const preview = buildDebugPreview(
                 job?.raw || {},
                 env,
-                rowsUS,
+                rowsUS2,
                 titles
               );
               return respondTB(
-                withBodyAnalytics(preview, ctx, rid, trace),
+                withBodyAnalytics(preview, ctx2, rid, trace),
                 200
               );
             }
-
-            const best = pickBestRestaurant({ rows: rowsUS, query });
-            const chosen =
-              best ||
-              (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
+            const best2 = pickBestRestaurant({ rows: rowsUS2, query });
+            const chosen2 = best2 || (Array.isArray(rowsUS2) && rowsUS2.length ? rowsUS2[0] : null);
             if (debug === "why") {
               const exp = explainRestaurantChoices({
-                rows: rowsUS,
+                rows: rowsUS2,
                 query,
                 limit: 10
               });
@@ -8452,36 +5272,29 @@ Return ONLY the improved dish name, no explanations.`
                     address: addressRaw,
                     ...warnPart()
                   },
-                  ctx,
+                  ctx2,
                   rid,
                   trace
                 ),
                 200
               );
             }
-            if (!chosen) {
+            if (!chosen2) {
               await bumpStatusKV(env, { errors_4xx: 1 });
-              return notFoundCandidates(ctx, rid, trace, {
+              return notFoundCandidates(ctx2, rid, trace, {
                 query,
                 address: addressRaw
               });
             }
-
-            const fake = { data: { results: [chosen] } };
-            const flattenedItems = extractMenuItemsFromUber(fake, query);
-
-            // Optional: enqueue for analysis when requested
-            const analyze = searchParams.get("analyze") === "1";
-            let enqueued = [];
-            if (
-              analyze &&
-              Array.isArray(flattenedItems) &&
-              flattenedItems.length
-            ) {
-              const top = filterAndRankItems(flattenedItems, searchParams, env);
+            const fake2 = { data: { results: [chosen2] } };
+            const flattenedItems3 = extractMenuItemsFromUber(fake2, query);
+            const analyze3 = searchParams.get("analyze") === "1";
+            let enqueued3 = [];
+            if (analyze3 && Array.isArray(flattenedItems3) && flattenedItems3.length) {
+              const top = filterAndRankItems(flattenedItems3, searchParams, env);
               const place_id = searchParams.get("place_id") || "place.unknown";
               const cuisine = searchParams.get("cuisine") || "";
-              ({ enqueued } = await enqueueTopItems(env, top, {
+              ({ enqueued: enqueued3 } = await enqueueTopItems(env, top, {
                 place_id,
                 cuisine,
                 query,
@@ -8489,23 +5302,19 @@ Return ONLY the improved dish name, no explanations.`
                 forceUS: !!forceUSFlag
               }));
             }
-
-            // 2) Write to cache (best-effort)
             try {
               await writeMenuToCache(env, cacheKey, {
                 query,
                 address: addressRaw,
                 forceUS: !!forceUSFlag,
-                items: flattenedItems
+                items: flattenedItems3
               });
               cacheStatus = "stored";
             } catch (e) {
               cacheStatus = "store-failed";
               setWarn("Could not store fresh cache (non-fatal).");
             }
-
-            // 3) Respond (include enqueued[] when present)
-            trace.used_path = "/api/job"; // [38.9]
+            trace.used_path = "/api/job";
             await bumpStatusKV(env, { address_immediate: 1 });
             return respondTB(
               withBodyAnalytics(
@@ -8517,33 +5326,30 @@ Return ONLY the improved dish name, no explanations.`
                     query,
                     address: addressRaw,
                     forceUS: !!forceUSFlag,
-                    items: flattenedItems.slice(0, maxRows)
+                    items: flattenedItems3.slice(0, maxRows)
                   },
-                  enqueued,
+                  enqueued: enqueued3,
                   ...warnPart()
                 },
-                ctx,
+                ctx2,
                 rid,
                 trace
               ),
               200
             );
           }
-
-          // Poll by job id
           const jobId = job?.job_id;
           if (!jobId) {
             await bumpStatusKV(env, { errors_5xx: 1 });
             return errorResponseWith(
               {
                 ok: false,
-                error:
-                  "Upstream didn’t return a job_id for the address search.",
+                error: "Upstream didn\u2019t return a job_id for the address search.",
                 hint: "Please try again in a moment. If this keeps happening, try a nearby ZIP code.",
                 raw: job
               },
               502,
-              ctx,
+              ctx2,
               {
                 "X-TB-Source": "job-missing-id",
                 "X-TB-Upstream-Status": "502",
@@ -8552,19 +5358,11 @@ Return ONLY the improved dish name, no explanations.`
               rid
             );
           }
-
           const finished = await pollUberJobUntilDone({ jobId, env });
-
-          let rows =
-            finished?.returnvalue?.data ||
-            finished?.data?.data ||
-            finished?.data ||
-            [];
+          let rows = finished?.returnvalue?.data || finished?.data?.data || finished?.data || [];
           const rowsUS = filterRowsUS(rows, forceUSFlag);
-
           const best = pickBestRestaurant({ rows: rowsUS, query });
-          const chosen =
-            best || (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
+          const chosen = best || (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
           if (debug === "why") {
             const exp = explainRestaurantChoices({
               rows: rowsUS,
@@ -8582,7 +5380,7 @@ Return ONLY the improved dish name, no explanations.`
                   address: addressRaw,
                   ...warnPart()
                 },
-                ctx,
+                ctx2,
                 rid,
                 trace
               ),
@@ -8591,16 +5389,13 @@ Return ONLY the improved dish name, no explanations.`
           }
           if (!chosen) {
             await bumpStatusKV(env, { errors_4xx: 1 });
-            return notFoundCandidates(ctx, rid, trace, {
+            return notFoundCandidates(ctx2, rid, trace, {
               query,
               address: addressRaw
             });
           }
-
           if (debug === "titles") {
-            const titles = (Array.isArray(rowsUS) ? rowsUS : [])
-              .map((r) => r?.title)
-              .filter(Boolean);
+            const titles = (Array.isArray(rowsUS) ? rowsUS : []).map((r) => r?.title).filter(Boolean);
             return respondTB(
               withBodyAnalytics(
                 {
@@ -8611,20 +5406,16 @@ Return ONLY the improved dish name, no explanations.`
                   titles,
                   ...warnPart()
                 },
-                ctx,
+                ctx2,
                 rid,
                 trace
               ),
               200
             );
           }
-
-          // [38.11b] debug=1 preview for address-job
           if (debug === "1") {
             trace.used_path = "/api/job";
-            const titles = (Array.isArray(rowsUS) ? rowsUS : [])
-              .map((r) => r?.title)
-              .filter(Boolean);
+            const titles = (Array.isArray(rowsUS) ? rowsUS : []).map((r) => r?.title).filter(Boolean);
             await bumpStatusKV(env, { debug: 1 });
             const preview = buildDebugPreview(
               finished || {},
@@ -8632,24 +5423,17 @@ Return ONLY the improved dish name, no explanations.`
               rowsUS,
               titles
             );
-            return respondTB(withBodyAnalytics(preview, ctx, rid, trace), 200);
+            return respondTB(withBodyAnalytics(preview, ctx2, rid, trace), 200);
           }
-
           const fake = { data: { results: [chosen] } };
-          const flattenedItems = extractMenuItemsFromUber(fake, query);
-
-          // Optional analyze enqueue
-          const analyze = searchParams.get("analyze") === "1";
-          let enqueued = [];
-          if (
-            analyze &&
-            Array.isArray(flattenedItems) &&
-            flattenedItems.length
-          ) {
-            const top = filterAndRankItems(flattenedItems, searchParams, env);
+          const flattenedItems2 = extractMenuItemsFromUber(fake, query);
+          const analyze2 = searchParams.get("analyze") === "1";
+          let enqueued2 = [];
+          if (analyze2 && Array.isArray(flattenedItems2) && flattenedItems2.length) {
+            const top = filterAndRankItems(flattenedItems2, searchParams, env);
             const place_id = searchParams.get("place_id") || "place.unknown";
             const cuisine = searchParams.get("cuisine") || "";
-            ({ enqueued } = await enqueueTopItems(env, top, {
+            ({ enqueued: enqueued2 } = await enqueueTopItems(env, top, {
               place_id,
               cuisine,
               query,
@@ -8657,20 +5441,19 @@ Return ONLY the improved dish name, no explanations.`
               forceUS: !!forceUSFlag
             }));
           }
-
           try {
             await writeMenuToCache(env, cacheKey, {
               query,
               address: addressRaw,
               forceUS: !!forceUSFlag,
-              items: flattenedItems
+              items: flattenedItems2
             });
             cacheStatus = "stored";
           } catch (e) {
             cacheStatus = "store-failed";
             setWarn("Could not store fresh cache (non-fatal).");
           }
-          trace.used_path = "/api/job"; // [38.9]
+          trace.used_path = "/api/job";
           await bumpStatusKV(env, { address_job: 1 });
           return respondTB(
             withBodyAnalytics(
@@ -8682,40 +5465,37 @@ Return ONLY the improved dish name, no explanations.`
                   query,
                   address: addressRaw,
                   forceUS: !!forceUSFlag,
-                  items: flattenedItems.slice(0, maxRows)
+                  items: flattenedItems2.slice(0, maxRows)
                 },
-                enqueued,
+                enqueued: enqueued2,
                 ...warnPart()
               },
-              ctx,
+              ctx2,
               rid,
               trace
             ),
             200
           );
         }
-
-        // GPS flow
         if (lat && lng) {
           try {
             const jobRes = await postJobByLocation(
               { query, lat: Number(lat), lng: Number(lng), radius, maxRows },
               env
             );
-            if (jobRes?.path) trace.used_path = jobRes.path; // [38.9]
+            if (jobRes?.path) trace.used_path = jobRes.path;
             const jobId = jobRes?.job_id || jobRes?.id || jobRes?.jobId;
             if (!jobId) {
               await bumpStatusKV(env, { errors_5xx: 1 });
               return errorResponseWith(
                 {
                   ok: false,
-                  error:
-                    "Upstream didn’t return a job_id for the location search.",
+                  error: "Upstream didn\u2019t return a job_id for the location search.",
                   hint: "Please try again shortly. If it keeps failing, widen the radius or include a ZIP.",
                   raw: jobRes
                 },
                 502,
-                ctx,
+                ctx2,
                 {
                   "X-TB-Source": "job-missing-id",
                   "X-TB-Upstream-Status": "502",
@@ -8724,7 +5504,6 @@ Return ONLY the improved dish name, no explanations.`
                 rid
               );
             }
-
             const finished = await pollUberJobUntilDone({ jobId, env });
             const buckets = [
               finished?.data?.stores,
@@ -8736,10 +5515,7 @@ Return ONLY the improved dish name, no explanations.`
             const candidates = [];
             for (const b of buckets)
               if (Array.isArray(b)) candidates.push(...b);
-            const titles = candidates
-              .map((c) => c?.title || c?.name || c?.storeName || c?.displayName)
-              .filter(Boolean);
-
+            const titles = candidates.map((c) => c?.title || c?.name || c?.storeName || c?.displayName).filter(Boolean);
             if (debug === "titles") {
               return respondTB(
                 withBodyAnalytics(
@@ -8750,14 +5526,13 @@ Return ONLY the improved dish name, no explanations.`
                     titles,
                     ...warnPart()
                   },
-                  ctx,
+                  ctx2,
                   rid,
                   trace
                 ),
                 200
               );
             }
-
             await bumpStatusKV(env, { location_job: 1 });
             return respondTB(
               withBodyAnalytics(
@@ -8768,7 +5543,7 @@ Return ONLY the improved dish name, no explanations.`
                   raw: finished,
                   ...warnPart()
                 },
-                ctx,
+                ctx2,
                 rid,
                 trace
               ),
@@ -8784,7 +5559,7 @@ Return ONLY the improved dish name, no explanations.`
               setWarn(
                 "Used GPS search fallback (vendor location job unavailable)."
               );
-              trace.used_path = nearby?.pathTried || "gps-search"; // [38.9]
+              trace.used_path = nearby?.pathTried || "gps-search";
               if (debug === "titles") {
                 return respondTB(
                   withBodyAnalytics(
@@ -8795,7 +5570,7 @@ Return ONLY the improved dish name, no explanations.`
                       titles: (nearby?.candidates || []).map((c) => c.title),
                       ...warnPart()
                     },
-                    ctx,
+                    ctx2,
                     rid,
                     trace
                   ),
@@ -8812,7 +5587,7 @@ Return ONLY the improved dish name, no explanations.`
                       raw: nearby?.raw,
                       ...warnPart()
                     },
-                    ctx,
+                    ctx2,
                     rid,
                     trace
                   ),
@@ -8828,7 +5603,7 @@ Return ONLY the improved dish name, no explanations.`
                     candidates: nearby?.candidates || [],
                     ...warnPart()
                   },
-                  ctx,
+                  ctx2,
                   rid,
                   trace
                 ),
@@ -8840,7 +5615,7 @@ Return ONLY the improved dish name, no explanations.`
               const secs = mSecs ? Number(mSecs[1] || 0) : 30;
               await bumpStatusKV(env, { ratelimits_429: 1 });
               return rateLimitResponse(
-                ctx,
+                ctx2,
                 rid,
                 trace,
                 secs > 0 ? secs : 30,
@@ -8856,7 +5631,7 @@ Return ONLY the improved dish name, no explanations.`
                 hint: "Please try again shortly."
               },
               502,
-              ctx,
+              ctx2,
               {
                 "X-TB-Source": "upstream-failure",
                 "X-TB-Upstream-Status": "502",
@@ -8866,7 +5641,6 @@ Return ONLY the improved dish name, no explanations.`
             );
           }
         }
-
         if (!query) {
           await bumpStatusKV(env, { errors_4xx: 1 });
           return errorResponseWith(
@@ -8881,7 +5655,7 @@ Return ONLY the improved dish name, no explanations.`
               ]
             },
             400,
-            ctx,
+            ctx2,
             {
               "X-TB-Source": "input-missing",
               trace: safeTrace(trace)
@@ -8889,7 +5663,6 @@ Return ONLY the improved dish name, no explanations.`
             rid
           );
         }
-
         const raw = await fetchMenuFromUberEats(
           env,
           query,
@@ -8900,16 +5673,13 @@ Return ONLY the improved dish name, no explanations.`
           radius
         );
         if (searchParams.get("debug") === "1") {
-          trace.used_path = trace.used_path || "fetchMenuFromUberEats"; // keep trace detail
+          trace.used_path = trace.used_path || "fetchMenuFromUberEats";
           await bumpStatusKV(env, { debug: 1 });
           const preview = buildDebugPreview(raw || {}, env);
-          return respondTB(withBodyAnalytics(preview, ctx, rid, trace), 200);
+          return respondTB(withBodyAnalytics(preview, ctx2, rid, trace), 200);
         }
-
-        const usedHost =
-          env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+        const usedHost = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
         const flattenedItems = extractMenuItemsFromUber(raw, query);
-
         if (debug === "rank") {
           const preview = rankTop(flattenedItems, 10).map((x) => ({
             section: x.section,
@@ -8925,7 +5695,7 @@ Return ONLY the improved dish name, no explanations.`
                 preview,
                 ...warnPart()
               },
-              ctx,
+              ctx2,
               rid,
               trace
             ),
@@ -8934,8 +5704,6 @@ Return ONLY the improved dish name, no explanations.`
             CORS_ALL
           );
         }
-
-        // Optional analyze enqueue
         const analyze = searchParams.get("analyze") === "1";
         let enqueued = [];
         if (analyze && Array.isArray(flattenedItems) && flattenedItems.length) {
@@ -8950,8 +5718,6 @@ Return ONLY the improved dish name, no explanations.`
             forceUS: !!forceUSFlag
           }));
         }
-
-        // store into cache (best-effort)
         try {
           await writeMenuToCache(env, cacheKey, {
             query,
@@ -8964,8 +5730,7 @@ Return ONLY the improved dish name, no explanations.`
           cacheStatus = "store-failed";
           setWarn("Could not store fresh cache (non-fatal).");
         }
-
-        if (!trace.used_path) trace.used_path = "fetchMenuFromUberEats"; // [38.9]
+        if (!trace.used_path) trace.used_path = "fetchMenuFromUberEats";
         await bumpStatusKV(env, { live: 1 });
         return respondTB(
           withBodyAnalytics(
@@ -8985,7 +5750,7 @@ Return ONLY the improved dish name, no explanations.`
               enqueued,
               ...warnPart()
             },
-            ctx,
+            ctx2,
             rid,
             trace
           ),
@@ -8994,33 +5759,24 @@ Return ONLY the improved dish name, no explanations.`
           CORS_ALL
         );
       } catch (err) {
-        // [40.2] friendlier upstream error with analytics + real Retry-After on 429
         const msg = String(err?.message || err || "");
         const m = msg.match(/\b(429|500|502|503|504)\b/);
         const upstreamStatus = m ? Number(m[1]) : 500;
-
-        // Pull seconds if the message was like "RETRYABLE_429:NN"
         let retrySecs = 0;
         const mSecs = msg.match(/RETRYABLE_429:(\d+)/);
         if (mSecs) retrySecs = Number(mSecs[1] || 0);
-
         if (upstreamStatus === 429) {
           await bumpStatusKV(env, { ratelimits_429: 1 });
           return rateLimitResponse(
-            ctx,
+            ctx2,
             rid,
             trace,
             retrySecs > 0 ? retrySecs : 30,
             "upstream-failure"
           );
         }
-
         await bumpStatusKV(env, { errors_5xx: 1 });
-        const hint =
-          upstreamStatus === 429
-            ? "Please retry in ~30–60 seconds."
-            : "Please try again shortly.";
-
+        const hint = upstreamStatus === 429 ? "Please retry in ~30\u201360 seconds." : "Please try again shortly.";
         return errorResponseWith(
           {
             ok: false,
@@ -9029,7 +5785,7 @@ Return ONLY the improved dish name, no explanations.`
             hint
           },
           upstreamStatus,
-          ctx,
+          ctx2,
           {
             "X-TB-Source": "upstream-failure",
             "X-TB-Upstream-Status": String(upstreamStatus),
@@ -9039,8 +5795,6 @@ Return ONLY the improved dish name, no explanations.`
         );
       }
     }
-
-    // Demo examples for clients
     if (pathname === "/menu/search/examples" && request.method === "GET") {
       const examples = [
         "/menu/search?query=McDonald%27s&address=Miami,%20FL&top=10",
@@ -9050,23 +5804,32 @@ Return ONLY the improved dish name, no explanations.`
         "/menu/search?query=Chick-fil-A&address=Atlanta,%20GA&top=10",
         "/menu/search?query=Shake%20Shack&address=New%20York,%20NY&skip_party=1&top=10"
       ];
-      // Reuse ctx for consistent headers
-      const ctx = {
-        served_at: new Date().toISOString(),
+      const ctx2 = {
+        served_at: (/* @__PURE__ */ new Date()).toISOString(),
         version: getVersion(env)
       };
       return jsonResponseWith(
-        { ok: true, examples, served_at: ctx.served_at, version: ctx.version },
+        { ok: true, examples, served_at: ctx2.served_at, version: ctx2.version },
         200,
         {
-          "X-TB-Version": String(ctx.version),
-          "X-TB-Served-At": String(ctx.served_at)
+          "X-TB-Version": String(ctx2.version),
+          "X-TB-Served-At": String(ctx2.served_at)
         }
       );
     }
-
-    // NEW: App-friendly wrapper that internally calls our own handler (no external fetch)
     if (pathname === "/menu/search") {
+      let respondTB = function(body, status = 200, opts = {}, extraHeaders = {}) {
+        const source = body?.source || opts.source || "";
+        const cache = body?.cache || opts.cache || "";
+        const warning = Boolean(body?.warning || opts.warning);
+        return jsonResponseWithTB(
+          body,
+          status,
+          { ctx: ctx2, rid: request_id, source, cache, warning },
+          extraHeaders
+        );
+      };
+      __name(respondTB, "respondTB");
       const query = (searchParams.get("query") || "").trim();
       const address = (searchParams.get("address") || "").trim();
       const top = searchParams.get("top") || "";
@@ -9074,23 +5837,8 @@ Return ONLY the improved dish name, no explanations.`
       const place_id = searchParams.get("place_id") || "";
       const skip_drinks = searchParams.get("skip_drinks") || "";
       const skip_party = searchParams.get("skip_party") || "";
-      // [41.13] unified ctx/rid helpers
-      const ctx = makeCtx(env);
+      const ctx2 = makeCtx(env);
       const request_id = newRequestId();
-
-      function respondTB(body, status = 200, opts = {}, extraHeaders = {}) {
-        const source = body?.source || opts.source || "";
-        const cache = body?.cache || opts.cache || "";
-        const warning = Boolean(body?.warning || opts.warning);
-        return jsonResponseWithTB(
-          body,
-          status,
-          { ctx, rid: request_id, source, cache, warning },
-          extraHeaders
-        );
-      }
-
-      // [37B] ── Validate inputs with friendly hints
       if (!isNonEmptyString(query) && !isNonEmptyString(address)) {
         return badRequest(
           'Missing "query" and "address".',
@@ -9098,7 +5846,7 @@ Return ONLY the improved dish name, no explanations.`
             "Example 1: /menu/search?query=McDonald%27s&address=Miami,%20FL",
             "Example 2: /menu/search?query=Starbucks&address=New%20York,%20NY"
           ].join("\n"),
-          ctx,
+          ctx2,
           null,
           [
             "/menu/search?query=McDonald%27s&address=Miami,%20FL",
@@ -9106,12 +5854,11 @@ Return ONLY the improved dish name, no explanations.`
           ]
         );
       }
-
       if (!isNonEmptyString(query)) {
         return badRequest(
           'Missing "query" (restaurant name).',
           "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL",
-          ctx,
+          ctx2,
           null,
           [
             "/menu/search?query=Starbucks&address=Seattle,%20WA",
@@ -9119,12 +5866,11 @@ Return ONLY the improved dish name, no explanations.`
           ]
         );
       }
-
       if (!isNonEmptyString(address)) {
         return badRequest(
           'Missing "address" (city, state).',
           "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL",
-          ctx,
+          ctx2,
           null,
           [
             "/menu/search?query=McDonald%27s&address=Miami,%20FL",
@@ -9132,76 +5878,62 @@ Return ONLY the improved dish name, no explanations.`
           ]
         );
       }
-
-      // Soft warning if address shape looks unusual
       let inputWarning = null;
       if (!looksLikeCityState(address)) {
-        inputWarning =
-          'Address looks unusual. Try "City, ST" or "City, ST 12345".';
+        inputWarning = 'Address looks unusual. Try "City, ST" or "City, ST 12345".';
       }
-
-      // [37B] ── If a ZIP is present but no state code, hard error with a friendly hint
       const hasZip = /\b\d{5}\b/.test(address);
       const hasState = /,\s*[A-Za-z]{2}\b/.test(address);
       if (hasZip && !hasState) {
         return badRequest(
           "Address has a ZIP but no state code (use two-letter state).",
           "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL%2033131",
-          ctx,
+          ctx2,
           null,
           ["/menu/search?query=McDonald%27s&address=Miami,%20FL%2033131"]
         );
       }
-
-      // [37B] ── If state code is lowercase, warn and create a preview with uppercased state
       let address_preview = null;
       if (hasLowercaseState(address)) {
         const fixed = normalizeCityStateAddress(address);
         if (fixed && fixed !== address) {
           address_preview = fixed;
-          inputWarning = inputWarning
-            ? `${inputWarning} Also, we adjusted the state code to uppercase in address_preview.`
-            : 'State code looks lowercase; see "address_preview" for the uppercased version.';
+          inputWarning = inputWarning ? `${inputWarning} Also, we adjusted the state code to uppercase in address_preview.` : 'State code looks lowercase; see "address_preview" for the uppercased version.';
         }
       }
-
-      // [37B] ── Validate optional flags with friendly messages
       if (analyze && !is01(analyze)) {
         return badRequest(
           'Bad "analyze" value. Use 0 or 1.',
           "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL&analyze=1",
-          ctx,
+          ctx2,
           null,
           ["/menu/search?query=McDonald%27s&address=Miami,%20FL&analyze=1"]
         );
       }
-
       if (skip_drinks && !is01(skip_drinks)) {
         return badRequest(
           'Bad "skip_drinks" value. Use 0 or 1.',
           "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL&skip_drinks=1",
-          ctx,
+          ctx2,
           null,
           ["/menu/search?query=McDonald%27s&address=Miami,%20FL&skip_drinks=1"]
         );
       }
-
       if (skip_party && !is01(skip_party)) {
         return badRequest(
           'Bad "skip_party" value. Use 0 or 1.',
           "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL&skip_party=1",
-          ctx,
+          ctx2,
           null,
           ["/menu/search?query=McDonald%27s&address=Miami,%20FL&skip_party=1"]
         );
       }
-
       if (top) {
         if (!isPositiveInt(top)) {
           return badRequest(
             'Bad "top" value. Must be a whole number.',
             "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL&top=25",
-            ctx,
+            ctx2,
             null,
             ["/menu/search?query=McDonald%27s&address=Miami,%20FL&top=5"]
           );
@@ -9211,19 +5943,15 @@ Return ONLY the improved dish name, no explanations.`
           return badRequest(
             'Out-of-range "top". Minimum is 1.',
             "Example: /menu/search?query=McDonald%27s&address=Miami,%20FL&top=5",
-            ctx,
+            ctx2,
             null,
             ["/menu/search?query=McDonald%27s&address=Miami,%20FL&top=5"]
           );
         }
         if (n > LIMITS.TOP_MAX) {
-          inputWarning = inputWarning
-            ? `${inputWarning} "top" was capped at ${LIMITS.TOP_MAX}.`
-            : `"top" was capped at ${LIMITS.TOP_MAX}.`;
+          inputWarning = inputWarning ? `${inputWarning} "top" was capped at ${LIMITS.TOP_MAX}.` : `"top" was capped at ${LIMITS.TOP_MAX}.`;
         }
       }
-
-      // [37B] ── Clamp top within safe range
       const topNum = Math.min(
         LIMITS.TOP_MAX,
         Math.max(LIMITS.TOP_MIN, parseInt(top || LIMITS.DEFAULT_TOP, 10))
@@ -9235,8 +5963,6 @@ Return ONLY the improved dish name, no explanations.`
         skip_drinks: skip_drinks ? Number(skip_drinks) : 0,
         skip_party: skip_party ? Number(skip_party) : 0
       });
-
-      // Always force U.S. for this endpoint
       const params = new URLSearchParams({
         query,
         address,
@@ -9247,8 +5973,6 @@ Return ONLY the improved dish name, no explanations.`
       if (place_id) params.set("place_id", place_id);
       if (skip_drinks) params.set("skip_drinks", skip_drinks);
       if (skip_party) params.set("skip_party", skip_party);
-
-      // 🔧 INTERNAL DISPATCH: call our own route directly (no network), avoiding 404s
       const innerReq = new Request(
         new URL(`/menu/uber-test?${params.toString()}`, url),
         {
@@ -9256,11 +5980,9 @@ Return ONLY the improved dish name, no explanations.`
           headers: { accept: "application/json" }
         }
       );
-      const innerRes = await _worker_impl.fetch(innerReq, env, ctx);
+      const innerRes = await _worker_impl.fetch(innerReq, env, ctx2);
       if (!innerRes || !innerRes.ok) {
         const status = innerRes?.status ?? 502;
-
-        // Try to parse JSON body; fall back to text
         let upstreamError = null;
         try {
           const raw = await innerRes.text();
@@ -9273,25 +5995,18 @@ Return ONLY the improved dish name, no explanations.`
         } catch {
           upstreamError = null;
         }
-
         const msg = friendlyUpstreamMessage(status);
-        const hint =
-          status === 429
-            ? "Please retry in ~30–60 seconds."
-            : "Please try again shortly.";
-
+        const hint = status === 429 ? "Please retry in ~30\u201360 seconds." : "Please try again shortly.";
         return errorResponseWith(
           {
             ok: false,
             error: msg,
             status,
-            upstream_error: upstreamError
-              ? String(upstreamError).slice(0, 300)
-              : null,
+            upstream_error: upstreamError ? String(upstreamError).slice(0, 300) : null,
             hint
           },
           status,
-          ctx,
+          ctx2,
           {
             "X-TB-Source": "inner-failure",
             "X-TB-Upstream-Status": String(status),
@@ -9300,21 +6015,17 @@ Return ONLY the improved dish name, no explanations.`
           request_id
         );
       }
-
       const data = await innerRes.json();
       if (data?.trace?.host) trace.host = data.trace.host;
       if (data?.trace?.used_path) trace.used_path = data.trace.used_path;
-
       const items = (data?.data?.items || []).map((it) => ({
         name: it.name || it.title || "",
         section: it.section || "",
         price: typeof it.price === "number" ? it.price : null,
         price_display: it.price_display || null,
-        calories_display:
-          (it.price_display || "").match(/\b\d+\s*Cal/i)?.[0] || null,
+        calories_display: (it.price_display || "").match(/\b\d+\s*Cal/i)?.[0] || null,
         source: "uber_us"
       }));
-
       return respondTB(
         withBodyAnalytics(
           {
@@ -9326,22 +6037,17 @@ Return ONLY the improved dish name, no explanations.`
             total: items.length,
             items,
             enqueued: data.enqueued || [],
-            ...(inputWarning ? { warning: inputWarning } : {}),
-            ...(address_preview ? { address_preview } : {}),
+            ...inputWarning ? { warning: inputWarning } : {},
+            ...address_preview ? { address_preview } : {},
             limits: LIMITS
           },
-          ctx,
+          ctx2,
           request_id,
           trace
         ),
         200
       );
     }
-
-    // --- /molecular/analyze (Phase 1 MVP) ---
-    // Usage examples:
-    //   /molecular/analyze?ingredient=garlic
-    //   /molecular/analyze?compound=curcumin
     if (pathname === "/molecular/analyze") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -9356,7 +6062,6 @@ Return ONLY the improved dish name, no explanations.`
       try {
         const byIngredient = (url.searchParams.get("ingredient") || "").trim();
         const byCompound = (url.searchParams.get("compound") || "").trim();
-
         if (!byIngredient && !byCompound) {
           return new Response(
             JSON.stringify({
@@ -9376,27 +6081,17 @@ Return ONLY the improved dish name, no explanations.`
             }
           );
         }
-
-        // 1) Pick a search term (lowercased)
         const term = (byCompound || byIngredient).toLowerCase();
-
-        // 2) Find matching compounds (name/common_name LIKE)
         const compRes = await env.D1_DB.prepare(
           `SELECT id, name, common_name, formula, cid, description
            FROM compounds
            WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
            ORDER BY name LIMIT 10`
-        )
-          .bind(`%${term}%`, `%${term}%`)
-          .all();
-
+        ).bind(`%${term}%`, `%${term}%`).all();
         const compounds = compRes?.results || [];
-
-        // 3) Fetch organ effects for those compounds
         let effects = [];
         if (compounds.length) {
           const ids = compounds.map((c) => c.id);
-          // Build a simple IN (?, ?, ?) clause
           const qs = ids.map(() => "?").join(", ");
           const effRes = await env.D1_DB.prepare(
             `SELECT e.compound_id, e.organ, e.effect, e.strength, e.notes,
@@ -9405,13 +6100,9 @@ Return ONLY the improved dish name, no explanations.`
              JOIN compounds c ON c.id = e.compound_id
              WHERE e.compound_id IN (${qs})
              ORDER BY c.name, e.organ`
-          )
-            .bind(...ids)
-            .all();
+          ).bind(...ids).all();
           effects = effRes?.results || [];
         }
-
-        // 4) Organize a tiny summary (organs → list of (compound, effect, strength))
         const organs = {};
         for (const row of effects) {
           const key = row.organ || "unknown";
@@ -9425,7 +6116,6 @@ Return ONLY the improved dish name, no explanations.`
             notes: row.notes || null
           });
         }
-
         const body = {
           ok: true,
           query: {
@@ -9436,7 +6126,6 @@ Return ONLY the improved dish name, no explanations.`
           compounds,
           organs
         };
-
         return new Response(JSON.stringify(body, null, 2), {
           status: 200,
           headers: {
@@ -9457,10 +6146,6 @@ Return ONLY the improved dish name, no explanations.`
         );
       }
     }
-
-    // --- /molecular/map (ingredient -> compounds + organ summary) ---
-    // Usage:
-    //   /molecular/map?ingredient=garlic
     if (pathname === "/molecular/map") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -9473,9 +6158,7 @@ Return ONLY the improved dish name, no explanations.`
         });
       }
       try {
-        const ingredient = (url.searchParams.get("ingredient") || "")
-          .trim()
-          .toLowerCase();
+        const ingredient = (url.searchParams.get("ingredient") || "").trim().toLowerCase();
         if (!ingredient) {
           return new Response(
             JSON.stringify({
@@ -9492,21 +6175,14 @@ Return ONLY the improved dish name, no explanations.`
             }
           );
         }
-
-        // Find compounds where name or common_name matches the ingredient term
         const compRes = await env.D1_DB.prepare(
           `SELECT id, name, common_name, formula, cid, description
            FROM compounds
            WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
            ORDER BY name LIMIT 15`
-        )
-          .bind(`%${ingredient}%`, `%${ingredient}%`)
-          .all();
-
+        ).bind(`%${ingredient}%`, `%${ingredient}%`).all();
         const compounds = compRes?.results || [];
         const ids = compounds.map((c) => c.id);
-
-        // Pull organ effects for those compounds
         let effects = [];
         if (ids.length) {
           const qs = ids.map(() => "?").join(", ");
@@ -9517,13 +6193,9 @@ Return ONLY the improved dish name, no explanations.`
              JOIN compounds c ON c.id = e.compound_id
              WHERE e.compound_id IN (${qs})
              ORDER BY c.name, e.organ`
-          )
-            .bind(...ids)
-            .all();
+          ).bind(...ids).all();
           effects = effRes?.results || [];
         }
-
-        // Build organ -> [effects] map
         const organs = {};
         for (const row of effects) {
           const key = row.organ || "unknown";
@@ -9537,13 +6209,9 @@ Return ONLY the improved dish name, no explanations.`
             notes: row.notes || null
           });
         }
-
-        // Tiny “headline” summary for UI: organ -> (+benefit / -risk) counts
         const organSummary = {};
         for (const [org, list] of Object.entries(organs)) {
-          let plus = 0,
-            minus = 0,
-            neutral = 0;
+          let plus = 0, minus = 0, neutral = 0;
           for (const e of list) {
             if (e.effect === "benefit") plus++;
             else if (e.effect === "risk") minus++;
@@ -9551,7 +6219,6 @@ Return ONLY the improved dish name, no explanations.`
           }
           organSummary[org] = { plus, minus, neutral };
         }
-
         return new Response(
           JSON.stringify(
             {
@@ -9586,11 +6253,6 @@ Return ONLY the improved dish name, no explanations.`
         );
       }
     }
-
-    // --- /molecular/compound (get one compound + its organ effects) ---
-    // Usage:
-    //   /molecular/compound?cid=969516
-    //   /molecular/compound?name=curcumin
     if (pathname === "/molecular/compound") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -9603,10 +6265,9 @@ Return ONLY the improved dish name, no explanations.`
         });
       }
       try {
-        const cid = (url.searchParams.get("cid") || "").trim();
+        const cid2 = (url.searchParams.get("cid") || "").trim();
         const name = (url.searchParams.get("name") || "").trim().toLowerCase();
-
-        if (!cid && !name) {
+        if (!cid2 && !name) {
           return new Response(
             JSON.stringify({
               ok: false,
@@ -9625,39 +6286,29 @@ Return ONLY the improved dish name, no explanations.`
             }
           );
         }
-
-        // 1) Find the compound (prefer cid if given; else exact name match fallback to LIKE)
         let compRow = null;
-        if (cid) {
+        if (cid2) {
           const rs = await env.D1_DB.prepare(
             `SELECT id, name, common_name, formula, cid, description
              FROM compounds WHERE cid = ? LIMIT 1`
-          )
-            .bind(cid)
-            .all();
+          ).bind(cid2).all();
           compRow = rs?.results?.[0] || null;
         }
         if (!compRow && name) {
           const rsExact = await env.D1_DB.prepare(
             `SELECT id, name, common_name, formula, cid, description
              FROM compounds WHERE LOWER(name) = ? LIMIT 1`
-          )
-            .bind(name)
-            .all();
+          ).bind(name).all();
           compRow = rsExact?.results?.[0] || null;
-
           if (!compRow) {
             const rsLike = await env.D1_DB.prepare(
               `SELECT id, name, common_name, formula, cid, description
                FROM compounds WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ? 
                ORDER BY name LIMIT 1`
-            )
-              .bind(`%${name}%`, `%${name}%`)
-              .all();
+            ).bind(`%${name}%`, `%${name}%`).all();
             compRow = rsLike?.results?.[0] || null;
           }
         }
-
         if (!compRow) {
           return new Response(
             JSON.stringify({ ok: false, error: "compound_not_found" }),
@@ -9670,20 +6321,13 @@ Return ONLY the improved dish name, no explanations.`
             }
           );
         }
-
-        // 2) Fetch organ effects for that compound
         const effRes = await env.D1_DB.prepare(
           `SELECT organ, effect, strength, notes
            FROM compound_organ_effects
            WHERE compound_id = ?
            ORDER BY organ`
-        )
-          .bind(compRow.id)
-          .all();
-
+        ).bind(compRow.id).all();
         const effects = effRes?.results || [];
-
-        // 3) Organize a friendly summary counts
         const organ_summary = {};
         for (const e of effects) {
           const k = e.organ || "unknown";
@@ -9693,7 +6337,6 @@ Return ONLY the improved dish name, no explanations.`
           else if (e.effect === "risk") organ_summary[k].minus++;
           else organ_summary[k].neutral++;
         }
-
         return new Response(
           JSON.stringify(
             {
@@ -9726,8 +6369,6 @@ Return ONLY the improved dish name, no explanations.`
         );
       }
     }
-
-    // --- DEBUG: /debug/kv-tier?user_id=...  (reads KV tier directly)
     if (pathname === "/debug/kv-tier") {
       const uid = (url.searchParams.get("user_id") || "").trim();
       if (!uid) {
@@ -9744,9 +6385,7 @@ Return ONLY the improved dish name, no explanations.`
       }
       try {
         const key = `tier/user:${uid}`;
-        const val = await (env.LEXICON_CACHE
-          ? env.LEXICON_CACHE.get(key)
-          : null);
+        const val = await (env.LEXICON_CACHE ? env.LEXICON_CACHE.get(key) : null);
         return new Response(
           JSON.stringify({ ok: true, user_id: uid, key, value: val ?? null }),
           {
@@ -9770,8 +6409,6 @@ Return ONLY the improved dish name, no explanations.`
         );
       }
     }
-
-    // --- DEBUG: /debug/kv-set?user_id=...&tier=premium  (writes KV from the worker)
     if (pathname === "/debug/kv-set") {
       const uid = (url.searchParams.get("user_id") || "").trim();
       const tier = (url.searchParams.get("tier") || "").trim();
@@ -9797,8 +6434,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       });
     }
-
-    // --- /schema/examples (returns example payloads the iOS UI can rely on)
     if (pathname === "/schema/examples") {
       const MolecularDrawer = {
         ok: true,
@@ -9843,7 +6478,6 @@ Return ONLY the improved dish name, no explanations.`
           liver: { plus: 1, minus: 0, neutral: 0 }
         }
       };
-
       const RecipeCard = {
         ok: true,
         component: "RecipeCard",
@@ -9884,41 +6518,39 @@ Return ONLY the improved dish name, no explanations.`
             ]
           },
           organ_summary: { gut: { plus: 0, minus: 1, neutral: 0 } },
-          organ_headlines: ["Gut: ⚠️ Risk"]
+          organ_headlines: ["Gut: \u26A0\uFE0F Risk"]
         },
         molecular_human: {
           organ_tips: [
-            "Gut: may bother sensitive tummies—consider smaller portions or swaps."
+            "Gut: may bother sensitive tummies\u2014consider smaller portions or swaps."
           ]
         },
-        molecular_badge: "Molecular Insights: 2 compounds • 1 organ"
+        molecular_badge: "Molecular Insights: 2 compounds \u2022 1 organ"
       };
-
       const InsightsFeed = {
         ok: true,
         component: "InsightsFeed",
         version: "v1",
         period: { range: "last_7_days" },
-        generated_at: new Date().toISOString(),
+        generated_at: (/* @__PURE__ */ new Date()).toISOString(),
         items: [
           {
             organ: "heart",
-            icon: "❤️",
-            headline: "Heart: 👍 Benefit",
+            icon: "\u2764\uFE0F",
+            headline: "Heart: \u{1F44D} Benefit",
             tip: "Generally friendly in normal portions.",
             sentiment: "Supportive"
           },
           {
             organ: "gut",
-            icon: "🦠",
-            headline: "Gut: ⚠️ Risk",
-            tip: "May bother sensitive tummies—consider smaller portions or swaps.",
+            icon: "\u{1F9A0}",
+            headline: "Gut: \u26A0\uFE0F Risk",
+            tip: "May bother sensitive tummies\u2014consider smaller portions or swaps.",
             sentiment: "Caution"
           }
         ],
         badge: "This week: 2 insights"
       };
-
       const payload = {
         ok: true,
         schemas: { MolecularDrawer, RecipeCard, InsightsFeed }
@@ -9931,7 +6563,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       });
     }
-
     if (pathname === "/insights/feed") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -9944,20 +6575,15 @@ Return ONLY the improved dish name, no explanations.`
         });
       }
       const ORG_ICON = {
-        heart: "❤️",
-        gut: "🦠",
-        liver: "🧪",
-        brain: "🧠",
-        immune: "🛡️"
+        heart: "\u2764\uFE0F",
+        gut: "\u{1F9A0}",
+        liver: "\u{1F9EA}",
+        brain: "\u{1F9E0}",
+        immune: "\u{1F6E1}\uFE0F"
       };
       const userId = (url.searchParams.get("user_id") || "").trim();
       const userPrefsRaw = await loadUserPrefs(env, userId);
-      const userPrefs =
-        userPrefsRaw && typeof userPrefsRaw === "object"
-          ? userPrefsRaw
-          : { allergens: [], fodmap: {} };
-
-      // === Step 20C: live aggregation from R2 results (sorted newest-first, richer items)
+      const userPrefs = userPrefsRaw && typeof userPrefsRaw === "object" ? userPrefsRaw : { allergens: [], fodmap: {} };
       const liveItems = [];
       let next_cursor = null;
       const limitR2 = Math.max(
@@ -9965,20 +6591,16 @@ Return ONLY the improved dish name, no explanations.`
         Math.min(50, parseInt(url.searchParams.get("r2_limit") || "10", 10))
       );
       if (env.R2_BUCKET) {
-        const r2Cursor = url.searchParams.get("r2_cursor") || undefined;
+        const r2Cursor = url.searchParams.get("r2_cursor") || void 0;
         const listing = await env.R2_BUCKET.list({
           prefix: "results/",
           limit: Math.max(limitR2, 25),
           cursor: r2Cursor
         });
-        const objs = (listing.objects || [])
-          .map((o) => ({
-            key: o.key,
-            uploaded: o.uploaded ? new Date(o.uploaded).getTime() : 0
-          }))
-          .sort((a, b) => b.uploaded - a.uploaded)
-          .slice(0, limitR2);
-
+        const objs = (listing.objects || []).map((o) => ({
+          key: o.key,
+          uploaded: o.uploaded ? new Date(o.uploaded).getTime() : 0
+        })).sort((a, b) => b.uploaded - a.uploaded).slice(0, limitR2);
         for (const obj of objs) {
           const r = await env.R2_BUCKET.get(obj.key);
           if (!r) continue;
@@ -9987,45 +6609,17 @@ Return ONLY the improved dish name, no explanations.`
             const out = js;
             const tb = js?.tummy_barometer || {};
             const rawLabel = (tb.label || "Unknown").toLowerCase();
-
-            const sentiment =
-              rawLabel === "avoid"
-                ? "Avoid"
-                : rawLabel === "caution"
-                  ? "Caution"
-                  : rawLabel === "mixed"
-                    ? "Mixed"
-                    : rawLabel === "likely ok"
-                      ? "Supportive"
-                      : "Unknown";
-
-            const icon =
-              sentiment === "Avoid"
-                ? "⚠️"
-                : sentiment === "Caution"
-                  ? "⚠️"
-                  : sentiment === "Mixed"
-                    ? "↔️"
-                    : sentiment === "Supportive"
-                      ? "❤️"
-                      : "🧬";
-
+            const sentiment = rawLabel === "avoid" ? "Avoid" : rawLabel === "caution" ? "Caution" : rawLabel === "mixed" ? "Mixed" : rawLabel === "likely ok" ? "Supportive" : "Unknown";
+            const icon = sentiment === "Avoid" ? "\u26A0\uFE0F" : sentiment === "Caution" ? "\u26A0\uFE0F" : sentiment === "Mixed" ? "\u2194\uFE0F" : sentiment === "Supportive" ? "\u2764\uFE0F" : "\u{1F9EC}";
             const flags = js?.flags || {};
             let organ = "gut";
             if (flags.cardiac_hint) organ = "heart";
             else if (flags.neuro_hint) organ = "brain";
             else if (flags.hepatic_hint) organ = "liver";
             else if (flags.immune_hint) organ = "immune";
-            const tip =
-              sentiment === "Avoid"
-                ? "May bother sensitive tummies—consider smaller portions or swaps."
-                : sentiment === "Caution"
-                  ? "Moderate risk—portion size matters."
-                  : "Generally friendly in normal portions.";
-
+            const tip = sentiment === "Avoid" ? "May bother sensitive tummies\u2014consider smaller portions or swaps." : sentiment === "Caution" ? "Moderate risk\u2014portion size matters." : "Generally friendly in normal portions.";
             const details_url = new URL(`/${obj.key}`, url).toString();
             const id = (obj.key || "").replace(/^results\/|\.json$/g, "");
-
             const feedItem = {
               id,
               organ,
@@ -10050,7 +6644,6 @@ Return ONLY the improved dish name, no explanations.`
                 `${Math.round(out.nutrition_summary.carbs_g)} g carbs`
               ];
             }
-
             liveItems.push(feedItem);
           } catch {
             continue;
@@ -10058,9 +6651,7 @@ Return ONLY the improved dish name, no explanations.`
         }
         next_cursor = listing.truncated ? listing.cursor : null;
       }
-
-      // De-duplicate by (place_id|dish_name)
-      const seen = new Set();
+      const seen = /* @__PURE__ */ new Set();
       const liveItemsDedup = [];
       for (const it of liveItems) {
         const key = `${it.place_id || "unknown"}|${(it.dish_name || "").toLowerCase()}`;
@@ -10068,42 +6659,27 @@ Return ONLY the improved dish name, no explanations.`
         seen.add(key);
         liveItemsDedup.push(it);
       }
-
-      const liveSourceItems = liveItemsDedup.length
-        ? liveItemsDedup
-        : liveItems;
+      const liveSourceItems = liveItemsDedup.length ? liveItemsDedup : liveItems;
       const staticItems = [
         {
           organ: "gut",
           icon: ORG_ICON.gut,
-          headline: "Gut: ⚠️ Risk",
-          tip: "May bother sensitive tummies—consider smaller portions or swaps.",
+          headline: "Gut: \u26A0\uFE0F Risk",
+          tip: "May bother sensitive tummies\u2014consider smaller portions or swaps.",
           sentiment: "Caution"
         }
       ];
-
       const source = (url.searchParams.get("source") || "auto").toLowerCase();
-      const items =
-        source === "live"
-          ? liveSourceItems
-          : source === "static"
-            ? staticItems
-            : liveSourceItems.length
-              ? liveSourceItems
-              : staticItems;
+      const items = source === "live" ? liveSourceItems : source === "static" ? staticItems : liveSourceItems.length ? liveSourceItems : staticItems;
       const limit = Math.max(
         1,
         Math.min(10, parseInt(url.searchParams.get("limit") || "5", 10))
       );
       const p = (url.searchParams.get("period") || "").toLowerCase().trim();
-      const ALLOWED = new Set(["last_7_days", "last_30_days", "all_time"]);
+      const ALLOWED = /* @__PURE__ */ new Set(["last_7_days", "last_30_days", "all_time"]);
       const period = ALLOWED.has(p) ? p : "last_7_days";
-      const organParam = (url.searchParams.get("organ") || "")
-        .toLowerCase()
-        .trim();
-      const filtered = organParam
-        ? items.filter((it) => (it.organ || "").toLowerCase() === organParam)
-        : items;
+      const organParam = (url.searchParams.get("organ") || "").toLowerCase().trim();
+      const filtered = organParam ? items.filter((it) => (it.organ || "").toLowerCase() === organParam) : items;
       const ORDER = {
         Supportive: 1,
         Mixed: 2,
@@ -10111,41 +6687,31 @@ Return ONLY the improved dish name, no explanations.`
         Avoid: 4,
         Unknown: 0
       };
-      const minParam = (
-        url.searchParams.get("min_sentiment") || ""
-      ).toLowerCase();
-      const MIN =
-        { supportive: 1, mixed: 2, caution: 3, avoid: 4 }[minParam] ?? 0;
+      const minParam = (url.searchParams.get("min_sentiment") || "").toLowerCase();
+      const MIN = { supportive: 1, mixed: 2, caution: 3, avoid: 4 }[minParam] ?? 0;
       const filteredItems = filtered.filter(
         (it) => (ORDER[it.sentiment] || 0) >= MIN
       );
       const sliced = filteredItems.slice(0, limit);
-
       const body = {
         ok: true,
         component: "InsightsFeed",
         version: "v1",
         period: { range: period },
-        generated_at: new Date().toISOString(),
+        generated_at: (/* @__PURE__ */ new Date()).toISOString(),
         items: sliced,
         badge: `This week: ${sliced.length} insights`,
-        ...(organParam ? { filter: { organ: organParam } } : {}),
+        ...organParam ? { filter: { organ: organParam } } : {},
         user_prefs: userPrefs
       };
       body.r2_next_cursor = next_cursor;
-      // Quick totals from current items (not full R2 yet)
       const summary_counts = { Supportive: 0, Mixed: 0, Caution: 0, Avoid: 0 };
       for (const it of sliced) {
         if (summary_counts[it.sentiment] != null)
           summary_counts[it.sentiment]++;
       }
       body.summary_counts = summary_counts;
-      const humanHeadline =
-        period === "last_7_days"
-          ? "Your recent wellness snapshot"
-          : period === "last_30_days"
-            ? "Monthly wellness summary"
-            : "All-time molecular insights";
+      const humanHeadline = period === "last_7_days" ? "Your recent wellness snapshot" : period === "last_30_days" ? "Monthly wellness summary" : "All-time molecular insights";
       body.human_headline = humanHeadline;
       return new Response(JSON.stringify(body, null, 2), {
         status: 200,
@@ -10155,7 +6721,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       });
     }
-
     if (pathname === "/insights/debug/r2-list") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -10176,7 +6741,6 @@ Return ONLY the improved dish name, no explanations.`
           }
         );
       }
-
       const limit = Math.max(
         1,
         Math.min(50, parseInt(url.searchParams.get("limit") || "10", 10))
@@ -10203,7 +6767,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       );
     }
-
     if (pathname === "/insights/debug/status") {
       const gate = await requirePremium(env, url);
       if (!gate.ok)
@@ -10214,20 +6777,16 @@ Return ONLY the improved dish name, no explanations.`
             "access-control-allow-origin": "*"
           }
         });
-
       const okR2 = !!env.R2_BUCKET;
       const okD1 = !!env.D1_DB;
       const okKV = !!env.LEXICON_CACHE;
       const modeHint = okR2 ? "live" : "static";
-
       const body = {
         ok: true,
         version: "v1",
         active_sources: { R2: okR2, D1: okD1, KV: okKV },
         default_mode: modeHint,
-        note: okR2
-          ? "Live Insights pulling from R2 results."
-          : "Static Insights mode (no R2 bucket bound)."
+        note: okR2 ? "Live Insights pulling from R2 results." : "Static Insights mode (no R2 bucket bound)."
       };
       return new Response(JSON.stringify(body, null, 2), {
         status: 200,
@@ -10237,7 +6796,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       });
     }
-
     if (pathname === "/insights/debug/sample") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -10249,10 +6807,7 @@ Return ONLY the improved dish name, no explanations.`
           }
         });
       }
-
-      const key =
-        url.searchParams.get("key") ||
-        "results/0032d323-560f-469f-a496-195812a9efd4.json";
+      const key = url.searchParams.get("key") || "results/0032d323-560f-469f-a496-195812a9efd4.json";
       const obj = await env.R2_BUCKET.get(key);
       if (!obj) {
         return new Response(
@@ -10263,7 +6818,6 @@ Return ONLY the improved dish name, no explanations.`
           }
         );
       }
-
       const text = await obj.text();
       let js;
       try {
@@ -10271,8 +6825,6 @@ Return ONLY the improved dish name, no explanations.`
       } catch {
         js = null;
       }
-
-      // Extract key metrics
       const tb = js?.tummy_barometer || {};
       const flags = js?.flags || {};
       const summary = {
@@ -10282,7 +6834,6 @@ Return ONLY the improved dish name, no explanations.`
         gluten: !!flags.gluten_hint,
         dairy: !!flags.dairy_hint
       };
-
       return new Response(
         JSON.stringify(
           { ok: true, key, summary, preview: js?.sentences?.slice(0, 3) || [] },
@@ -10298,7 +6849,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       );
     }
-
     if (pathname === "/insights/debug/aggregate") {
       const gate = await requirePremium(env, url);
       if (!gate.ok) {
@@ -10319,7 +6869,6 @@ Return ONLY the improved dish name, no explanations.`
           }
         );
       }
-
       const limit = Math.max(
         1,
         Math.min(50, parseInt(url.searchParams.get("limit") || "10", 10))
@@ -10351,7 +6900,6 @@ Return ONLY the improved dish name, no explanations.`
           counts.Unknown = (counts.Unknown || 0) + 1;
         }
       }
-
       return new Response(
         JSON.stringify(
           { ok: true, scanned: (listing.objects || []).length, counts, sample },
@@ -10367,8 +6915,6 @@ Return ONLY the improved dish name, no explanations.`
         }
       );
     }
-
-    // --- DEBUG: probe Spoonacular directly ---
     if (pathname === "/debug/spoonacular") {
       const dish = url.searchParams.get("dish") || "Crunchwrap Supreme";
       try {
@@ -10379,7 +6925,8 @@ Return ONLY the improved dish name, no explanations.`
         let jsonOut = null;
         try {
           jsonOut = JSON.parse(text);
-        } catch {}
+        } catch {
+        }
         return json({
           ok: res.ok,
           status: res.status,
@@ -10393,21 +6940,15 @@ Return ONLY the improved dish name, no explanations.`
         return json({ ok: false, dish, error: String(e?.message || e) });
       }
     }
-
-    // --- DEBUG: probe Zestful by first pulling a recipe then parsing its lines ---
     if (pathname === "/debug/zestful") {
       const dish = url.searchParams.get("dish") || "Chicken Alfredo";
       try {
         const spoon = await spoonacularFetch(env, dish, null, "en");
-        const lines = Array.isArray(spoon?.ingredients)
-          ? spoon.ingredients
-          : [];
-
+        const lines = Array.isArray(spoon?.ingredients) ? spoon.ingredients : [];
         let parsed = null;
         if (lines.length && env.ZESTFUL_RAPID_KEY && env.ZESTFUL_RAPID_HOST) {
           parsed = await callZestful(env, lines);
         }
-
         return json({
           ok: !!parsed,
           dish,
@@ -10419,20 +6960,14 @@ Return ONLY the improved dish name, no explanations.`
         return json({ ok: false, dish, error: String(e?.message || e) });
       }
     }
-
-    // --- DEBUG: raw Zestful (RapidAPI) call with status + body preview ---
     if (pathname === "/debug/zestful-raw") {
       const dish = url.searchParams.get("dish") || "Chicken Alfredo";
       const host = (env.ZESTFUL_RAPID_HOST || "zestful.p.rapidapi.com").trim();
-
       try {
         const sp = await spoonacularFetch(env, dish, null, "en");
-        const lines = Array.isArray(sp?.ingredients)
-          ? sp.ingredients.slice(0, 10)
-          : [];
+        const lines = Array.isArray(sp?.ingredients) ? sp.ingredients.slice(0, 10) : [];
         if (!lines.length)
           return json({ ok: false, note: "no lines from provider", host });
-
         const res = await fetch(`https://${host}/parseIngredients`, {
           method: "POST",
           headers: {
@@ -10442,49 +6977,39 @@ Return ONLY the improved dish name, no explanations.`
           },
           body: JSON.stringify({ ingredients: lines })
         });
-
         const text = await res.text();
         let parsed = null;
         try {
           parsed = JSON.parse(text);
-        } catch {}
-
+        } catch {
+        }
         return json({
           ok: res.ok,
           status: res.status,
           host,
           lines_in: lines.length,
           body_preview: text.slice(0, 240),
-          results_len: Array.isArray(parsed?.results)
-            ? parsed.results.length
-            : null,
-          first_result: Array.isArray(parsed?.results)
-            ? parsed.results[0]
-            : null
+          results_len: Array.isArray(parsed?.results) ? parsed.results.length : null,
+          first_result: Array.isArray(parsed?.results) ? parsed.results[0] : null
         });
       } catch (e) {
         return json({ ok: false, error: String(e?.message || e) });
       }
     }
-
     if (pathname === "/restaurants/search" && request.method === "GET") {
       let ctxTB = makeCtx(env);
       const rid = newRequestId();
       let trace = {};
-
       try {
         const query = searchParams.get("query") || searchParams.get("q") || "";
         const addressRaw = searchParams.get("address") || "";
         const page = Number(searchParams.get("page") || 1);
         const maxRows = parseInt(searchParams.get("maxRows") || "15", 10);
-
         const lat = searchParams.get("lat");
         const lng = searchParams.get("lng");
         const radius = parseInt(searchParams.get("radius") || "5000", 10);
-
         const latNum = lat !== null ? parseFloat(lat) : null;
         const lngNum = lng !== null ? parseFloat(lng) : null;
-
         if (!query) {
           return jsonResponseWithTB(
             withBodyAnalytics(
@@ -10499,12 +7024,8 @@ Return ONLY the improved dish name, no explanations.`
             CORS_ALL
           );
         }
-
-        // Prefer address job if provided; otherwise try location; otherwise 400
         let finished = null;
-        let usedHost =
-          env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
-
+        let usedHost = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
         if (addressRaw) {
           const job = await postJobByAddress(
             {
@@ -10522,22 +7043,15 @@ Return ONLY the improved dish name, no explanations.`
               address: addressRaw
             });
           }
-          // Wait for completion if needed
-          finished = job?.immediate
-            ? job
-            : await waitForJob(env, job, { attempts: 6 });
+          finished = job?.immediate ? job : await waitForJob(env, job, { attempts: 6 });
         } else if (latNum != null && lngNum != null) {
-          // Location job path first
           try {
             const job = await postJobByLocation(
               { query, lat: latNum, lng: lngNum, radius, maxRows },
               env
             );
-            finished = job?.immediate
-              ? job
-              : await waitForJob(env, job, { attempts: 6 });
+            finished = job?.immediate ? job : await waitForJob(env, job, { attempts: 6 });
           } catch (e) {
-            // Fallback to direct nearby search if job approach fails
             const nearby = await searchNearbyCandidates(
               { query, lat: latNum, lng: lngNum, radius, maxRows },
               env
@@ -10551,13 +7065,7 @@ Return ONLY the improved dish name, no explanations.`
                     count: nearby.rows.length,
                     restaurants: nearby.rows.map((r) => ({
                       id: r.id || r.slug || r.url || null,
-                      title:
-                        r.title ||
-                        r.name ||
-                        r.displayName ||
-                        r.storeName ||
-                        r.restaurantName ||
-                        null,
+                      title: r.title || r.name || r.displayName || r.storeName || r.restaurantName || null,
                       raw: r.raw || r
                     }))
                   },
@@ -10587,8 +7095,6 @@ Return ONLY the improved dish name, no explanations.`
             CORS_ALL
           );
         }
-
-        // Collect candidates from the finished job
         const buckets = [
           finished?.data?.stores,
           finished?.data?.restaurants,
@@ -10596,31 +7102,13 @@ Return ONLY the improved dish name, no explanations.`
           finished?.restaurants,
           finished?.data
         ].filter(Boolean);
-
         const candidates = [];
         for (const b of buckets) if (Array.isArray(b)) candidates.push(...b);
-
-        const restaurants = candidates
-          .map((it) => ({
-            id:
-              it?.id ||
-              it?.storeUuid ||
-              it?.storeId ||
-              it?.restaurantId ||
-              it?.slug ||
-              it?.url ||
-              null,
-            title:
-              it?.title ||
-              it?.name ||
-              it?.displayName ||
-              it?.storeName ||
-              it?.restaurantName ||
-              null,
-            raw: it
-          }))
-          .filter((x) => x.title);
-
+        const restaurants = candidates.map((it) => ({
+          id: it?.id || it?.storeUuid || it?.storeId || it?.restaurantId || it?.slug || it?.url || null,
+          title: it?.title || it?.name || it?.displayName || it?.storeName || it?.restaurantName || null,
+          raw: it
+        })).filter((x) => x.title);
         return jsonResponseWithTB(
           withBodyAnalytics(
             {
@@ -10649,12 +7137,24 @@ Return ONLY the improved dish name, no explanations.`
         );
       }
     }
-
-    // /restaurants/find → inline Google Places (no more recursive service call)
     if (pathname === "/restaurants/find") {
-      return handleRestaurantsFindGateway(env, url);
+      const id = cid(request.headers);
+      const init = {
+        method: request.method,
+        headers: new Headers(request.headers)
+      };
+      init.headers.set("x-correlation-id", id);
+      const res = await env.restaurant_core.fetch(
+        new Request(request.url, init)
+      );
+      const out = new Headers(res.headers);
+      out.set("x-correlation-id", id);
+      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
+      out.set("x-tb-env", env.ENV || "production");
+      out.set("x-tb-git", env.GIT_SHA || "n/a");
+      out.set("x-tb-built", env.BUILT_AT || "n/a");
+      return new Response(res.body, { status: res.status, headers: out });
     }
-    // /ingredients/normalize → tb-recipe-core
     if (pathname === "/ingredients/normalize" && request.method === "POST") {
       const id = ((h) => h.get("x-correlation-id") || crypto.randomUUID())(
         request.headers
@@ -10674,7 +7174,6 @@ Return ONLY the improved dish name, no explanations.`
       out.set("x-tb-built", env.BUILT_AT || "n/a");
       return new Response(res.body, { status: res.status, headers: out });
     }
-    // /recipe/resolve → tb-recipe-core
     if (pathname === "/recipe/resolve" && request.method === "POST") {
       const id = ((h) => h.get("x-correlation-id") || crypto.randomUUID())(
         request.headers
@@ -10695,19 +7194,19 @@ Return ONLY the improved dish name, no explanations.`
       return new Response(res.body, { status: res.status, headers: out });
     }
     if (pathname === "/debug/zestful-usage") {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
       const key = `zestful:count:${today}`;
       let raw = null;
       if (env.MENUS_CACHE) {
         try {
           raw = await env.MENUS_CACHE.get(key);
-        } catch {}
+        } catch {
+        }
       }
       const count = raw ? parseInt(raw, 10) : 0;
       const cap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
       return json({ date: today, count, cap });
     }
-
     if (pathname === "/organs/assess" && request.method === "POST") {
       const id = _cid(request.headers);
       const init = {
@@ -10727,7 +7226,6 @@ Return ONLY the improved dish name, no explanations.`
       out.set("x-tb-built", env.BUILT_AT || "n/a");
       return new Response(res.body, { status: res.status, headers: out });
     }
-
     if (pathname === "/user/prefs") {
       if (!env.USER_PREFS_KV) {
         return json(
@@ -10735,7 +7233,6 @@ Return ONLY the improved dish name, no explanations.`
           { status: 500 }
         );
       }
-
       if (request.method === "GET") {
         const user_id = url.searchParams.get("user_id") || "anon";
         const key = `prefs:user:${user_id}`;
@@ -10754,20 +7251,18 @@ Return ONLY the improved dish name, no explanations.`
         return json({
           ok: true,
           user_id,
-          prefs: { ...defaults, ...(raw || {}) }
+          prefs: { ...defaults, ...raw || {} }
         });
       }
-
       if (request.method === "POST") {
         const user_id = url.searchParams.get("user_id") || "anon";
-        const body = (await request.json().catch(() => ({}))) || {};
+        const body = await request.json().catch(() => ({})) || {};
         const key = `prefs:user:${user_id}`;
-        const existing = (await env.USER_PREFS_KV.get(key, "json")) || {};
+        const existing = await env.USER_PREFS_KV.get(key, "json") || {};
         const merged = { ...existing, ...body };
         await env.USER_PREFS_KV.put(key, JSON.stringify(merged));
         return json({ ok: true, user_id, saved: merged });
       }
-
       return new Response(null, {
         status: 405,
         headers: { Allow: "GET, POST" }
@@ -10791,34 +7286,20 @@ Return ONLY the improved dish name, no explanations.`
         { headers: { "content-type": "application/json; charset=utf-8" } }
       );
     }
-
-    // === Step 20B: future upgrade ===
-    // TODO: read recent R2 analysis files (e.g., results/*.json),
-    // aggregate organ_summary across all recent dishes,
-    // compute average plus/minus counts, derive sentiment, and build items[] dynamically.
-
-    // Welcome / help text
     return new Response(
-      "HELLO — tb-dish-processor is running.\n" +
-        "Try: GET /health, /debug/config, /debug/ping-lexicon, /debug/read-kv-shard?name=..., /debug/warm-lexicon?names=...,\n" +
-        "/debug/refresh-ingredient-shards, /debug/read-index, /debug/job?id=..., /results/<id>.json, /menu/uber-test;\n" +
-        "POST /enqueue",
+      "HELLO \u2014 tb-dish-processor is running.\nTry: GET /health, /debug/config, /debug/ping-lexicon, /debug/read-kv-shard?name=..., /debug/warm-lexicon?names=...,\n/debug/refresh-ingredient-shards, /debug/read-index, /debug/job?id=..., /results/<id>.json, /menu/uber-test;\nPOST /enqueue",
       { status: 200, headers: { "content-type": "text/plain" } }
     );
   }
 };
-
-// ========== Helper utilities ==========
-const lc = (s) => (s ?? "").toLowerCase().normalize("NFKC").trim();
-
-// [39.2] — mark first-seen boot time in KV (best-effort)
+var lc = /* @__PURE__ */ __name((s) => (s ?? "").toLowerCase().normalize("NFKC").trim(), "lc");
 async function ensureBootTime(env) {
   if (!env?.LEXICON_CACHE) return null;
   try {
     const key = "meta/boot_at";
     let boot = await env.LEXICON_CACHE.get(key);
     if (!boot) {
-      boot = new Date().toISOString();
+      boot = (/* @__PURE__ */ new Date()).toISOString();
       await env.LEXICON_CACHE.put(key, boot, { expirationTtl: 30 * 24 * 3600 });
     }
     return boot;
@@ -10826,7 +7307,7 @@ async function ensureBootTime(env) {
     return null;
   }
 }
-
+__name(ensureBootTime, "ensureBootTime");
 function parseJsonSafe(raw, fallback) {
   try {
     if (!raw) return fallback;
@@ -10835,49 +7316,18 @@ function parseJsonSafe(raw, fallback) {
     return fallback;
   }
 }
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function canonicalizeIngredientName(name = "") {
-  const s = String(name ?? "")
-    .toLowerCase()
-    .trim();
-  if (s.includes("skim milk") || s.endsWith(" milk") || s === "milk")
-    return "milk";
-  if (s.includes("parmesan")) return "parmesan cheese";
-  if (s.includes("garlic")) return "garlic";
-  if (s.includes("onion")) return "onion";
-  if (s.includes("butter")) return "butter";
-  if (
-    s.includes("heavy cream") ||
-    s.includes("whipping cream") ||
-    s.includes("cream")
-  )
-    return "cream";
-  if (s.includes("salt")) return "salt";
-  if (s.includes("tomato")) return "tomato";
-  if (s.includes("flour") || s.includes("wheat") || s.includes("pasta"))
-    return "flour";
-  return s;
-}
-
-// ==== Global limits & TTLs (safe defaults) ====
-const MENU_TTL_SECONDS = 18 * 3600; // 18 hours cache TTL for menu snapshots
-const LIMITS = {
+__name(parseJsonSafe, "parseJsonSafe");
+var MENU_TTL_SECONDS = 18 * 3600;
+var LIMITS = {
   DEFAULT_TOP: 10,
   TOP_MIN: 1,
   TOP_MAX: 25
 };
-
-// [38.8] — snapshot of effective limits (for QA)
 function limitsSnapshot({ maxRows, radius }) {
   const reqMax = Number.isFinite(Number(maxRows)) ? Number(maxRows) : null;
   const reqRad = Number.isFinite(Number(radius)) ? Number(radius) : null;
-
   const effectiveMax = Number.isFinite(Number(maxRows)) ? Number(maxRows) : 15;
-  const effectiveRad = Number.isFinite(Number(radius)) ? Number(radius) : 5000;
-
+  const effectiveRad = Number.isFinite(Number(radius)) ? Number(radius) : 5e3;
   return {
     maxRows: {
       requested: reqMax,
@@ -10890,20 +7340,18 @@ function limitsSnapshot({ maxRows, radius }) {
       requested: reqRad,
       effective: effectiveRad,
       min: 500,
-      max: 25000,
-      default: 5000
+      max: 25e3,
+      default: 5e3
     },
     cache_ttl_seconds: MENU_TTL_SECONDS
   };
 }
-
+__name(limitsSnapshot, "limitsSnapshot");
 async function getZestfulCount(env) {
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   if (!kv) return 0;
-
-  const today = new Date().toISOString().slice(0, 10);
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const key = `zestful:count:${today}`;
-
   try {
     const raw = await kv.get(key);
     return parseInt(raw || "0", 10) || 0;
@@ -10915,26 +7363,22 @@ async function getZestfulCount(env) {
     return 0;
   }
 }
-
+__name(getZestfulCount, "getZestfulCount");
 async function incZestfulCount(env, linesCount = 0) {
   if (!linesCount || linesCount <= 0) return 0;
-
   const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
   if (!kv) return 0;
-
-  const today = new Date().toISOString().slice(0, 10);
+  const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   const key = `zestful:count:${today}`;
   let current = 0;
-
   try {
-    current = parseInt((await kv.get(key)) || "0", 10) || 0;
+    current = parseInt(await kv.get(key) || "0", 10) || 0;
   } catch (err) {
     console.log(
       "[parse] zestful counter read error:",
       err?.message || String(err)
     );
   }
-
   const next = current + linesCount;
   try {
     await kv.put(key, String(next), { expirationTtl: 60 * 60 * 24 * 31 });
@@ -10944,10 +7388,9 @@ async function incZestfulCount(env, linesCount = 0) {
       err?.message || String(err)
     );
   }
-
   return next;
 }
-
+__name(incZestfulCount, "incZestfulCount");
 async function getShardFromKV(env, name) {
   if (!env?.LEXICON_CACHE) return { ok: false, name, reason: "KV not bound" };
   const key = `shards/${name}.json`;
@@ -10958,10 +7401,9 @@ async function getShardFromKV(env, name) {
     return { ok: false, name, reason: "bad_format" };
   return { ok: true, name, version: js.version ?? null, entries: js.entries };
 }
-
-// Gather terms from one entry
+__name(getShardFromKV, "getShardFromKV");
 function entryTerms(entry) {
-  const out = new Set();
+  const out = /* @__PURE__ */ new Set();
   const t = lc(entry?.term);
   if (t && t.length >= 2) out.add(t);
   if (Array.isArray(entry?.terms))
@@ -10978,8 +7420,7 @@ function entryTerms(entry) {
   if (alias && alias.length >= 2) out.add(alias);
   return Array.from(out);
 }
-
-// Word-boundary match for a term
+__name(entryTerms, "entryTerms");
 function termMatches(corpus, term) {
   const t = lc(term);
   if (t.length < 2) return false;
@@ -10987,9 +7428,8 @@ function termMatches(corpus, term) {
   const re = new RegExp(`\\b${esc}\\b`, "i");
   return re.test(corpus);
 }
-
-// === Risk scoring (allergens + FODMAP -> flags + tummy_barometer) ===
-const RISK = {
+__name(termMatches, "termMatches");
+var RISK = {
   allergenWeights: {
     milk: 18,
     egg: 12,
@@ -11015,21 +7455,19 @@ const RISK = {
   ],
   maxRaw: 100
 };
-const clamp01 = (x) => Math.max(0, Math.min(1, x));
-const toScore = (raw, maxRaw = RISK.maxRaw) =>
-  Math.round(clamp01(raw / maxRaw) * 100);
-const labelFor = (score) =>
-  score <= 39 ? "Avoid" : score <= 69 ? "Caution" : "Likely OK";
-
+var clamp01 = /* @__PURE__ */ __name((x) => Math.max(0, Math.min(1, x)), "clamp01");
+var toScore = /* @__PURE__ */ __name((raw, maxRaw = RISK.maxRaw) => Math.round(clamp01(raw / maxRaw) * 100), "toScore");
+var labelFor = /* @__PURE__ */ __name((score) => score <= 39 ? "Avoid" : score <= 69 ? "Caution" : "Likely OK", "labelFor");
 function extractAllergenKeys(hit) {
-  return inferAllergensFromClassesTags(hit).map((x) =>
-    x.trim().toLowerCase().replace(/\s+/g, "_")
+  return inferAllergensFromClassesTags(hit).map(
+    (x) => x.trim().toLowerCase().replace(/\s+/g, "_")
   );
 }
-
+__name(extractAllergenKeys, "extractAllergenKeys");
 function extractFodmapLevel(hit) {
   return normalizeFodmapValue(hit.fodmap ?? hit.fodmap_level);
 }
+__name(extractFodmapLevel, "extractFodmapLevel");
 function normalizeFodmapValue(v) {
   let lvl = v;
   if (v && typeof v === "object") lvl = v.level ?? v.fodmap_level ?? v.value;
@@ -11039,44 +7477,18 @@ function normalizeFodmapValue(v) {
   if (["low", "very_low", "trace"].includes(lvl)) return "low";
   return "unknown";
 }
-function extractLactoseFromLexHits(rawHits) {
-  for (const h of rawHits || []) {
-    const lac = h && h.lactose;
-    if (lac && typeof lac.level === "string") {
-      return {
-        level: String(lac.level).toLowerCase(),
-        reason: lac.reason || "Lactose level from lexicon.",
-        source: "lexicon"
-      };
-    }
-  }
-  return null;
-}
+__name(normalizeFodmapValue, "normalizeFodmapValue");
 function inferAllergensFromClassesTags(hit) {
   const out = new Set(
-    Array.isArray(hit.allergens)
-      ? hit.allergens.map((a) => String(a).toLowerCase())
-      : []
+    Array.isArray(hit.allergens) ? hit.allergens.map((a) => String(a).toLowerCase()) : []
   );
-  const classes = Array.isArray(hit.classes)
-    ? hit.classes.map((x) => String(x).toLowerCase())
-    : [];
-  const tags = Array.isArray(hit.tags)
-    ? hit.tags.map((x) => String(x).toLowerCase())
-    : [];
+  const classes = Array.isArray(hit.classes) ? hit.classes.map((x) => String(x).toLowerCase()) : [];
+  const tags = Array.isArray(hit.tags) ? hit.tags.map((x) => String(x).toLowerCase()) : [];
   const canon = String(hit.canonical || "").toLowerCase();
-  if (
-    classes.includes("dairy") ||
-    tags.includes("dairy") ||
-    tags.includes("milk") ||
-    /milk|cheese|butter|cream|parmesan|mozzarella|yogurt|yoghurt/.test(canon)
-  )
+  if (classes.includes("dairy") || tags.includes("dairy") || tags.includes("milk") || /milk|cheese|butter|cream|parmesan|mozzarella|yogurt|yoghurt/.test(canon))
     out.add("milk");
   if (classes.includes("gluten") || tags.includes("gluten")) out.add("gluten");
-  if (
-    tags.includes("wheat") ||
-    /wheat|semolina|breadcrumbs|pasta|flour/.test(canon)
-  )
+  if (tags.includes("wheat") || /wheat|semolina|breadcrumbs|pasta|flour/.test(canon))
     out.add("wheat");
   if (classes.includes("shellfish") || tags.includes("shellfish"))
     out.add("shellfish");
@@ -11086,46 +7498,29 @@ function inferAllergensFromClassesTags(hit) {
   if (classes.includes("sesame") || tags.includes("sesame")) out.add("sesame");
   return Array.from(out);
 }
-
+__name(inferAllergensFromClassesTags, "inferAllergensFromClassesTags");
 function extractLactoseFromHits(hits) {
   if (!Array.isArray(hits) || !hits.length) return null;
-
   const rank = { high: 3, moderate: 2, medium: 2, low: 1, none: 0, unknown: 0 };
   let bestLevel = null;
-  const examples = new Set();
-
+  const examples = /* @__PURE__ */ new Set();
   for (const h of hits) {
     const fod = h.fodmap || {};
-    const bandRaw = h.lactose_band || (fod && fod.lactose_band) || "";
+    const bandRaw = h.lactose_band || fod && fod.lactose_band || "";
     const band = String(bandRaw || "").toLowerCase();
     const drivers = Array.isArray(fod.drivers) ? fod.drivers.map(String) : [];
-    const mentionsLactose =
-      drivers.some((d) => d.toLowerCase() === "lactose") || !!band;
-
+    const mentionsLactose = drivers.some((d) => d.toLowerCase() === "lactose") || !!band;
     if (!mentionsLactose) continue;
-
-    // derive normalized lactose level
     let lvl = (band || String(fod.level || "")).toLowerCase();
     if (lvl === "very_high" || lvl === "ultra_high") lvl = "high";
     if (lvl === "medium") lvl = "moderate";
     if (!lvl) lvl = "unknown";
-
     if (!bestLevel || rank[lvl] > rank[bestLevel]) bestLevel = lvl;
-
-    const name =
-      h.canonical ||
-      h.term ||
-      (fod && fod.note) ||
-      "";
+    const name = h.canonical || h.term || fod && fod.note || "";
     if (name) examples.add(name);
   }
-
-  // If we saw no lactose-related hits at all, return null
   if (!bestLevel) return null;
-
-  // Even if bestLevel is "none", we still want to expose that to the frontend
   const level = bestLevel;
-
   let reason;
   if (level === "none") {
     reason = "Dairy appears effectively lactose-free or very low in lactose.";
@@ -11138,7 +7533,6 @@ function extractLactoseFromHits(hits) {
   } else {
     reason = "Lactose level inferred from lexicon classification.";
   }
-
   return {
     level,
     source: "lexicon",
@@ -11146,8 +7540,9 @@ function extractLactoseFromHits(hits) {
     examples: Array.from(examples)
   };
 }
+__name(extractLactoseFromHits, "extractLactoseFromHits");
 function scoreDishFromHits(hits) {
-  const allergenSet = new Set();
+  const allergenSet = /* @__PURE__ */ new Set();
   const rank = { high: 3, medium: 2, low: 1, unknown: 0 };
   let worstFodmap = "unknown";
   for (const h of hits || []) {
@@ -11185,8 +7580,7 @@ function scoreDishFromHits(hits) {
     _debug: { rawRisk, worstFodmap }
   };
 }
-
-// Human-friendly sentences
+__name(scoreDishFromHits, "scoreDishFromHits");
 function buildHumanSentences(flags, tummy_barometer) {
   const out = [];
   if (Array.isArray(flags?.allergens) && flags.allergens.length) {
@@ -11203,7 +7597,6 @@ function buildHumanSentences(flags, tummy_barometer) {
   else if (f === "low")
     out.push("FODMAP level appears low; small portions are often tolerated.");
   else out.push("FODMAP level is unclear from ingredients.");
-
   if (flags?.onion || flags?.garlic) {
     const parts = [];
     if (flags.onion) parts.push("onion");
@@ -11214,10 +7607,7 @@ function buildHumanSentences(flags, tummy_barometer) {
     out.push(
       "Gluten indicators present (e.g., pasta/wheat/flour). Ask for gluten-free options if needed."
     );
-
-  const reasons = Array.isArray(tummy_barometer?.reasons)
-    ? tummy_barometer.reasons
-    : [];
+  const reasons = Array.isArray(tummy_barometer?.reasons) ? tummy_barometer.reasons : [];
   const notes = [];
   for (const r of reasons) {
     if (r.kind === "allergen" && r.key)
@@ -11230,88 +7620,46 @@ function buildHumanSentences(flags, tummy_barometer) {
       `Overall: ${tummy_barometer.label} (score ${tummy_barometer.score}).`
     );
   }
-
   const MAX = 120;
   const trimmed = out.map((s) => {
     if (s.length <= MAX) return s;
     const core = s.slice(0, MAX - 1).replace(/\s+$/, "");
-    return core.endsWith(".") ? core : core + "…";
+    return core.endsWith(".") ? core : core + "\u2026";
   });
   return trimmed.slice(0, 4);
 }
-
+__name(buildHumanSentences, "buildHumanSentences");
 function deriveFlags(hits) {
-  let onion = false,
-    garlic = false,
-    dairy_hint = false,
-    gluten_hint = false;
+  let onion = false, garlic = false, dairy_hint = false, gluten_hint = false;
   for (const h of hits) {
     const canon = lc(h.canonical || "");
     const term = lc(h.term || "");
     const classes = Array.isArray(h.classes) ? h.classes.map(lc) : [];
     const tags = Array.isArray(h.tags) ? h.tags.map(lc) : [];
-    if (
-      canon.includes("onion") ||
-      term.includes("onion") ||
-      classes.includes("allium") ||
-      tags.includes("onion")
-    )
+    if (canon.includes("onion") || term.includes("onion") || classes.includes("allium") || tags.includes("onion"))
       onion = true;
-    if (
-      canon.includes("garlic") ||
-      term.includes("garlic") ||
-      classes.includes("allium") ||
-      tags.includes("garlic")
-    )
+    if (canon.includes("garlic") || term.includes("garlic") || classes.includes("allium") || tags.includes("garlic"))
       garlic = true;
-    if (
-      classes.includes("dairy") ||
-      tags.includes("dairy") ||
-      tags.includes("milk") ||
-      canon.includes("milk") ||
-      canon.includes("cheese") ||
-      canon.includes("butter") ||
-      canon.includes("cream") ||
-      term.includes("milk") ||
-      term.includes("cheese") ||
-      term.includes("butter") ||
-      term.includes("cream")
-    )
+    if (classes.includes("dairy") || tags.includes("dairy") || tags.includes("milk") || canon.includes("milk") || canon.includes("cheese") || canon.includes("butter") || canon.includes("cream") || term.includes("milk") || term.includes("cheese") || term.includes("butter") || term.includes("cream"))
       dairy_hint = true;
-    if (
-      classes.includes("gluten") ||
-      tags.includes("gluten") ||
-      tags.includes("wheat") ||
-      canon.includes("gluten") ||
-      canon.includes("wheat") ||
-      canon.includes("flour") ||
-      canon.includes("pasta") ||
-      canon.includes("breadcrumbs") ||
-      canon.includes("semolina") ||
-      term.includes("wheat") ||
-      term.includes("flour") ||
-      term.includes("pasta") ||
-      term.includes("breadcrumbs") ||
-      term.includes("semolina")
-    )
+    if (classes.includes("gluten") || tags.includes("gluten") || tags.includes("wheat") || canon.includes("gluten") || canon.includes("wheat") || canon.includes("flour") || canon.includes("pasta") || canon.includes("breadcrumbs") || canon.includes("semolina") || term.includes("wheat") || term.includes("flour") || term.includes("pasta") || term.includes("breadcrumbs") || term.includes("semolina"))
       gluten_hint = true;
   }
   return { onion, garlic, dairy_hint, gluten_hint };
 }
-
-// Env int helper
+__name(deriveFlags, "deriveFlags");
 function getEnvInt(env, name, defVal) {
   const raw = env && env[name] != null ? String(env[name]).trim() : "";
   const n = Number(raw);
   return Number.isFinite(n) ? n : defVal;
 }
-
+__name(getEnvInt, "getEnvInt");
 async function rateLimit(env, request, { limit = 60 } = {}) {
   const kv = env?.USER_PREFS_KV;
   if (!kv || !request) return null;
   try {
     const ip = request.headers.get("cf-connecting-ip") || "0.0.0.0";
-    const now = new Date();
+    const now = /* @__PURE__ */ new Date();
     const bucket = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}${String(now.getUTCDate()).padStart(2, "0")}${String(now.getUTCHours()).padStart(2, "0")}${String(now.getUTCMinutes()).padStart(2, "0")}`;
     const key = `rl:${ip}:${bucket}`;
     const currentRaw = await kv.get(key);
@@ -11332,7 +7680,7 @@ async function rateLimit(env, request, { limit = 60 } = {}) {
     return null;
   }
 }
-
+__name(rateLimit, "rateLimit");
 async function handleHealthz(env) {
   let d1 = "ok";
   try {
@@ -11342,7 +7690,6 @@ async function handleHealthz(env) {
     if (err) console.warn("[healthz] d1 ping failed", err?.message || err);
     d1 = "fail";
   }
-
   const missing = [];
   for (const name of [
     "RAPIDAPI_KEY",
@@ -11354,22 +7701,19 @@ async function handleHealthz(env) {
   ]) {
     if (!env?.[name]) missing.push(name);
   }
-
   return okJson({
     ok: true,
     d1,
     secrets_missing: missing,
-    ts: Math.floor(Date.now() / 1000)
+    ts: Math.floor(Date.now() / 1e3)
   });
 }
-
-// --- Metrics helpers (D1) -------------------------------------------------
-const METRICS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS metrics (
+__name(handleHealthz, "handleHealthz");
+var METRICS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS metrics (
   ts INTEGER DEFAULT (strftime('%s','now')),
   name TEXT,
   value INTEGER
 )`;
-
 async function ensureMetricsTable(env) {
   if (!env?.D1_DB) return false;
   if (ensureMetricsTable._ready) return true;
@@ -11382,38 +7726,31 @@ async function ensureMetricsTable(env) {
     return false;
   }
 }
+__name(ensureMetricsTable, "ensureMetricsTable");
 ensureMetricsTable._ready = false;
-
 async function recordMetric(env, name, delta = 1) {
   if (!env?.D1_DB || !name) return;
   const ready = await ensureMetricsTable(env);
   if (!ready) return;
   try {
-    await env.D1_DB.prepare("INSERT INTO metrics (name, value) VALUES (?, ?)")
-      .bind(name, delta)
-      .run();
+    await env.D1_DB.prepare("INSERT INTO metrics (name, value) VALUES (?, ?)").bind(name, delta).run();
   } catch (err) {
     console.warn("[metrics] write failed", err?.message || err);
   }
 }
-
-// --- Stats helpers (D1) ---
-function dayStrUTC(d = new Date()) {
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 10);
+__name(recordMetric, "recordMetric");
+function dayStrUTC(d = /* @__PURE__ */ new Date()) {
+  return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 }
-async function bumpDaily(
-  env,
-  {
-    jobs = 0,
-    lex_ok = 0,
-    lex_live = 0,
-    lex_err = 0,
-    rap_ok = 0,
-    rap_err = 0
-  } = {}
-) {
+__name(dayStrUTC, "dayStrUTC");
+async function bumpDaily(env, {
+  jobs = 0,
+  lex_ok = 0,
+  lex_live = 0,
+  lex_err = 0,
+  rap_ok = 0,
+  rap_err = 0
+} = {}) {
   if (!env.D1_DB) return;
   const day = dayStrUTC();
   try {
@@ -11429,15 +7766,14 @@ async function bumpDaily(
       rapid_ok = rapid_ok + excluded.rapid_ok,
       rapid_err = rapid_err + excluded.rapid_err
   `
-    )
-      .bind(day, jobs, lex_ok, lex_live, lex_err, rap_ok, rap_err)
-      .run();
+    ).bind(day, jobs, lex_ok, lex_live, lex_err, rap_ok, rap_err).run();
     await recordMetric(env, "d1:daily_stats:upsert_ok");
   } catch (err) {
     await recordMetric(env, "d1:daily_stats:upsert_fail");
     throw err;
   }
 }
+__name(bumpDaily, "bumpDaily");
 async function bumpApi(env, service, { calls = 0, ok = 0, err = 0 } = {}) {
   if (!env.D1_DB) return;
   const day = dayStrUTC();
@@ -11451,19 +7787,15 @@ async function bumpApi(env, service, { calls = 0, ok = 0, err = 0 } = {}) {
       ok    = ok    + excluded.ok,
       err   = err   + excluded.err
   `
-    )
-      .bind(day, service, calls, ok, err)
-      .run();
+    ).bind(day, service, calls, ok, err).run();
     await recordMetric(env, "d1:api_usage:upsert_ok");
   } catch (error) {
     await recordMetric(env, "d1:api_usage:upsert_fail");
     throw error;
   }
 }
-
-// [40.4] — lightweight status counters in KV (best-effort)
-const STATUS_KV_KEY = "meta/uber_test_status_v1";
-
+__name(bumpApi, "bumpApi");
+var STATUS_KV_KEY = "meta/uber_test_status_v1";
 async function readStatusKV(env) {
   if (!env?.LEXICON_CACHE) return null;
   try {
@@ -11473,11 +7805,11 @@ async function readStatusKV(env) {
     return null;
   }
 }
-
+__name(readStatusKV, "readStatusKV");
 async function bumpStatusKV(env, delta = {}) {
   if (!env?.LEXICON_CACHE) return;
   try {
-    const cur = (await readStatusKV(env)) || {
+    const cur = await readStatusKV(env) || {
       updated_at: null,
       counts: {
         live: 0,
@@ -11496,78 +7828,59 @@ async function bumpStatusKV(env, delta = {}) {
       if (typeof cur.counts[k] !== "number") cur.counts[k] = 0;
       cur.counts[k] += Number(v) || 0;
     }
-    cur.updated_at = new Date().toISOString();
+    cur.updated_at = (/* @__PURE__ */ new Date()).toISOString();
     await env.LEXICON_CACHE.put(STATUS_KV_KEY, JSON.stringify(cur), {
       expirationTtl: 7 * 24 * 3600
     });
-  } catch {}
+  } catch {
+  }
 }
-
-// === Menu cache helpers (KV) ===============================================
-// Key format is stable so identical (query,address,us) requests reuse the same value.
+__name(bumpStatusKV, "bumpStatusKV");
 function cacheKeyForMenu(query, address, forceUS = false) {
-  const q = String(query || "")
-    .trim()
-    .toLowerCase();
-  const a = String(address || "")
-    .trim()
-    .toLowerCase();
+  const q = String(query || "").trim().toLowerCase();
+  const a = String(address || "").trim().toLowerCase();
   const u = forceUS ? "us1" : "us0";
   return `menu/${encodeURIComponent(q)}|${encodeURIComponent(a)}|${u}.json`;
 }
-
-// Read a cached menu snapshot from KV. Returns { savedAt, data } or null.
+__name(cacheKeyForMenu, "cacheKeyForMenu");
 async function readMenuFromCache(env, key) {
   if (!env?.LEXICON_CACHE) return null;
   try {
     const raw = await env.LEXICON_CACHE.get(key);
     if (!raw) return null;
     const js = JSON.parse(raw);
-    // Expect shape: { savedAt: ISO, data: { query, address, forceUS, items: [...] } }
     if (!js || typeof js !== "object" || !js.data) return null;
     return js;
   } catch {
     return null;
   }
 }
-
-// Write a cached menu snapshot to KV (best-effort).
+__name(readMenuFromCache, "readMenuFromCache");
 async function writeMenuToCache(env, key, data) {
   if (!env?.LEXICON_CACHE) return false;
   try {
-    const body = JSON.stringify({ savedAt: new Date().toISOString(), data });
+    const body = JSON.stringify({ savedAt: (/* @__PURE__ */ new Date()).toISOString(), data });
     await env.LEXICON_CACHE.put(key, body, { expirationTtl: MENU_TTL_SECONDS });
     return true;
   } catch {
     return false;
   }
 }
-// ==========================================================================
-
-// ---- Network helpers ----
+__name(writeMenuToCache, "writeMenuToCache");
 function cleanHost(h) {
   const s = (h || "").trim();
   return s.replace(/\s+/g, "");
 }
+__name(cleanHost, "cleanHost");
 function normalizeBase(u) {
   return (u || "").trim().replace(/\/+$/, "");
 }
+__name(normalizeBase, "normalizeBase");
 function buildLexiconAnalyzeURL(base) {
   const b = normalizeBase(base);
   return `${b}/v1/search`;
 }
-function buildLexiconAnalyzeCandidates(base) {
-  const b = normalizeBase(base);
-  if (!b) return [];
-  // Try the usual suspects, in order of likelihood
-  return [
-    `${b}/v1/analyze`,
-    `${b}/analyze`,
-    `${b}/api/analyze`,
-    `${b}/v1/lexicon/analyze`
-  ];
-}
-
+__name(buildLexiconAnalyzeURL, "buildLexiconAnalyzeURL");
 async function callRapid(env, query, address) {
   const host = cleanHost(env.RAPIDAPI_HOST);
   const apiKey = env.RAPIDAPI_KEY || env.RAPID_API_KEY;
@@ -11584,35 +7897,30 @@ async function callRapid(env, query, address) {
   if (!r.ok) throw new Error(`RapidAPI ${r.status}`);
   return r.json();
 }
-
-// Per-ingredient Lexicon classification (phase 1 visibility)
+__name(callRapid, "callRapid");
 async function classifyIngredientsWithLex(env, ingredientsForLex, lang = "en") {
   const perIngredient = [];
   const allHits = [];
-
   for (const raw of ingredientsForLex) {
     const name = (raw || "").trim();
     if (!name || name.length < 2) continue;
-
     const res = await callLexicon(env, name, lang);
     const entry = {
       ingredient: name,
       ok: !!(res && res.ok),
       hits: []
     };
-
     let localHits = [];
     if (res && res.ok && res.data && Array.isArray(res.data.hits)) {
       localHits = res.data.hits;
       entry.hits = localHits;
       allHits.push(...localHits);
     }
-
     perIngredient.push(entry);
   }
-
   return { perIngredient, allHits };
 }
+__name(classifyIngredientsWithLex, "classifyIngredientsWithLex");
 async function callLexicon(env, text, lang = "en") {
   const base = normalizeBase(env.LEXICON_API_URL);
   const key = env.LEXICON_API_KEY || env.API_KEY;
@@ -11622,16 +7930,14 @@ async function callLexicon(env, text, lang = "en") {
   if (!text) {
     return { ok: false, reason: "missing-text", data: { hits: [] } };
   }
-
-  // Try correct lexicon endpoint
   const url = `${base}/v1/search`;
-
   const payload = {
     q: text,
-    shard_ids: null, // let server choose shards
-    include_lists: ["cheeses", "seafood", "animals"] // leverage your lactose + allergen lists
+    shard_ids: null,
+    // let server choose shards
+    include_lists: ["cheeses", "seafood", "animals"]
+    // leverage your lactose + allergen lists
   };
-
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -11641,14 +7947,12 @@ async function callLexicon(env, text, lang = "en") {
     },
     body: JSON.stringify(payload)
   });
-
   let js = null;
   try {
     js = await res.json();
   } catch {
     js = null;
   }
-
   if (!res.ok || !js) {
     return {
       ok: false,
@@ -11657,20 +7961,14 @@ async function callLexicon(env, text, lang = "en") {
       data: { hits: [] }
     };
   }
-
-  // js.matches is your API's shape. Normalize to "hits" array the rest of the code expects.
   const matches = Array.isArray(js.matches) ? js.matches : [];
-
   const hits = matches.map((m) => {
     const e = m.entry || {};
     const mapsTo = Array.isArray(e.maps_to) ? e.maps_to : [];
     const tags = [];
-    // Use maps_to (milk, shellfish, etc.) and category as tags
     for (const t of mapsTo) tags.push(String(t).toLowerCase());
     if (e.category) tags.push(String(e.category).toLowerCase());
     if (m.source) tags.push(String(m.source).toLowerCase());
-
-    // Classes: derive coarse allergen classes from maps_to
     const classes = [];
     if (mapsTo.includes("milk")) classes.push("dairy");
     if (mapsTo.includes("shellfish")) classes.push("shellfish");
@@ -11678,145 +7976,45 @@ async function callLexicon(env, text, lang = "en") {
     if (mapsTo.includes("wheat") || mapsTo.includes("gluten")) {
       classes.push("gluten");
     }
-
     return {
       term: e.term || text,
       canonical: e.canonical || null,
       classes,
       tags,
       // Lexicon can optionally add "allergens" later if you extend schema
-      allergens: Array.isArray(e.allergens) ? e.allergens : undefined,
+      allergens: Array.isArray(e.allergens) ? e.allergens : void 0,
       fodmap: e.fodmap ?? e.fodmap_level,
       lactose_band: e.lactose_band || null,
       milk_source: e.milk_source || null
     };
   });
-
   return {
     ok: true,
     mode: "v1_search",
     data: { hits }
   };
 }
-async function lexiconAnalyzeViaShards(env, text, lang = "en") {
-  const base = normalizeBase(env.LEXICON_API_URL);
-  const key = env.LEXICON_API_KEY;
-
-  let index = null;
-  for (const url of [`${base}/v1/index`, `${base}/v1/shards`]) {
-    try {
-      const r = await fetch(url, { headers: { "x-api-key": key } });
-      if (!r.ok) continue;
-      index = await r.json();
-      break;
-    } catch {}
-  }
-
-  const names = index
-    ? pickIngredientShardNamesFromIndex(index)
-    : STATIC_INGREDIENT_SHARDS;
-
-  const entries = [];
-  for (const name of names) {
-    try {
-      const url = `${base}/v1/shards/${name}`;
-      const r = await fetch(url, { headers: { "x-api-key": key } });
-      if (!r.ok) continue;
-      const js = await r.json();
-      if (Array.isArray(js?.entries)) {
-        for (const e of js.entries) entries.push(e);
-      }
-    } catch {}
-  }
-
-  const corpus = lc(text || "");
-  const stoplist = new Set(["and", "with", "of", "in", "a", "the", "or"]);
-  const ingredient_hits_raw = [];
-  const seenCanon = new Set();
-
-  for (const entry of entries) {
-    const canonical = lc(entry?.canonical ?? entry?.name ?? entry?.term ?? "");
-    const classes = Array.isArray(entry?.classes) ? entry.classes.map(lc) : [];
-    const tags = Array.isArray(entry?.tags) ? entry.tags.map(lc) : [];
-    const weight = typeof entry?.weight === "number" ? entry.weight : undefined;
-
-    const terms = entryTerms(entry).filter((t) => !stoplist.has(t));
-    let matchedTerm = null;
-    for (const t of terms) {
-      if (t.length < 2) continue;
-      if (termMatches(corpus, t)) {
-        matchedTerm = t;
-        break;
-      }
-    }
-    if (!matchedTerm) continue;
-
-    const canonKey = canonical || matchedTerm;
-    if (seenCanon.has(canonKey)) continue;
-    seenCanon.add(canonKey);
-
-    ingredient_hits_raw.push({
-      term: matchedTerm,
-      canonical: canonical || matchedTerm,
-      classes,
-      tags,
-      weight,
-      allergens: Array.isArray(entry?.allergens) ? entry.allergens : undefined,
-      fodmap: entry?.fodmap ?? entry?.fodmap_level,
-      source: "lexicon_live_shards"
-    });
-  }
-
-  const HITS_LIMIT = 25;
-  const hits = tidyIngredientHits(ingredient_hits_raw, HITS_LIMIT).map((h) => ({
-    term: h.term,
-    canonical: h.canonical,
-    classes: h.classes,
-    tags: h.tags,
-    allergens: h.allergens,
-    fodmap: h.fodmap,
-    source: h.source
-  }));
-
-  return {
-    hits,
-    from: "lexicon_live_shards",
-    shard_count: names.length,
-    entries_scanned: entries.length
-  };
-}
-
-// ---- Response helpers ----
+__name(callLexicon, "callLexicon");
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "content-type": "application/json" }
   });
 }
-// [37C] ── Same as jsonResponse, but lets us add extra headers
+__name(jsonResponse, "jsonResponse");
 function jsonResponseWith(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "content-type": "application/json", ...extraHeaders }
   });
 }
-// [38.12] — JSON response with TummyBuddy analytics headers (+ trace mirrors)
-function jsonResponseWithTB(
-  bodyObj,
-  status = 200,
-  { ctx, rid, source = "", cache = "", warning = false } = {},
-  extraHeaders = {}
-) {
+__name(jsonResponseWith, "jsonResponseWith");
+function jsonResponseWithTB(bodyObj, status = 200, { ctx, rid, source = "", cache = "", warning = false } = {}, extraHeaders = {}) {
   const version = ctx?.version || "unknown";
-  const served_at = ctx?.served_at || new Date().toISOString();
-  const requestId =
-    rid ||
-    (crypto?.randomUUID && crypto.randomUUID()) ||
-    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
+  const served_at = ctx?.served_at || (/* @__PURE__ */ new Date()).toISOString();
+  const requestId = rid || crypto?.randomUUID && crypto.randomUUID() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const traceHost = bodyObj?.trace?.host || "";
   const traceUsed = bodyObj?.trace?.used_path || "";
-
   const base = {
     "content-type": "application/json",
     "X-TB-Version": String(version),
@@ -11824,60 +8022,38 @@ function jsonResponseWithTB(
     "X-TB-Request-Id": String(requestId),
     "X-TB-Source": String(source || ""),
     "X-TB-Cache": String(cache || ""),
-    ...(traceHost ? { "X-TB-Trace-Host": String(traceHost) } : {}),
-    ...(traceUsed ? { "X-TB-Trace-Used-Path": String(traceUsed) } : {})
+    ...traceHost ? { "X-TB-Trace-Host": String(traceHost) } : {},
+    ...traceUsed ? { "X-TB-Trace-Used-Path": String(traceUsed) } : {}
   };
   if (warning) base["X-TB-Warning"] = "1";
-
   return new Response(JSON.stringify(bodyObj), {
     status,
     headers: { ...base, ...extraHeaders }
   });
 }
-// [38.1] — attach analytics fields to any JSON body (success paths only)
+__name(jsonResponseWithTB, "jsonResponseWithTB");
 function withBodyAnalytics(body, ctx, request_id, trace = {}) {
   return {
     ...body,
-    served_at: ctx?.served_at || new Date().toISOString(),
+    served_at: ctx?.served_at || (/* @__PURE__ */ new Date()).toISOString(),
     version: ctx?.version || "unknown",
-    request_id:
-      request_id ||
-      (crypto?.randomUUID && crypto.randomUUID()) ||
-      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    request_id: request_id || crypto?.randomUUID && crypto.randomUUID() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     trace
   };
 }
-// [37C] ── Error response with analytics headers
-// [37C] ── Error response with analytics headers (accepts ctx OR env)
-function errorResponseWith(
-  errBody,
-  status = 400,
-  envOrCtx,
-  meta = {},
-  request_id = null
-) {
-  const hasCtx =
-    envOrCtx &&
-    typeof envOrCtx === "object" &&
-    "served_at" in envOrCtx &&
-    "version" in envOrCtx;
-  const served_at = hasCtx ? envOrCtx.served_at : new Date().toISOString();
+__name(withBodyAnalytics, "withBodyAnalytics");
+function errorResponseWith(errBody, status = 400, envOrCtx, meta = {}, request_id = null) {
+  const hasCtx = envOrCtx && typeof envOrCtx === "object" && "served_at" in envOrCtx && "version" in envOrCtx;
+  const served_at = hasCtx ? envOrCtx.served_at : (/* @__PURE__ */ new Date()).toISOString();
   const version = hasCtx ? envOrCtx.version : getVersion(envOrCtx);
-
-  const rid =
-    request_id ||
-    (typeof crypto?.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-
+  const rid = request_id || (typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const body = {
     ...errBody,
     served_at,
     version,
     request_id: rid,
-    ...(meta?.trace ? { trace: meta.trace } : {})
+    ...meta?.trace ? { trace: meta.trace } : {}
   };
-
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -11886,18 +8062,12 @@ function errorResponseWith(
       "X-TB-Served-At": String(served_at),
       "X-TB-Error": "1",
       "X-TB-Request-Id": String(rid),
-      ...(meta || {})
+      ...meta || {}
     }
   });
 }
-// [40.1] — friendly 429 response with Retry-After header
-function rateLimitResponse(
-  ctxOrEnv,
-  rid,
-  trace,
-  secs = 30,
-  source = "upstream-failure"
-) {
+__name(errorResponseWith, "errorResponseWith");
+function rateLimitResponse(ctxOrEnv, rid, trace, secs = 30, source = "upstream-failure") {
   const safeSecs = Math.max(1, Number(secs) || 30);
   return errorResponseWith(
     {
@@ -11917,7 +8087,7 @@ function rateLimitResponse(
     rid
   );
 }
-// [38.4] — Friendly "no candidates" 404 with analytics + examples
+__name(rateLimitResponse, "rateLimitResponse");
 function notFoundCandidates(ctxOrEnv, rid, trace, { query, address }) {
   const examples = [
     "/menu/uber-test?query=McDonald%27s&address=Miami,%20FL",
@@ -11938,35 +8108,26 @@ function notFoundCandidates(ctxOrEnv, rid, trace, { query, address }) {
     rid
   );
 }
-function corsJson(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...CORS_ALL
-    }
-  });
-}
-
-// ---- Handler wrappers (clarity) ----
+__name(notFoundCandidates, "notFoundCandidates");
 function handleFetch(request, env, ctx) {
   return _worker_impl.fetch(request, env, ctx);
 }
+__name(handleFetch, "handleFetch");
 function handleQueue(batch, env, ctx) {
-  return _worker_impl.queue ? _worker_impl.queue(batch, env, ctx) : undefined;
+  return _worker_impl.queue ? _worker_impl.queue(batch, env, ctx) : void 0;
 }
+__name(handleQueue, "handleQueue");
 function handleScheduled(controller, env, ctx) {
-  return _worker_impl.scheduled
-    ? _worker_impl.scheduled(controller, env, ctx)
-    : undefined;
+  return _worker_impl.scheduled ? _worker_impl.scheduled(controller, env, ctx) : void 0;
 }
+__name(handleScheduled, "handleScheduled");
 function normPathname(u) {
   let p = u.pathname || "/";
   if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
   return p;
 }
-
-export default {
+__name(normPathname, "normPathname");
+var index_default = {
   async fetch(request, env, ctx) {
     const response = await handleFetch(request, env, ctx);
     return withTbWhoamiHeaders(response, env);
@@ -11978,3 +8139,7 @@ export default {
     return handleScheduled(controller, env, ctx);
   }
 };
+export {
+  index_default as default
+};
+//# sourceMappingURL=index.js.map

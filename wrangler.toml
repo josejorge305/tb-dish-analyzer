@@ -1,5 +1,5 @@
 # ================== BASE (dev/default) ==================
-name = "tb-dish-processor-production"
+name = "tb-dish-processor"
 main = "index.js"
 account_id = "68cbbc868956bf7166613432aee13dec"
 compatibility_date = "2023-12-01"
@@ -15,6 +15,10 @@ bindings = []
 [[services]]
 binding = "recipe_core"
 service = "tb-recipe-core"
+
+[[services]]
+binding = "restaurant_core"
+service = "tb-restaurant-core"
 
 [[services]]
 binding = "allergen_organs"
@@ -79,6 +83,10 @@ bindings = []
 [[env.production.services]]
 binding = "recipe_core"
 service = "tb-recipe-core"
+
+[[env.production.services]]
+binding = "restaurant_core"
+service = "tb-restaurant-core"
 
 [[env.production.services]]
 binding = "allergen_organs"
