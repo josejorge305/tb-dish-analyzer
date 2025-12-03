@@ -1,10 +1,31 @@
 # ================== BASE (dev/default) ==================
-name = "tb-dish-processor"
+name = "tb-dish-processor-production"
 main = "index.js"
 account_id = "68cbbc868956bf7166613432aee13dec"
-compatibility_date = "2024-10-01"
+compatibility_date = "2023-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[durable_objects]
+bindings = []
+
+# --- Service bindings (default env) ---
+[[services]]
+binding = "recipe_core"
+service = "tb-recipe-core"
+
+[[services]]
+binding = "allergen_organs"
+service = "tb-allergen-organs-production"
+
+[[services]]
+binding = "metrics_core"
+service = "tb-metrics-core"
 
 [vars]
+LEXICON_API_URL = "https://tummy-lexicon-api.onrender.com"
 # Used by internal links/debug; safe to keep for dev
 
 
@@ -38,19 +59,34 @@ bucket_name = "tb-analysis-cache"
 binding = "ANALYSIS_QUEUE"
 queue = "tb-dish-analysis-queue"
 
+[[queues.consumers]]
+queue = "tb-dish-analysis-queue"
+max_batch_size = 1
+max_batch_timeout = 30
+
 
 
 # ================== PRODUCTION ENV ==================
 [env.production]
 # existing production bindings stay above this if you have them (KV, D1, etc.)
+[env.production.ai]
+binding = "AI"
 
-# ✅ Clean Service Binding declaration
-services = [
-  { binding = "restaurant_core", service = "tb-restaurant-core" },
-  { binding = "recipe_core",     service = "tb-recipe-core" },
-  { binding = "allergen_organs", service = "tb-allergen-organs" },
-  { binding = "metrics_core",    service = "tb-metrics-core" }
-]
+[env.production.durable_objects]
+bindings = []
+
+# ✅ Service bindings for production
+[[env.production.services]]
+binding = "recipe_core"
+service = "tb-recipe-core"
+
+[[env.production.services]]
+binding = "allergen_organs"
+service = "tb-allergen-organs-production"
+
+[[env.production.services]]
+binding = "metrics_core"
+service = "tb-metrics-core"
 
 [env.production.vars]
 ENV = "production"
@@ -120,12 +156,6 @@ bucket_name = "tb-analysis-cache"
 binding = "ANALYSIS_QUEUE"
 queue = "tb-dish-analysis-queue"
 
-# --- QUEUE CONSUMER (production) ---
-[[env.production.queues.consumers]]
-queue = "tb-dish-analysis-queue"
-max_batch_size = 1
-max_batch_timeout = 1
-max_retries = 1
 
 # --- SERVICE BINDING (production) ---
 # If you self-call this Worker (fetch to SELF), this binding matches prod name above.

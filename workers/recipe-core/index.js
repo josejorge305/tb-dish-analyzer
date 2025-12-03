@@ -20,8 +20,19 @@ export default {
     if (pathname === "/recipe/resolve" && request.method === "POST") {
       const body = await request.json().catch(() => ({}));
       const title = body.title || "";
+      const restaurantName = body.restaurantName || null;
+      const menuDescription = body.menuDescription || null;
+      const menuSection = body.menuSection || null;
+      const forceLLM = body.forceLLM || false;
       const ingredients = body.ingredients || [];
-      const res = await recipeCore.resolveRecipe(env, { title, ingredients });
+      const res = await recipeCore.resolveRecipe(env, {
+        title,
+        restaurantName,
+        menuDescription,
+        menuSection,
+        forceLLM,
+        ingredients
+      });
       return j(res, request);
     }
 

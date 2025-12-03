@@ -191,6 +191,41 @@ async function parseResSafe(res) {
     }
   }
 }
+async function callJson(url, opts = {}) {
+  const fetcher = opts.fetcher || fetch;
+  const resp = await fetcher(url, {
+    method: opts.method || "GET",
+    headers: {
+      "content-type": "application/json",
+      ...(opts.headers || {})
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  }).catch((err) => {
+    return { _fetchError: err?.message || String(err) };
+  });
+
+  if (!resp || resp._fetchError) {
+    return {
+      ok: false,
+      error: "fetch_failed",
+      detail: resp && resp._fetchError
+    };
+  }
+
+  const text = await resp.text().catch(() => "");
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { raw: text };
+  }
+
+  return {
+    ok: resp.ok,
+    status: resp.status,
+    data: json
+  };
+}
 function okJson(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -2103,6 +2138,275 @@ function normalizeIngredientsArray(raw) {
   }
   return out;
 }
+
+function titleizeIngredient(text) {
+  return text
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+function sanitizeIngredientForCookbook(raw) {
+  const base =
+    typeof raw === "string"
+      ? raw
+      : raw?.name || raw?.original || raw?.text || "";
+  const lower = String(base || "").toLowerCase();
+  const optional =
+    /\boptional\b/.test(lower) ||
+    /\bfor (serving|garnish)\b/.test(lower) ||
+    /\bto taste\b/.test(lower);
+
+  const cleaned = normalizeIngredientLine(base)
+    .replace(/\b(optional|undefined|to taste)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+
+  const withoutPrefix = cleaned.replace(
+    /^\s*[\d\/\.\-¼½¾⅓⅔⅛⅜⅝⅞]+\s*(cups?|cup|tbsp|tablespoons?|tsp|teaspoons?|ounces?|oz|grams?|g|kg|pounds?|lb|ml|l|liters?)?\s+/i,
+    ""
+  );
+  const name = titleizeIngredient(
+    withoutPrefix
+      .replace(/^[\d\s\.\/\-]+/, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+  if (!name) return null;
+
+  const entry = { name, optional };
+  const n = name.toLowerCase();
+  const catMatch = (patterns) => patterns.some((re) => re.test(n));
+  if (
+    catMatch([
+      /\b(chicken|beef|pork|salmon|tuna|shrimp|lobster|crab|prawn|turkey|lamb|tofu|tempeh|egg|steak|ham|bacon|sausage)\b/
+    ])
+  ) {
+    entry.category = "protein";
+  } else if (
+    catMatch([
+      /\b(rice|noodles?|pasta|spaghetti|fettuccine|linguine|macaroni|quinoa|couscous|tortilla|bread|bun|potato|potatoes|yuca|cassava|gnocchi|grain|lentils?)\b/,
+      /\b(greens?|spinach|kale|lettuce|arugula|cabbage)\b/
+    ])
+  ) {
+    entry.category = "base";
+  } else if (
+    catMatch([
+      /\b(onion|garlic|shallot|scallion|leek|ginger|chili|jalapeno|pepper|bell pepper)\b/,
+      /\b(parsley|cilantro|basil|oregano|thyme|rosemary|sage|dill)\b/
+    ])
+  ) {
+    entry.category = "aromatic";
+  } else if (
+    catMatch([
+      /\b(oil|olive oil|vinegar|broth|stock|soy sauce|coconut milk|milk|cream|wine)\b/,
+      /\b(sauce|dressing)\b/
+    ])
+  ) {
+    entry.category = "liquid";
+  } else if (
+    catMatch([
+      /\b(salt|black pepper|pepper|paprika|cumin|turmeric|curry|chili powder|flakes|oregano|parsley|basil|spice|seasoning|sugar|honey)\b/
+    ])
+  ) {
+    entry.category = "seasoning";
+  } else {
+    entry.category = "other";
+  }
+
+  return entry;
+}
+
+function arrangeCookbookIngredients(rawList = []) {
+  const cleaned = [];
+  const seen = new Set();
+  for (const it of rawList) {
+    const entry = sanitizeIngredientForCookbook(it);
+    if (!entry) continue;
+    const key = entry.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(entry);
+  }
+
+  const order = (cat) =>
+    cleaned.filter((c) => c.category === cat && !c.optional);
+  const optional = cleaned.filter((c) => c.optional);
+  const others = cleaned.filter(
+    (c) =>
+      !c.optional &&
+      !["protein", "base", "aromatic", "liquid", "seasoning"].includes(
+        c.category
+      )
+  );
+
+  const ordered = [
+    ...order("protein"),
+    ...order("base"),
+    ...order("aromatic"),
+    ...order("liquid"),
+    ...order("seasoning"),
+    ...others
+  ];
+
+  const bullets = ordered.map((c) => `- ${c.name}`);
+  if (optional.length) {
+    bullets.push(
+      `- Optional: ${optional.map((c) => c.name).join(", ")}`
+    );
+  }
+  return bullets.length ? bullets : ["- Ingredients not available"];
+}
+
+function naturalList(arr = [], fallback = "the ingredients") {
+  const clean = arr.map((s) => s.trim()).filter(Boolean);
+  if (!clean.length) return fallback;
+  if (clean.length === 1) return clean[0];
+  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
+  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
+}
+
+function inferCookbookDescription(dishName, bullets = []) {
+  const name = (dishName || "").trim();
+  const proteins = bullets
+    .filter((b) => b.startsWith("- ") && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const bases = bullets
+    .filter((b) => b.startsWith("- ") && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const accents = bullets
+    .filter((b) => b.startsWith("- ") && /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+
+  const subject = name || "This dish";
+  if (proteins.length && bases.length) {
+    return `*${subject} brings ${naturalList(proteins)} together with ${naturalList(bases)} and warm pantry flavors.*`;
+  }
+  if (proteins.length) {
+    return `*${subject} highlights ${naturalList(proteins)} with simple herbs and spices.*`;
+  }
+  if (bases.length) {
+    return `*${subject} leans on ${naturalList(bases)} with cozy aromatics and a gentle sauce.*`;
+  }
+  const accent = accents.length ? naturalList(accents) : "bright aromatics";
+  return `*${subject} uses everyday ingredients with ${accent} for an easy, cozy plate.*`;
+}
+
+function cleanCookbookStep(text) {
+  let s = String(text || "");
+  s = s.replace(/^\s*(step\s*\d+[:\.\)]?\s*)/i, "");
+  s = s.replace(/^\s*\d+[\.\)]\s*/, "");
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(/\byou\b/gi, "").replace(/\byour\b/gi, "").trim();
+  if (!s) return null;
+  const capped = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(capped) ? capped : `${capped}.`;
+}
+
+function inferCookbookSteps(rawSteps = [], ingredientBullets = []) {
+  const cleanedRaw = Array.isArray(rawSteps)
+    ? rawSteps.map((s) => cleanCookbookStep(s)).filter(Boolean)
+    : [];
+
+  const proteins = ingredientBullets
+    .filter((b) => /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const bases = ingredientBullets
+    .filter((b) => /^- /.test(b) && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const aromatics = ingredientBullets
+    .filter((b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const liquids = ingredientBullets
+    .filter((b) => /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b))
+    .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+
+  const inferred = [];
+  if (aromatics.length || bases.length) {
+    inferred.push(
+      `Ingredients are prepped; aromatics like ${naturalList(aromatics, "onion and garlic")} and vegetables are chopped.`
+    );
+  } else {
+    inferred.push("Ingredients are prepped and cut into bite-size pieces.");
+  }
+
+  if (proteins.length) {
+    inferred.push(
+      `${naturalList(proteins)} ${proteins.length > 1 ? "are" : "is"} seasoned and cooked until browned.`
+    );
+  }
+
+  if (bases.length) {
+    inferred.push(
+      `${naturalList(bases)} ${bases.length > 1 ? "are" : "is"} cooked until tender.`
+    );
+  }
+
+  if (liquids.length || aromatics.length) {
+    inferred.push(
+      `${liquids.length ? naturalList(liquids) : "Sauce"} is stirred in with the cooked ingredients until flavors meld.`
+    );
+  }
+
+  inferred.push("The dish is assembled, tasted, and served warm.");
+
+  let steps = cleanedRaw.length && cleanedRaw.length <= 6 ? cleanedRaw : [];
+  if (!steps.length || steps.length > 6) {
+    steps = inferred;
+  }
+
+  if (steps.length < 3) {
+    for (const inf of inferred) {
+      if (steps.length >= 3) break;
+      if (!steps.includes(inf)) steps.push(inf);
+    }
+  }
+
+  return steps.slice(0, 6);
+}
+
+function formatLikelyRecipeMarkdown({
+  dishName,
+  rawIngredients = [],
+  rawSteps = [],
+  servingInfo = null
+}) {
+  const title = dishName ? `### Likely recipe: ${dishName}` : "### Likely recipe";
+  const ingredients = arrangeCookbookIngredients(rawIngredients);
+  const description = inferCookbookDescription(dishName, ingredients);
+  const steps = inferCookbookSteps(rawSteps, ingredients);
+
+  const lines = [
+    title,
+    description,
+    "",
+    "**Ingredients**",
+    ...ingredients,
+    "",
+    "**How it's prepared**",
+    ...steps.map((s, idx) => `${idx + 1}. ${s}`)
+  ];
+
+  if (servingInfo && (servingInfo.servings || servingInfo.grams)) {
+    const bits = [];
+    if (servingInfo.servings)
+      bits.push(`${servingInfo.servings} serving${servingInfo.servings > 1 ? "s" : ""}`);
+    if (servingInfo.grams) bits.push(`${servingInfo.grams} g`);
+    const joined =
+      bits.length === 2 ? `${bits[0]} (${bits[1]})` : bits.join("");
+    if (joined) lines.push("", `**Estimated serving size:** about ${joined}`);
+  }
+
+  lines.push(
+    "",
+    "**Based on typical recipes from Edamam and Spoonacular. Restaurant versions may vary.**"
+  );
+
+  return lines.join("\n");
+}
+
 function safeJson(s, fallback) {
   try {
     return s ? JSON.parse(s) : fallback;
@@ -4863,6 +5167,39 @@ async function handleRecipeResolve(env, request, url, ctx) {
 
   out = out ? { ...out, ...reply } : { ...reply };
 
+  if (wantShape === "likely_recipe" || wantShape === "likely_recipe_md") {
+    const ingForCookbook =
+      (out?.ingredients_lines && out.ingredients_lines.length
+        ? out.ingredients_lines
+        : ingredients) || [];
+    const stepSource =
+      (Array.isArray(recipe?.steps) && recipe.steps.length
+        ? recipe.steps
+        : Array.isArray(out?.recipe?.steps)
+          ? out.recipe.steps
+          : []) || [];
+    const servingInfo =
+      recipe && typeof recipe === "object"
+        ? {
+            servings: recipe.servings ?? recipe.yield ?? null,
+            grams: recipe.grams ?? null
+          }
+        : null;
+    const md = formatLikelyRecipeMarkdown({
+      dishName: dish,
+      rawIngredients: ingForCookbook,
+      rawSteps: stepSource,
+      servingInfo
+    });
+    return new Response(md, {
+      status: 200,
+      headers: {
+        "content-type": "text/markdown; charset=utf-8",
+        "access-control-allow-origin": "*"
+      }
+    });
+  }
+
   // ==== OPTIONAL SHAPE: RecipeCard ===================================
   // If caller requests ?shape=recipe_card, return the fixed UI payload.
   if (wantShape === "recipe_card") {
@@ -5912,72 +6249,13 @@ async function loadIngredientShards(env) {
   return { used_shards, used_shards_meta, entriesAll };
 }
 
-// ---- MINI FALLBACK TERMS ----
-const FALLBACK_INGREDIENTS = [
-  { term: "pasta", canonical: "pasta", classes: ["gluten"], tags: ["wheat"] },
-  {
-    term: "noodles",
-    canonical: "noodles",
-    classes: ["gluten"],
-    tags: ["wheat"]
-  },
-  {
-    term: "flour",
-    canonical: "wheat flour",
-    classes: ["gluten"],
-    tags: ["wheat", "flour"]
-  },
-  { term: "wheat", canonical: "wheat", classes: ["gluten"], tags: ["wheat"] },
-  {
-    term: "cream",
-    canonical: "cream",
-    classes: ["dairy"],
-    tags: ["milk", "dairy"]
-  },
-  {
-    term: "butter",
-    canonical: "butter",
-    classes: ["dairy"],
-    tags: ["milk", "dairy"]
-  },
-  {
-    term: "parmesan",
-    canonical: "parmesan",
-    classes: ["dairy"],
-    tags: ["cheese", "milk", "dairy"]
-  },
-  {
-    term: "cheese",
-    canonical: "cheese",
-    classes: ["dairy"],
-    tags: ["milk", "dairy"]
-  },
-  {
-    term: "garlic",
-    canonical: "garlic",
-    classes: ["allium"],
-    tags: ["garlic"]
-  },
-  { term: "onion", canonical: "onion", classes: ["allium"], tags: ["onion"] }
-];
+// ---- MINI FALLBACK TERMS (disabled; lexicon-only) ----
+const FALLBACK_INGREDIENTS = [];
 
-function fallbackEntriesFromText(corpus) {
-  const entries = [];
-  for (const f of FALLBACK_INGREDIENTS) {
-    const t = lc(f.term);
-    if (!t) continue;
-    if (termMatches(corpus, t)) {
-      entries.push({
-        term: t,
-        canonical: f.canonical,
-        classes: f.classes,
-        tags: f.tags,
-        terms: [t],
-        source: "fallback"
-      });
-    }
-  }
-  return entries;
+function fallbackEntriesFromText(_corpus) {
+  // Super-brain mode: NO manual fallback list.
+  // All hits must come from Lexicon shards (entriesAll) or lexicon API.
+  return [];
 }
 
 // --- Tidy helpers ---
@@ -6218,11 +6496,10 @@ const _worker_impl = {
 
         // Fallback preview/application when shards are skinny
         const FALLBACK_TRIGGER = getEnvInt(env, "FALLBACK_TRIGGER_UNDER", 50);
-        const fallback_debug = fallbackEntriesFromText(corpus);
+        const fallback_debug = []; // no manual fallback in super-brain mode
         let ingredient_hits = ingredient_hits_raw.slice();
-        if (entriesAll.length < FALLBACK_TRIGGER) {
-          for (const fh of fallback_debug) ingredient_hits.push(fh);
-        }
+        // NOTE: entriesAll length no longer triggers any hard-coded additions.
+        // All ingredient_hits must come from Lexicon shards/API only.
 
         // Tidy (dedupe + prioritize + top N)
         const HITS_LIMIT = getEnvInt(env, "HITS_LIMIT", 25);
@@ -6436,6 +6713,386 @@ const _worker_impl = {
       return handleHealthz(env);
     }
 
+    if (pathname === "/pipeline/analyze-dish" && request.method === "POST") {
+      const body = (await readJsonSafe(request)) || {};
+      let {
+        dishName,
+        restaurantName,
+        userFlags = {},
+        menuDescription = null,
+        menuSection = null
+      } = body || {};
+      let forceLLM = false;
+
+      dishName =
+        dishName ||
+        body?.dish ||
+        body?.title ||
+        body?.name ||
+        "";
+
+      if (!dishName || typeof dishName !== "string" || !dishName.trim()) {
+        return okJson({ ok: false, error: "dishName is required" }, 400);
+      }
+
+      const correlationId =
+        request.headers.get("x-correlation-id") ||
+        (crypto && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `tb-${Date.now()}`);
+
+      console.log(
+        "bindings",
+        JSON.stringify({
+          recipe_core: !!env.recipe_core,
+          recipe_core_fetch:
+            env.recipe_core && typeof env.recipe_core.fetch === "function",
+          allergen_organs: !!env.allergen_organs,
+          allergen_organs_fetch:
+            env.allergen_organs &&
+            typeof env.allergen_organs.fetch === "function",
+          ai: !!env.AI
+        })
+      );
+
+      // --- CANONICAL NAME FALLBACK (LLM NORMALIZATION) ---
+      let originalName = dishName;
+      let canonicalDishName = dishName;
+
+      // If dish name is too branded, vague, or short → canonicalize
+      if (!dishName || dishName.trim().length < 3 || /big mac|baconator|cheesy|loaded|signature|special/i.test(dishName)) {
+        try {
+          const llmRes = await env.AI.run('@cf/meta/llama-3.2-11b-instruct', {
+            prompt: `You are helping normalize restaurant menu items into generic dish names 
+for recipe databases like Edamam or Spoonacular.
+
+Dish name: "${dishName}"
+Menu section: "${menuSection || ''}"
+Menu description: "${menuDescription || ''}"
+
+Rewrite this into a generic, descriptive food name that captures the likely key ingredients 
+(e.g. "double bacon cheeseburger", "mozzarella pizza with buffalo sauce").
+
+Return ONLY the improved dish name, no explanations.`
+          });
+
+          if (llmRes && typeof llmRes === 'string' && llmRes.trim().length > 0) {
+            canonicalDishName = llmRes.trim();
+            console.log('canonicalDishName:', canonicalDishName);
+          }
+        } catch (err) {
+          console.log('Canonicalization failed, using original name.');
+          canonicalDishName = dishName;
+        }
+
+        forceLLM = true;
+      }
+
+      // replace dishName sent to recipe core
+      dishName = canonicalDishName;
+
+      // STEP 1: recipe-core /recipe/resolve
+      const recipeResolveUrl = env.recipe_core
+        ? "https://recipe-core/recipe/resolve"
+        : "https://tb-recipe-core.tummybuddy.workers.dev/recipe/resolve";
+      const recipeFetcher =
+        (env.recipe_core && typeof env.recipe_core.fetch === "function")
+          ? env.recipe_core.fetch.bind(env.recipe_core)
+          : fetch;
+      const recipeResp = await recipeFetcher(recipeResolveUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-correlation-id": correlationId
+        },
+        body: JSON.stringify({
+          title: dishName,
+          restaurantName,
+          menuDescription,
+          menuSection,
+          forceLLM
+        })
+      });
+
+      const recipeText = await recipeResp.text();
+      let recipe;
+      try {
+        recipe = JSON.parse(recipeText);
+      } catch (e) {
+        recipe = {
+          ok: false,
+          error: "recipe_core returned non-JSON",
+          raw: recipeText
+        };
+      }
+
+      // STEP 2: recipe-core /ingredients/normalize
+      const ingredientLines = Array.isArray(recipe?.recipe?.ingredients)
+        ? recipe.recipe.ingredients
+            .map((row) =>
+              row.text ||
+              `${row.qty ?? row.quantity ?? ""} ${row.unit || ""} ${row.name || ""}`.trim()
+            )
+            .filter(Boolean)
+        : [];
+
+      const normResp = await recipeFetcher(
+        env.recipe_core
+          ? "https://recipe-core/ingredients/normalize"
+          : "https://tb-recipe-core.tummybuddy.workers.dev/ingredients/normalize",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-correlation-id": correlationId
+          },
+          body: JSON.stringify({ lines: ingredientLines })
+        }
+      );
+
+      const normText = await normResp.text();
+      let normalized;
+      try {
+        normalized = JSON.parse(normText);
+      } catch (e) {
+        normalized = {
+          ok: false,
+          error: "recipe_core.normalize returned non-JSON",
+          raw: normText
+        };
+      }
+
+      // STEP 3: build ingredients array for organs_core
+      let ingredients = [];
+
+      if (
+        normalized &&
+        Array.isArray(normalized.items) &&
+        normalized.items.length > 0
+      ) {
+        // Normal path: use fully-normalized items (Zestful/USDA/molecular, when present)
+        ingredients = normalized.items.map((row) => ({
+          name: row.name || row.original || "",
+          qty: row.qty ?? null,
+          unit: row.unit || null,
+          comment: row.comment || null
+        }));
+      } else if (Array.isArray(recipe?.recipe?.ingredients)) {
+        // Fallback path (current reality): use heuristic/Edamam/Spoonacular recipe ingredients
+        // so organs_core + Lexicon have rich text to work with.
+        ingredients = recipe.recipe.ingredients.map((row) => ({
+          // Prefer the full text as 'name' so normalizeIngredientsArray picks up
+          // things like "wheat burger bun (contains gluten)", "American cheese slices (dairy)".
+          name: row.text || row.name || "",
+          qty: row.qty ?? row.quantity ?? null,
+          unit: row.unit || null,
+          comment: row.comment || null
+        }));
+      } else {
+        ingredients = [];
+      }
+
+      // Build ingredient list for per-ingredient Lex visibility
+      const ingredientsForLex = (() => {
+        if (normalized && Array.isArray(normalized.items) && normalized.items.length) {
+          return normalized.items
+            .map((it) => it.name || it.text || it.original || "")
+            .filter((s) => !!s && s.trim().length > 1);
+        }
+        if (recipe && recipe.recipe && Array.isArray(recipe.recipe.ingredients)) {
+          return recipe.recipe.ingredients
+            .map((i) => i.name || i.text || "")
+            .filter((s) => !!s && s.trim().length > 1);
+        }
+        const parts = [body.dishName, body.menuDescription]
+          .filter(Boolean)
+          .map((s) => s.trim());
+        return parts.length ? parts : [];
+      })();
+
+      const lexPerIngredient = await classifyIngredientsWithLex(
+        env,
+        ingredientsForLex,
+        "en"
+      );
+      const allIngredientLexHits = lexPerIngredient.allHits || [];
+
+      // STEP 3.5: precompute Lexicon hits to pass downstream
+      let lex = null;
+      let finalLexHits = [];
+      try {
+        const lexParts = [];
+        if (dishName) lexParts.push(dishName);
+        if (menuDescription) lexParts.push(menuDescription);
+        if (Array.isArray(recipe?.recipe?.ingredients)) {
+          lexParts.push(
+            recipe.recipe.ingredients
+              .map((row) => row.text || row.name || "")
+              .filter(Boolean)
+              .join(", ")
+          );
+        }
+        const lexText = lexParts.filter(Boolean).join(". ");
+
+        if (lexText) {
+          // callLexicon already knows how to use LEXICON_API_URL + LEXICON_API_KEY
+          lex = await callLexicon(env, lexText, "en");
+          const rawHits = Array.isArray(lex?.data?.hits) ? lex.data.hits : [];
+          const hits = rawHits.map((h) => ({
+            term: h.term,
+            canonical: h.canonical,
+            classes: Array.isArray(h.classes) ? h.classes : [],
+            tags: Array.isArray(h.tags) ? h.tags : [],
+            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
+            fodmap: h.fodmap ?? h.fodmap_level,
+            lactose_band: h.lactose_band || null,
+            milk_source: h.milk_source || null
+          }));
+          const finalLexHitsLocal = hits;
+          finalLexHits = finalLexHitsLocal;
+        }
+      } catch (e) {
+        // swallow lex errors here; later debug block records if needed
+      }
+
+      const blobHits = finalLexHits || [];
+      const primaryLexHits =
+        allIngredientLexHits && allIngredientLexHits.length
+          ? allIngredientLexHits
+          : blobHits;
+
+      // STEP 4: allergen-organs /organs/assess
+      const allergenUrl = env.allergen_organs
+        ? "https://allergen-organs/organs/assess"
+        : "https://tb-allergen-organs-production.tummybuddy.workers.dev/organs/assess";
+      const allergenFetcher =
+        (env.allergen_organs && typeof env.allergen_organs.fetch === "function")
+          ? env.allergen_organs.fetch.bind(env.allergen_organs)
+          : fetch;
+      const organsResp = await allergenFetcher(allergenUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-correlation-id": correlationId
+        },
+        body: JSON.stringify({
+          ingredients,
+          user_flags: userFlags,
+          lex_hits: primaryLexHits
+        })
+      });
+
+      const organsText = await organsResp.text();
+      let organs;
+      try {
+        organs = JSON.parse(organsText);
+      } catch (e) {
+        organs = {
+          ok: false,
+          error: "allergen_organs returned non-JSON",
+          raw: organsText
+        };
+      }
+
+      // STEP 5 — Lexicon super-brain: FODMAP + allergens (no manual short list)
+      try {
+        if (!organs || typeof organs !== "object") organs = {};
+        if (!organs.flags) organs.flags = {};
+        if (!Array.isArray(organs.flags.allergens)) organs.flags.allergens = [];
+
+        // Attach raw lexicon payload for debugging (optional)
+        if (!organs.debug) organs.debug = {};
+        organs.debug.lexicon_raw = lex || null;
+
+        if (lex && lex.ok) {
+          // Normalize lex hits into the shape expected by scoreDishFromHits
+          const hits = primaryLexHits;
+
+          const scoring = scoreDishFromHits(hits);
+
+          // ---- FODMAP from lexicon only ----
+          if (scoring.flags && scoring.flags.fodmap) {
+            organs.flags.fodmap = {
+              level: scoring.flags.fodmap,
+              reason: `FODMAP level ${scoring.flags.fodmap} inferred from lexicon.`,
+              source: "lexicon"
+            };
+          }
+
+          // ---- Allergens from lexicon only ----
+          const existing = Array.isArray(organs.flags.allergens)
+            ? organs.flags.allergens.slice()
+            : [];
+          const existingKinds = new Set(
+            existing
+              .map((a) => (a && typeof a.kind === "string" ? a.kind : null))
+              .filter(Boolean)
+          );
+
+          const lexAllergenKinds = Array.isArray(scoring.flags?.allergens)
+            ? scoring.flags.allergens
+            : [];
+
+          for (const k of lexAllergenKinds) {
+            const kind = String(k || "").toLowerCase();
+            if (!kind || existingKinds.has(kind)) continue;
+            existingKinds.add(kind);
+            existing.push({
+              kind,
+              message: `Contains or may contain ${kind} (from lexicon).`,
+              source: "lexicon"
+            });
+          }
+
+          organs.flags.allergens = existing;
+
+          // ---- Lactose level from lexicon ----
+          const lactoseInfo = extractLactoseFromHits(hits);
+          if (lactoseInfo) {
+            organs.flags.lactose = lactoseInfo;
+
+            // If lactose is not "none", ensure milk allergen is present
+            if (lactoseInfo.level !== "none") {
+              const hasMilk = organs.flags.allergens.some(
+                (a) => a && a.kind === "milk"
+              );
+              if (!hasMilk) {
+                organs.flags.allergens.push({
+                  kind: "milk",
+                  message: "Contains or may contain milk/lactose (from lexicon).",
+                  source: "lexicon"
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        if (!organs.debug) organs.debug = {};
+        organs.debug.lexicon_error = String(e?.message || e);
+      }
+
+      // STEP 6: final combined response
+      return okJson(
+        {
+          ok: true,
+          source: "pipeline.analyze-dish",
+          dishName,
+          restaurantName,
+          recipe,
+          normalized,
+          organs,
+          debug: {
+            ...(organs && organs.debug ? organs.debug : {}),
+            lex_blob_raw: lex,
+            lex_blob_hits: blobHits,
+            lex_per_ingredient: lexPerIngredient,
+            lex_primary_hits: primaryLexHits
+          }
+        },
+        200
+      );
+    }
+
     if (pathname === "/organs/from-dish" && request.method === "GET") {
       const id = _cid(request.headers);
       const init = { method: "GET", headers: new Headers(request.headers) };
@@ -6460,6 +7117,86 @@ const _worker_impl = {
     }
     if (pathname === "/debug/whoami" && request.method === "GET") {
       return tbWhoami(env);
+    }
+    if (pathname === "/debug/brain-health" && request.method === "GET") {
+      const urlBase = new URL(request.url).origin;
+      const results = {};
+
+      results.gateway = {
+        ok: true,
+        env: env?.ENV || "production",
+        built_at: env?.BUILT_AT || "n/a",
+        base: urlBase
+      };
+
+      const restaurantFetch =
+        env.restaurant_core?.fetch?.bind(env.restaurant_core) || null;
+      const recipeFetch =
+        env.recipe_core?.fetch?.bind(env.recipe_core) || null;
+      const allergenFetch =
+        env.allergen_organs?.fetch?.bind(env.allergen_organs) || null;
+      const metricsFetch =
+        env.metrics_core?.fetch?.bind(env.metrics_core) || null;
+
+      const restaurantUrl =
+        env.RESTAURANT_CORE_URL ||
+        "https://tb-restaurant-core.internal/debug/whoami";
+      const recipeUrl =
+        env.RECIPE_CORE_URL ||
+        "https://tb-recipe-core.internal/debug/whoami";
+      const allergenUrl =
+        env.ALLERGEN_ORGANS_URL ||
+        "https://tb-allergen-organs.internal/debug/whoami";
+      const metricsUrl =
+        env.METRICS_CORE_URL ||
+        "https://tb-metrics-core.internal/debug/whoami";
+
+      results.restaurant_core = await callJson(restaurantUrl, {
+        fetcher: restaurantFetch
+      }).catch((e) => ({
+        ok: false,
+        error: String(e)
+      }));
+      results.recipe_core = await callJson(recipeUrl, {
+        fetcher: recipeFetch
+      }).catch((e) => ({
+        ok: false,
+        error: String(e)
+      }));
+      results.allergen_organs = await callJson(allergenUrl, {
+        fetcher: allergenFetch
+      }).catch((e) => ({
+        ok: false,
+        error: String(e)
+      }));
+      results.metrics_core = await callJson(metricsUrl, {
+        fetcher: metricsFetch
+      }).catch((e) => ({
+        ok: false,
+        error: String(e)
+      }));
+
+      const overallOk =
+        results.gateway.ok &&
+        results.restaurant_core.ok &&
+        results.recipe_core.ok &&
+        results.allergen_organs.ok &&
+        results.metrics_core.ok;
+
+      return new Response(
+        JSON.stringify(
+          {
+            ok: overallOk,
+            results
+          },
+          null,
+          2
+        ),
+        {
+          status: overallOk ? 200 : 503,
+          headers: { "content-type": "application/json" }
+        }
+      );
     }
     if (pathname === "/debug/edamam-recipe") {
       const dish = (url.searchParams.get("dish") || "Chicken Alfredo").trim();
@@ -7303,27 +8040,19 @@ const _worker_impl = {
       }
     }
 
-    // /menu/extract → forward to tb-restaurant-core
     if (pathname === "/menu/extract" && request.method === "GET") {
-      const id = cid(request.headers);
-      const init = {
-        method: request.method,
-        headers: new Headers(request.headers)
-      };
-      init.headers.set("x-correlation-id", id);
+      const url = new URL(request.url);
+      const search = url.search || "";
 
-      const res = await env.restaurant_core.fetch(
-        new Request(request.url, init)
-      );
+      const upstreamUrl =
+        "https://tb-restaurant-core.internal/menu/extract" + search;
 
-      const out = new Headers(res.headers);
-      out.set("x-correlation-id", id);
-      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
-      out.set("x-tb-env", env.ENV || "production");
-      out.set("x-tb-git", env.GIT_SHA || "n/a");
-      out.set("x-tb-built", env.BUILT_AT || "n/a");
+      const upstreamResp = await env.restaurant_core.fetch(upstreamUrl, {
+        method: "GET",
+        headers: request.headers
+      });
 
-      return new Response(res.body, { status: res.status, headers: out });
+      return upstreamResp;
     }
     if (pathname === "/recipe/resolve")
       return handleRecipeResolve(env, request, url, ctx);
@@ -10236,6 +10965,19 @@ function normalizeFodmapValue(v) {
   if (["low", "very_low", "trace"].includes(lvl)) return "low";
   return "unknown";
 }
+function extractLactoseFromLexHits(rawHits) {
+  for (const h of rawHits || []) {
+    const lac = h && h.lactose;
+    if (lac && typeof lac.level === "string") {
+      return {
+        level: String(lac.level).toLowerCase(),
+        reason: lac.reason || "Lactose level from lexicon.",
+        source: "lexicon"
+      };
+    }
+  }
+  return null;
+}
 function inferAllergensFromClassesTags(hit) {
   const out = new Set(
     Array.isArray(hit.allergens)
@@ -10269,6 +11011,66 @@ function inferAllergensFromClassesTags(hit) {
   if (classes.includes("egg") || tags.includes("egg")) out.add("egg");
   if (classes.includes("sesame") || tags.includes("sesame")) out.add("sesame");
   return Array.from(out);
+}
+
+function extractLactoseFromHits(hits) {
+  if (!Array.isArray(hits) || !hits.length) return null;
+
+  const rank = { high: 3, moderate: 2, medium: 2, low: 1, none: 0, unknown: 0 };
+  let bestLevel = null;
+  const examples = new Set();
+
+  for (const h of hits) {
+    const fod = h.fodmap || {};
+    const bandRaw = h.lactose_band || (fod && fod.lactose_band) || "";
+    const band = String(bandRaw || "").toLowerCase();
+    const drivers = Array.isArray(fod.drivers) ? fod.drivers.map(String) : [];
+    const mentionsLactose =
+      drivers.some((d) => d.toLowerCase() === "lactose") || !!band;
+
+    if (!mentionsLactose) continue;
+
+    // derive normalized lactose level
+    let lvl = (band || String(fod.level || "")).toLowerCase();
+    if (lvl === "very_high" || lvl === "ultra_high") lvl = "high";
+    if (lvl === "medium") lvl = "moderate";
+    if (!lvl) lvl = "unknown";
+
+    if (!bestLevel || rank[lvl] > rank[bestLevel]) bestLevel = lvl;
+
+    const name =
+      h.canonical ||
+      h.term ||
+      (fod && fod.note) ||
+      "";
+    if (name) examples.add(name);
+  }
+
+  // If we saw no lactose-related hits at all, return null
+  if (!bestLevel) return null;
+
+  // Even if bestLevel is "none", we still want to expose that to the frontend
+  const level = bestLevel;
+
+  let reason;
+  if (level === "none") {
+    reason = "Dairy appears effectively lactose-free or very low in lactose.";
+  } else if (level === "low") {
+    reason = "Includes low-lactose dairy ingredients.";
+  } else if (level === "moderate") {
+    reason = "Includes moderate-lactose dairy ingredients.";
+  } else if (level === "high") {
+    reason = "Includes high-lactose dairy ingredients.";
+  } else {
+    reason = "Lactose level inferred from lexicon classification.";
+  }
+
+  return {
+    level,
+    source: "lexicon",
+    reason,
+    examples: Array.from(examples)
+  };
 }
 function scoreDishFromHits(hits) {
   const allergenSet = new Set();
@@ -10704,93 +11506,119 @@ async function callRapid(env, query, address) {
   if (!r.ok) throw new Error(`RapidAPI ${r.status}`);
   return r.json();
 }
-async function callLexicon(env, text, lang = "en") {
-  const base = normalizeBase(env.LEXICON_API_URL);
-  const key = env.LEXICON_API_KEY;
-  if (!base || !key)
-    throw new Error("LEXICON_API_URL or LEXICON_API_KEY missing");
 
-  const candidates = buildLexiconAnalyzeCandidates(base);
-  const headersVariants = [
-    // Bearer first (some servers prefer this)
-    (k) => ({
-      Authorization: `Bearer ${k}`,
-      "Content-Type": "application/json",
-      "Accept-Language": lang
-    }),
-    // x-api-key header fallback
-    (k) => ({
-      "x-api-key": k,
-      "Content-Type": "application/json",
-      "Accept-Language": lang
-    })
-  ];
+// Per-ingredient Lexicon classification (phase 1 visibility)
+async function classifyIngredientsWithLex(env, ingredientsForLex, lang = "en") {
+  const perIngredient = [];
+  const allHits = [];
 
-  const payload = { text, lang, normalize: { diacritics: "fold" } };
+  for (const raw of ingredientsForLex) {
+    const name = (raw || "").trim();
+    if (!name || name.length < 2) continue;
 
-  // Try POST first, then GET fallback with ?text=...
-  for (const url of candidates) {
-    // POST variants
-    for (const mkHeaders of headersVariants) {
-      try {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: mkHeaders(key),
-          body: JSON.stringify(payload)
-        });
-        // Some servers respond 404 for wrong path → continue trying others
-        if (r.status === 404) continue;
-        if (r.status === 401) continue; // try next header style/path
-        if (!r.ok) continue;
+    const res = await callLexicon(env, name, lang);
+    const entry = {
+      ingredient: name,
+      ok: !!(res && res.ok),
+      hits: []
+    };
 
-        const js = await r.json().catch(() => null);
-        if (js)
-          return {
-            ok: true,
-            mode: "endpoint_analyze",
-            data: js,
-            endpoint: url,
-            auth: r.headers.get("www-authenticate") || "ok"
-          };
-      } catch (_) {
-        /* keep trying */
-      }
+    let localHits = [];
+    if (res && res.ok && res.data && Array.isArray(res.data.hits)) {
+      localHits = res.data.hits;
+      entry.hits = localHits;
+      allHits.push(...localHits);
     }
 
-    // GET variants (?text=..., &lang=...)
-    const u = new URL(url);
-    u.searchParams.set("text", String(text || ""));
-    u.searchParams.set("lang", String(lang || "en"));
-    u.searchParams.set("normalize", "diacritics:fold");
-
-    for (const mkHeaders of headersVariants) {
-      try {
-        const r = await fetch(u.toString(), {
-          method: "GET",
-          headers: mkHeaders(key)
-        });
-        if (r.status === 404) continue;
-        if (r.status === 401) continue;
-        if (!r.ok) continue;
-
-        const js = await r.json().catch(() => null);
-        if (js)
-          return {
-            ok: true,
-            mode: "endpoint_analyze",
-            data: js,
-            endpoint: u.toString(),
-            auth: r.headers.get("www-authenticate") || "ok"
-          };
-      } catch (_) {
-        /* keep trying */
-      }
-    }
+    perIngredient.push(entry);
   }
 
-  // If all direct calls fail, gracefully fall back to live shards
-  const js = await lexiconAnalyzeViaShards(env, text, lang);
-  return { ok: true, mode: "live_shards", data: js };
+  return { perIngredient, allHits };
+}
+async function callLexicon(env, text, lang = "en") {
+  const base = normalizeBase(env.LEXICON_API_URL);
+  const key = env.LEXICON_API_KEY || env.API_KEY;
+  if (!base || !key) {
+    throw new Error("LEXICON_API_URL or LEXICON_API_KEY missing");
+  }
+  if (!text) {
+    return { ok: false, reason: "missing-text", data: { hits: [] } };
+  }
+
+  // Build /v1/search URL
+  const url = `${base.replace(/\/+$/, "")}/v1/search`;
+
+  const payload = {
+    q: text,
+    shard_ids: null, // let server choose shards
+    include_lists: ["cheeses", "seafood", "animals"] // leverage your lactose + allergen lists
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "Accept-Language": lang
+    },
+    body: JSON.stringify(payload)
+  });
+
+  let js = null;
+  try {
+    js = await res.json();
+  } catch {
+    js = null;
+  }
+
+  if (!res.ok || !js) {
+    return {
+      ok: false,
+      status: res.status,
+      reason: "lexicon-search-failed",
+      data: { hits: [] }
+    };
+  }
+
+  // js.matches is your API's shape. Normalize to "hits" array the rest of the code expects.
+  const matches = Array.isArray(js.matches) ? js.matches : [];
+
+  const hits = matches.map((m) => {
+    const e = m.entry || {};
+    const mapsTo = Array.isArray(e.maps_to) ? e.maps_to : [];
+    const tags = [];
+    // Use maps_to (milk, shellfish, etc.) and category as tags
+    for (const t of mapsTo) tags.push(String(t).toLowerCase());
+    if (e.category) tags.push(String(e.category).toLowerCase());
+    if (m.source) tags.push(String(m.source).toLowerCase());
+
+    // Classes: derive coarse allergen classes from maps_to
+    const classes = [];
+    if (mapsTo.includes("milk")) classes.push("dairy");
+    if (mapsTo.includes("shellfish")) classes.push("shellfish");
+    if (mapsTo.includes("fish")) classes.push("fish");
+    if (mapsTo.includes("wheat") || mapsTo.includes("gluten")) {
+      classes.push("gluten");
+    }
+
+    return {
+      term: e.term || text,
+      canonical: e.canonical || null,
+      classes,
+      tags,
+      // Lexicon can optionally add "allergens" later if you extend schema
+      allergens: Array.isArray(e.allergens) ? e.allergens : undefined,
+      fodmap: e.fodmap ?? e.fodmap_level,
+      lactose_band: e.lactose_band || null,
+      milk_source: e.milk_source || null
+    };
+  });
+
+  return {
+    ok: true,
+    mode: "v1_search",
+    data: { hits }
+  };
 }
 async function lexiconAnalyzeViaShards(env, text, lang = "en") {
   const base = normalizeBase(env.LEXICON_API_URL);

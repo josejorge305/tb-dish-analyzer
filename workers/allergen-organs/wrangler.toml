@@ -1,9 +1,16 @@
-name = "tb-allergen-organs"
+name = "tb-allergen-organs-production"
 main = "index.js"
 compatibility_date = "2024-10-01"
 
+usage_model = "bundled"
+workers_dev = false
+
 [vars]
-ENV = "production"
+ENV = "dev"
 BUILT_AT = "manual"
 
-workers_dev = true
+[env.production]
+workers_dev = false
+usage_model = "bundled"
+ENV = "production"
+BUILT_AT = "manual"

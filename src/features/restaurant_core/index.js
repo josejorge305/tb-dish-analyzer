@@ -121,6 +121,39 @@ export async function findRestaurants(
   }
 }
 
+function filterMenuItems(dishes = []) {
+  if (!Array.isArray(dishes)) return [];
+
+  const bannedSections = [
+    "drinks",
+    "beverages",
+    "soft drinks",
+    "bottled drinks"
+  ].map((s) => s.toLowerCase());
+
+  const bannedNames = [
+    "water",
+    "bottled water",
+    "sparkling water",
+    "mineral water"
+  ].map((s) => s.toLowerCase());
+
+  return dishes.filter((it) => {
+    const section = (it.section || "").toLowerCase();
+    const name = (it.name || "").toLowerCase();
+
+    if (bannedSections.some((s) => section.includes(s))) {
+      return false;
+    }
+
+    if (bannedNames.includes(name)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
 export async function extractMenu(env, { placeId, url, lat, lng }) {
   if (!placeId) {
     return buildStubMenu({
@@ -174,7 +207,7 @@ export async function extractMenu(env, { placeId, url, lat, lng }) {
     };
   }
 
-  const dishes = uber.items.map((it, idx) => {
+  const dishes = (uber.items || []).map((it, idx) => {
     const raw = it.raw || {};
     const imageUrl =
       it.imageUrl ||
@@ -190,18 +223,20 @@ export async function extractMenu(env, { placeId, url, lat, lng }) {
       name: it.title || it.name || `Item ${idx + 1}`,
       description: it.description || "",
       section: it.section || null,
-      source: it.source || "uber_rapidapi_menu",
+      source: it.source || "uber",
       rawPrice: typeof it.price_cents === "number" ? it.price_cents : null,
       priceText: it.price_text || null,
       imageUrl
     };
   });
 
-  if (dishes && dishes.length > 0) {
+  const filteredDishes = filterMenuItems(dishes);
+
+  if (filteredDishes && filteredDishes.length > 0) {
     try {
       console.log(
         "DEBUG EXTRACT_MENU FIRST DISH:",
-        JSON.stringify(dishes[0]).slice(0, 800)
+        JSON.stringify(filteredDishes[0]).slice(0, 800)
       );
     } catch (e) {
       console.log(
@@ -224,7 +259,7 @@ export async function extractMenu(env, { placeId, url, lat, lng }) {
       {
         id: "uber-menu",
         name: "Menu",
-        items: dishes
+        items: filteredDishes
       }
     ]
   };
@@ -742,7 +777,7 @@ function toCanonFromLLM(it) {
   return {
     title: (it.title || it.name || "").trim(),
     description: (it.description || it.desc || "").trim() || null,
-    section: (it.section || it.category || "").trim() || "",
+    section: (it.section || "").trim() || "",
     price_cents: Number.isFinite(Number(it.price_cents))
       ? Number(it.price_cents)
       : null,
