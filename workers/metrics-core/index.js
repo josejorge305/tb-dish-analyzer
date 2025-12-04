@@ -1,3 +1,9 @@
+// NOTE: This worker is PARTIALLY DEPRECATED.
+// The gateway still writes some metrics/logs directly to its own D1_DB,
+// while metrics_core handles /metrics/ingest into a separate D1.
+// Metrics are currently split. Before adding new metrics behavior here,
+// decide on a single source of truth (gateway-only or metrics_core-only)
+// and refactor writes accordingly.
 function j(res, req) {
   const h = { "content-type": "application/json" };
   const cid = req?.headers?.get?.("x-correlation-id");

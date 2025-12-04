@@ -13,14 +13,6 @@ bindings = []
 
 # --- Service bindings (default env) ---
 [[services]]
-binding = "recipe_core"
-service = "tb-recipe-core"
-
-[[services]]
-binding = "restaurant_core"
-service = "tb-restaurant-core"
-
-[[services]]
 binding = "allergen_organs"
 service = "tb-allergen-organs-production"
 
@@ -53,6 +45,10 @@ binding = "USER_PREFS_KV"
 id = "cff5be596e5048059c4b60fe78c49578"
 preview_id = "000694bd5dfb422180cb026d4de957dd"
 
+[[kv_namespaces]]
+binding = "MENU_CLASSIFIER_CACHE"
+id = "923f217b4b474a6b82b4b1063da97ea5"
+
 # --- R2 (default env) ---
 [[r2_buckets]]
 binding = "R2_BUCKET"
@@ -80,14 +76,6 @@ binding = "AI"
 bindings = []
 
 # ✅ Service bindings for production
-[[env.production.services]]
-binding = "recipe_core"
-service = "tb-recipe-core"
-
-[[env.production.services]]
-binding = "restaurant_core"
-service = "tb-restaurant-core"
-
 [[env.production.services]]
 binding = "allergen_organs"
 service = "tb-allergen-organs-production"
@@ -153,6 +141,10 @@ id = "f363caa0518e46daa062f511c9d50c75"
 [[env.production.kv_namespaces]]
 binding = "USER_PREFS_KV"
 id = "cff5be596e5048059c4b60fe78c49578"
+
+[[env.production.kv_namespaces]]
+binding = "MENU_CLASSIFIER_CACHE"
+id = "923f217b4b474a6b82b4b1063da97ea5"
 
 # --- R2 (production) ---
 [[env.production.r2_buckets]]

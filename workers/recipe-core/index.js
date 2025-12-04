@@ -1,3 +1,8 @@
+// NOTE: This worker is currently DEPRECATED for production recipe logic.
+// Production uses the legacy resolver in the main gateway index.js
+// (Edamam → Spoonacular → OpenAI + cache, recipe_card, Zestful, etc.).
+// Do NOT add new features here until it has been fully brought to parity
+// and the routing is explicitly switched back to recipe_core.
 import * as recipeCore from "../../src/features/recipe_core/index.js";
 
 function j(res, req) {

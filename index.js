@@ -1,6 +1,5 @@
 
 /* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
-import * as restaurantCore from "./src/features/restaurant_core/index.js";
 
 // tb-dish-processor — Cloudflare Worker (Modules) — Uber Eats + Lexicon + Queue + Debug
 // Clean build: exact vendor body for /api/job, US bias + filter, proper Modules export.
@@ -533,18 +532,32 @@ async function handleOrgansFromDish(url, env, request) {
   const weight_kg =
     Number.isFinite(weightNum) && weightNum > 0 ? weightNum : 70;
 
-  const card = await fetchRecipeCardWithFallback(finalDish, env, {
-    user_id: userId
+  const forceReanalyze = url.searchParams.get("force_reanalyze") === "1";
+  const recipeResult = await resolveRecipeWithCache(env, {
+    dishTitle: finalDish,
+    placeId: "",
+    cuisine: url.searchParams.get("cuisine") || "",
+    lang: url.searchParams.get("lang") || "en",
+    forceReanalyze,
+    classify: false,
+    shape: null,
+    parse: true,
+    userId: userId || "",
+    devFlag: url.searchParams.get("dev") === "1"
   });
-  const rawIngredients = Array.isArray(card?.ingredients)
-    ? card.ingredients
+  const rawIngredients = Array.isArray(recipeResult?.ingredients)
+    ? recipeResult.ingredients
     : [];
   const recipe_debug = {
-    provider: card?.provider ?? null,
-    reason: card?.reason ?? null,
+    provider:
+      recipeResult?.out?.provider ??
+      recipeResult?.source ??
+      recipeResult?.responseSource ??
+      null,
+    reason: recipeResult?.notes || null,
     card_ingredients: rawIngredients.length,
     providers_order: providerOrder(env),
-    attempts: card?.attempts ?? [],
+    attempts: recipeResult?.attempts ?? [],
     user_prefs_present: !!user_prefs && !!Object.keys(user_prefs).length,
     user_prefs_keys: Object.keys(user_prefs || {}),
     assess_prefs_passed: !!user_prefs
@@ -1207,35 +1220,1153 @@ function friendlyUpstreamMessage(status) {
   }
 }
 
+// ---------- STRICT RESTAURANT IDENTITY HELPERS ----------
+
+// basic text normalization: lowercase, remove punctuation, collapse spaces
+function normalizeText(str) {
+  if (!str) return "";
+  return String(str)
+    .toLowerCase()
+    .replace(/&amp;/g, "&")
+    .replace(/[^a-z0-9\\s]/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+
+// remove generic filler words from restaurant names
+const GENERIC_NAME_TOKENS = new Set([
+  "the",
+  "restaurant",
+  "kitchen",
+  "cafe",
+  "cafeteria",
+  "bar",
+  "grill",
+  "house",
+  "food",
+  "eatery",
+  "diner",
+  "co",
+  "company",
+  "llc",
+  "inc"
+]);
+
+function nameTokens(str) {
+  const norm = normalizeText(str);
+  if (!norm) return [];
+  return norm.split(" ").filter((t) => t && !GENERIC_NAME_TOKENS.has(t));
+}
+
+function tokenSetSimilarity(aTokens, bTokens) {
+  if (!aTokens.length || !bTokens.length) return 0;
+  const aSet = new Set(aTokens);
+  const bSet = new Set(bTokens);
+
+  let intersect = 0;
+  for (const t of aSet) {
+    if (bSet.has(t)) intersect++;
+  }
+  const union = new Set([...aSet, ...bSet]).size;
+  return union === 0 ? 0 : intersect / union;
+}
+
+// simple Levenshtein distance for small strings
+function levenshtein(a, b) {
+  a = normalizeText(a);
+  b = normalizeText(b);
+  const m = a.length;
+  const n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(
+        dp[j] + 1, // deletion
+        dp[j - 1] + 1, // insertion
+        prev + cost // substitution
+      );
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+// strict-ish restaurant name match
+function strictNameMatch(googleName, uberName) {
+  if (!googleName || !uberName) return false;
+  const gNorm = normalizeText(googleName);
+  const uNorm = normalizeText(uberName);
+  if (!gNorm || !uNorm) return false;
+
+  if (gNorm === uNorm) return true;
+
+  const dist = levenshtein(gNorm, uNorm);
+  if (dist <= 2) return true;
+
+  const gTokens = nameTokens(googleName);
+  const uTokens = nameTokens(uberName);
+  const sim = tokenSetSimilarity(gTokens, uTokens);
+  return sim >= 0.8; // high overlap
+}
+
+// address normalization: keep digits + letters, drop punctuation
+function normalizeAddress(str) {
+  if (!str) return "";
+  return String(str)
+    .toLowerCase()
+    .replace(/[^a-z0-9\\s]/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+
+// try to build a comparable street+zip "signature"
+function addressSignature(addrObjOrString) {
+  if (!addrObjOrString) return "";
+  if (typeof addrObjOrString === "string") {
+    return normalizeAddress(addrObjOrString);
+  }
+  const parts = [];
+  if (addrObjOrString.streetAddress || addrObjOrString.address) {
+    parts.push(addrObjOrString.streetAddress || addrObjOrString.address);
+  }
+  if (addrObjOrString.city) parts.push(addrObjOrString.city);
+  if (addrObjOrString.postalCode || addrObjOrString.zip) {
+    parts.push(addrObjOrString.postalCode || addrObjOrString.zip);
+  }
+  return normalizeAddress(parts.join(" "));
+}
+
+function strictAddressMatch(googleAddress, uberLocation) {
+  const gSig = addressSignature(googleAddress);
+  const uSig = addressSignature(uberLocation);
+  if (!gSig || !uSig) return false;
+
+  // require at least the same street + zip-ish tokens
+  const gTokens = gSig.split(" ");
+  const uTokens = uSig.split(" ");
+  const gSet = new Set(gTokens);
+  let overlap = 0;
+  for (const t of uTokens) {
+    if (gSet.has(t)) overlap++;
+  }
+  const minLen = Math.min(gTokens.length, uTokens.length);
+  if (!minLen) return false;
+
+  const ratio = overlap / minLen;
+  return ratio >= 0.7;
+}
+
+// ---------- GATEWAY: Section-level noise filter ----------
+function isBannedSectionName(sectionName) {
+  const s = (sectionName || "").toLowerCase().trim();
+  if (!s) return false;
+
+  const bannedExact = [
+    "drinks",
+    "beverages",
+    "soft drinks",
+    "sodas",
+    "cocktails",
+    "beer",
+    "wine",
+    "bar",
+    "alcohol",
+    "utensils",
+    "cutlery",
+    "plasticware",
+    "plastic ware",
+    "silverware",
+    "napkins",
+    "packaging",
+    "extras",
+    "extra sauces",
+    "add-ons",
+    "addons",
+    "add ons",
+    "sauces",
+    "sauces & dressings",
+    "dressings",
+    "condiments",
+    "fees",
+    "charges"
+  ];
+
+  const bannedContains = [
+    "utensil",
+    "cutlery",
+    "plastic",
+    "silverware",
+    "napkin",
+    "straw",
+    "extra",
+    "add-on",
+    "addon",
+    "add on",
+    "sauce",
+    "condiment",
+    "dressing",
+    "fee",
+    "charge",
+    "packaging",
+    "service fee",
+    "delivery fee"
+  ];
+
+  if (bannedExact.includes(s)) return true;
+  if (bannedContains.some((w) => s.includes(w))) return true;
+
+  return false;
+}
+
+// ---------- GATEWAY: Item-level noise filters ----------
+
+const NOISE_KEYWORDS = [
+  // drinks
+  "coke",
+  "sprite",
+  "soda",
+  "juice",
+  "oj",
+  "orange juice",
+  "redbull",
+  "red bull",
+  "perrier",
+  "sparkling",
+  "bottle",
+  "water",
+  "tea",
+  "coffee",
+  "lemonade",
+  "iced",
+  "energy",
+  // merch / bottles
+  "5oz",
+  "btl",
+  "merch",
+  // raw counts of wings / boneless (not plated dishes)
+  "5 wings",
+  "10 wings",
+  "5 boneless",
+  "10 boneless",
+  // pure sides
+  "side",
+  "fries",
+  "tots",
+  "waffle",
+  "onion rings",
+  "chips"
+];
+
+function isNoiseItem(name, description = "") {
+  const text = `${name} ${description}`.toLowerCase();
+  return NOISE_KEYWORDS.some((k) => text.includes(k));
+}
+
+// Final hard blocklist — removes ANY item containing these tokens, no exceptions.
+const HARD_BLOCKLIST = [
+  // drinks / beverages
+  "oj",
+  "orange juice",
+  "juice",
+  "soda",
+  "redbull",
+  "red bull",
+  "perrier",
+  "sparkling",
+  "water",
+  "iced tea",
+  "tea",
+  "coffee",
+  "energy",
+  "drink",
+
+  // merch / bottles / sauces only
+  "5oz",
+  "btl",
+  "bottle",
+  "merch",
+
+  // wings / boneless counted portions only (not platters)
+  "5 wings",
+  "10 wings",
+  "5 boneless",
+  "10 boneless",
+  "5 bone",
+  "10 bone",
+
+  // pure sides that should NOT show unless part of a composed dish
+  "side of",
+  "side fries",
+  "side tots",
+  "side waffle",
+  "side chips",
+  "fries only",
+  "tots only",
+
+  // pure add-ons
+  "add cheese",
+  "extra",
+  "add-on"
+];
+
+function hardBlockItem(name, description = "") {
+  const text = `${name} ${description}`.toLowerCase();
+  return HARD_BLOCKLIST.some((k) => text.includes(k));
+}
+
+function isLikelyDrink(name, section) {
+  const n = (name || "").toLowerCase().trim();
+  const s = (section || "").toLowerCase().trim();
+
+  const drinkSections = [
+    "drinks",
+    "beverages",
+    "soft drinks",
+    "sodas",
+    "juices",
+    "coffee",
+    "tea",
+    "bar",
+    "cocktails",
+    "beer",
+    "wine"
+  ];
+
+  const drinkKeywords = [
+    "water",
+    "bottled water",
+    "sparkling water",
+    "mineral water",
+    "soda",
+    "soft drink",
+    "coke",
+    "coca cola",
+    "pepsi",
+    "sprite",
+    "fanta",
+    "ginger ale",
+    "root beer",
+    "juice",
+    "orange juice",
+    "apple juice",
+    "lemonade",
+    "iced tea",
+    "ice tea",
+    "tea",
+    "coffee",
+    "latte",
+    "espresso",
+    "cappuccino",
+    "mocha",
+    "hot chocolate",
+    "hot cocoa",
+    "milk",
+    "milkshake",
+    "shake",
+    "smoothie",
+    "energy drink",
+    "gatorade",
+    "powerade",
+    "sports drink",
+    "beer",
+    "wine",
+    "margarita",
+    "cocktail"
+  ];
+
+  if (drinkSections.some((w) => s.includes(w))) return true;
+  if (drinkKeywords.some((w) => n === w || n.includes(w))) return true;
+
+  // Size/packaging hints
+  if (/\b(2 ?l|20 ?oz|16 ?oz|12 ?oz|bottle|can|canned)\b/.test(n)) return true;
+
+  return false;
+}
+
+function isLikelyUtensilOrPackaging(name, section) {
+  const n = (name || "").toLowerCase().trim();
+  const s = (section || "").toLowerCase().trim();
+
+  const utensilSections = [
+    "utensils",
+    "cutlery",
+    "plasticware",
+    "plastic ware",
+    "silverware",
+    "napkins",
+    "packaging"
+  ];
+
+  const utensilKeywords = [
+    "utensil",
+    "utensils",
+    "plasticware",
+    "plastic ware",
+    "silverware",
+    "cutlery",
+    "fork",
+    "knife",
+    "spoon",
+    "spoons",
+    "chopsticks",
+    "chopstick",
+    "napkin",
+    "napkins",
+    "straw",
+    "straws",
+    "with utensils",
+    "without utensils",
+    "no utensils"
+  ];
+
+  const feeKeywords = [
+    "service fee",
+    "delivery fee",
+    "packaging fee",
+    "bag fee",
+    "processing fee",
+    "surcharge",
+    "convenience fee",
+    "extra fee",
+    "misc fee",
+    "charge",
+    "charges"
+  ];
+
+  if (utensilSections.some((w) => s.includes(w))) return true;
+  if (utensilKeywords.some((w) => n === w || n.includes(w))) return true;
+  if (feeKeywords.some((w) => n === w || n.includes(w) || s.includes(w)))
+    return true;
+
+  return false;
+}
+
+function isLikelySideOrAddon(name, section, description) {
+  const n = (name || "").toLowerCase().trim();
+  const s = (section || "").toLowerCase().trim();
+  const d = (description || "").toLowerCase().trim();
+
+  const sideSections = [
+    "sides",
+    "side orders",
+    "extras",
+    "add-ons",
+    "addons",
+    "add ons",
+    "sauces",
+    "condiments",
+    "dressings"
+  ];
+
+  const sideKeywords = [
+    "side",
+    "side of",
+    "extra",
+    "add",
+    "add-on",
+    "addon",
+    "add on"
+  ];
+
+  const pureCondiments = [
+    "sauce",
+    "ketchup",
+    "mustard",
+    "mayo",
+    "mayonnaise",
+    "aioli",
+    "ranch",
+    "bbq",
+    "barbecue",
+    "hot sauce",
+    "buffalo sauce",
+    "blue cheese",
+    "bleu cheese",
+    "chipotle",
+    "chipotle mayo",
+    "guacamole",
+    "sour cream",
+    "salsa",
+    "relish",
+    "relish packet",
+    "packet of relish"
+  ];
+
+  if (sideSections.some((w) => s.includes(w))) return true;
+
+  if (n.startsWith("side ") || n.startsWith("side of ")) return true;
+  if (n.startsWith("extra ") || n.startsWith("add ") || n.startsWith("add-on "))
+    return true;
+
+  const wordCount = n.split(/\s+/).filter(Boolean).length;
+  if (wordCount === 1 && !d && pureCondiments.includes(n)) return true;
+
+  if (pureCondiments.some((w) => n === w || n.includes(w))) return true;
+
+  if (n.includes("packet") || n.includes("sachet")) return true;
+
+  return false;
+}
+
+function filterMenuForDisplay(dishes = []) {
+  if (!Array.isArray(dishes)) return [];
+
+  const filtered = dishes.filter((d) => {
+    const name = d.name || d.title || "";
+    const section = d.section || "";
+    const desc = d.description || "";
+
+    if (!name) return false;
+
+    // 1) Drop entire bad sections
+    if (isBannedSectionName(section)) return false;
+
+    // 2) Item-level checks
+    if (isNoiseItem(name, desc)) return false;
+    if (isLikelyDrink(name, section)) return false;
+    if (isLikelyUtensilOrPackaging(name, section)) return false;
+    if (isLikelySideOrAddon(name, section, desc)) return false;
+
+    return true;
+  });
+
+  return dedupeItems(filtered);
+}
+
+// Remove duplicates by name + price + description
+function dedupeItems(items) {
+  const seen = new Set();
+  const output = [];
+
+  for (const it of items) {
+    const key = `${(it.name || "").toLowerCase()}|${(it.description || "").toLowerCase()}|${it.rawPrice || ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      output.push(it);
+    }
+  }
+  return output;
+}
+
+// -----------------------------
+// Batch LLM Menu Classifier (Tier 3)
+// -----------------------------
+
+// Normalize KV keys
+function classifierCacheKey(name, description) {
+  const key = `${name}||${description || ""}`.toLowerCase();
+  return "menu-classifier:" + key;
+}
+
+// Fetch many items from KV
+async function batchReadClassifierCache(env, items) {
+  const results = {};
+  for (const it of items) {
+    const key = classifierCacheKey(it.name, it.description);
+    const cached = await env.MENU_CLASSIFIER_CACHE.get(key, "json");
+    if (cached) results[key] = cached;
+  }
+  return results;
+}
+
+// Write classifications back to KV
+async function batchWriteClassifierCache(env, classified) {
+  const ops = [];
+  for (const entry of classified) {
+    const key = classifierCacheKey(entry.name, entry.description);
+    ops.push(
+      env.MENU_CLASSIFIER_CACHE.put(
+        key,
+        JSON.stringify({
+          category: entry.category,
+          noise: entry.noise
+        })
+      )
+    );
+  }
+  await Promise.all(ops);
+}
+
+// Batch LLM call
+async function classifyMenuItemsLLM(env, items) {
+  if (!items.length) return [];
+
+  const payload = items.map((it) => ({
+    name: it.name,
+    description: it.description || ""
+  }));
+
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are a strict JSON menu item classifier. " +
+        "You MUST return ONLY a valid JSON array of objects. No text outside JSON. " +
+        'Each object MUST have: {"category": string, "noise": boolean}. ' +
+        "No explanations, no markdown, no commentary."
+    },
+    {
+      role: "user",
+      content: JSON.stringify(payload)
+    }
+  ];
+
+  const raw = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", { messages });
+
+  const text = raw?.output_text;
+  if (!text || text.trim().length === 0) {
+    return items.map(() => ({ category: "Other", noise: false }));
+  }
+
+  let clean = text
+    .trim()
+    .replace(/```json/gi, "")
+    .replace(/```/g, "");
+
+  let result;
+  try {
+    result = JSON.parse(clean);
+  } catch (err) {
+    result = items.map(() => ({ category: "Other", noise: false }));
+  }
+
+  return result;
+}
+
+// -----------------------------
+// Tier 3 — Integrate Batch LLM Classification
+// -----------------------------
+async function applyLLMClassification(env, items) {
+  // 1. Read from KV cache (fast path)
+  const cachedMap = await batchReadClassifierCache(env, items);
+
+  const needLLM = [];
+  const final = [];
+
+  for (const it of items) {
+    const key = classifierCacheKey(it.name, it.description);
+    const cached = cachedMap[key];
+
+    if (cached) {
+      final.push({
+        ...it,
+        llmCategory: cached.category,
+        llmNoise: cached.noise
+      });
+    } else {
+      needLLM.push(it);
+    }
+  }
+
+  if (needLLM.length === 0) return final;
+
+  const llmResults = await classifyMenuItemsLLM(env, needLLM);
+  const toCache = [];
+
+  for (let i = 0; i < needLLM.length; i++) {
+    const it = needLLM[i];
+    const llm = llmResults[i];
+
+    final.push({
+      ...it,
+      llmCategory: llm.category,
+      llmNoise: llm.noise
+    });
+
+    toCache.push({
+      name: it.name,
+      description: it.description || "",
+      category: llm.category,
+      noise: llm.noise
+    });
+  }
+
+  await batchWriteClassifierCache(env, toCache);
+
+  return final;
+}
+
+// -----------------------------
+// Apply LLM Overrides to Final Categories
+// -----------------------------
+function applyLLMOverrides(items) {
+  return items
+    .filter((it) => !it.llmNoise)
+    .map((it) => {
+      const llmCat = it.llmCategory?.trim();
+
+      const strongHeuristic = [
+        "Mains",
+        "Sandwiches & Burgers",
+        "Appetizers",
+        "Pasta & Pizza",
+        "Salads",
+        "Soups",
+        "Desserts",
+        "Kids"
+      ].includes(it.canonicalCategory);
+
+      const finalCategory = strongHeuristic
+        ? it.canonicalCategory
+        : llmCat || it.canonicalCategory;
+      return {
+        ...it,
+        canonicalCategory: finalCategory
+      };
+    });
+}
+
+// Final normalization for wraps & salad bowls
+function normalizeWrapsAndSaladBowls(items) {
+  return items.map((it) => {
+    const name = (it.name || "").toLowerCase();
+    const section = (it.section || "").toLowerCase();
+    let cat = it.canonicalCategory;
+
+    if (name.includes("wrap") || section.includes("wrap")) {
+      cat = "Sandwiches & Burgers";
+    }
+
+    if (name.includes("salad bowl") || (name.includes("salad") && section.includes("bowl"))) {
+      cat = "Salads";
+    }
+
+    return {
+      ...it,
+      canonicalCategory: cat
+    };
+  });
+}
+
+// Final normalization for wraps & salad bowls (runs at the very end)
+function finalNormalizeCategories(items) {
+  return items.map((it) => {
+    const name = (it.name || "").toLowerCase();
+    const section = (it.section || "").toLowerCase();
+    let cat = it.canonicalCategory;
+
+    if (name.includes("wrap") || section.includes("wrap")) {
+      cat = "Sandwiches & Burgers";
+    }
+
+    if (
+      name.includes("salad bowl") ||
+      (name.includes("salad") && section.includes("bowl"))
+    ) {
+      cat = "Salads";
+    }
+
+    return { ...it, canonicalCategory: cat };
+  });
+}
+
+// ---------- GATEWAY: Canonical category classifier ----------
+
+function canonicalCategoryFromSectionAndName(sectionName, dishName) {
+  const s = (sectionName || "").toLowerCase();
+  const n = (dishName || "").toLowerCase();
+
+  if (
+    /\b(appetizer|appetizers|starter|starters|small plates?|snacks?|tapas)\b/.test(
+      s
+    )
+  ) {
+    return "Appetizers";
+  }
+
+  if (/\b(salad|salads)\b/.test(s) || /\bsalad\b/.test(n)) {
+    return "Salads";
+  }
+
+  if (/\b(soup|soups)\b/.test(s) || /\bsoup\b/.test(n)) {
+    return "Soups";
+  }
+
+  if (
+    /\b(breakfast|brunch)\b/.test(s) ||
+    /\b(omelette|pancake|waffle|french toast|scramble)\b/.test(n)
+  ) {
+    return "Breakfast & Brunch";
+  }
+
+  if (/\b(kids|children|kid's|kid menu)\b/.test(s) || /\bkid\b/.test(n)) {
+    return "Kids";
+  }
+
+  if (
+    /\b(dessert|desserts|sweets|treats)\b/.test(s) ||
+    /\b(cheesecake|brownie|cake|pie|ice cream|sundae|pudding|tiramisu)\b/.test(
+      n
+    )
+  ) {
+    return "Desserts";
+  }
+
+  if (
+    /\b(side|sides|side orders?)\b/.test(s) ||
+    /\b(fries|chips|onion rings|mashed potatoes|mac and cheese)\b/.test(n)
+  ) {
+    return "Sides";
+  }
+
+  if (
+    /\b(sandwiches|sandwich|burgers?|subs?|hoagies|tacos?|wraps?)\b/.test(s) ||
+    /\b(burger|sandwich|sub|taco|wrap|panini|po ?boy)\b/.test(n)
+  ) {
+    return "Sandwiches & Burgers";
+  }
+
+  if (
+    /\b(pizzas?|pasta)\b/.test(s) ||
+    /\b(pizza|penne|spaghetti|lasagna)\b/.test(n)
+  ) {
+    return "Pasta & Pizza";
+  }
+
+  if (
+    /\b(entrees?|mains?|main courses?|specialties|specials|plates?|bowls?)\b/.test(
+      s
+    ) ||
+    /\b(steak|chicken|salmon|ribs|grill|grilled|filet|fillet)\b/.test(n)
+  ) {
+    return "Mains";
+  }
+
+  return "Other";
+}
+
+// Enhanced canonical menu category classifier (rule-based)
+function classifyCanonicalCategory(item) {
+  const name = (item.name || "").toLowerCase();
+  const section = (item.section || "").toLowerCase();
+
+  // --- Wings ---
+  if (section.includes("wings") || name.includes("wing")) {
+    return "Mains";
+  }
+
+  // --- Bowls / Wraps ---
+  if (section.includes("bowl") || section.includes("wrap")) {
+    return "Mains";
+  }
+
+  // --- Quesadillas / Sandwiches / Burgers ---
+  if (
+    name.includes("burger") ||
+    name.includes("sandwich") ||
+    name.includes("patty melt") ||
+    name.includes("tuna melt") ||
+    name.includes("quesadilla") ||
+    name.includes("philly") ||
+    name.includes("dog")
+  ) {
+    return "Sandwiches & Burgers";
+  }
+
+  // --- Salads ---
+  if (section.includes("salad") || name.includes("salad")) {
+    return "Salads";
+  }
+
+  // --- Kids menu ---
+  if (section.includes("kids") || name.includes("kid ")) {
+    return "Kids";
+  }
+
+  // --- Desserts ---
+  if (
+    section.includes("dessert") ||
+    name.includes("pie") ||
+    name.includes("cheesecake") ||
+    name.includes("cookie") ||
+    name.includes("brownie") ||
+    name.includes("ice cream") ||
+    name.includes("fried oreo")
+  ) {
+    return "Desserts";
+  }
+
+  // --- Appetizers ---
+  if (
+    section.includes("starter") ||
+    section.includes("appetizer") ||
+    name.includes("shrimp") ||
+    name.includes("tots") ||
+    name.includes("nachos") ||
+    name.includes("rings") ||
+    name.includes("poppers") ||
+    name.includes("fritters") ||
+    name.includes("chips") ||
+    name.includes("fries")
+  ) {
+    return "Appetizers";
+  }
+
+  // --- Sides (fallback for things like "tenders & fries" etc.) ---
+  if (
+    section.includes("side") ||
+    name.includes("side") ||
+    name.includes("tenders") ||
+    name.includes("grilled tenders") ||
+    name.includes("fish & chips")
+  ) {
+    return "Sides";
+  }
+
+  // Fallback: keep old canonicalCategory if present, else Other
+  return item.canonicalCategory || "Other";
+}
+
+// Wing platter classifier — overrides canonical category
+function classifyWingPlatter(item) {
+  const name = (item.name || "").toLowerCase();
+  const section = (item.section || "").toLowerCase();
+
+  const isWing =
+    section.includes("wing") ||
+    name.includes("wing") ||
+    name.includes("boneless") ||
+    name.includes("buffalo wings");
+
+  if (isWing) {
+    return "Mains";
+  }
+
+  return null;
+}
+
+// Bowl classifier — overrides canonical category for all bowl-type dishes
+function classifyBowl(item) {
+  const name = (item.name || "").toLowerCase();
+  const section = (item.section || "").toLowerCase();
+
+  const isBowl =
+    name.includes("bowl") ||
+    section.includes("bowl") ||
+    name.includes("all star") ||
+    name.includes("all-star") ||
+    name.includes("rice bowl");
+
+  if (isBowl) {
+    return "Mains";
+  }
+
+  return null;
+}
+
+// Wrap / Quesadilla / Melt classifier
+function classifyWrapQuesadilla(item) {
+  const name = (item.name || "").toLowerCase();
+  const section = (item.section || "").toLowerCase();
+
+  const signals = ["wrap", "quesadilla", "melt", "philly"];
+
+  const matches = signals.some(
+    (sig) => name.includes(sig) || section.includes(sig)
+  );
+  if (matches) {
+    return "Sandwiches & Burgers";
+  }
+
+  return null;
+}
+
+// Section → Category remapping table (Uber sections → canonical categories)
+
+// Normalize section names & override canonical category
+function classifyBySectionFallback(item) {
+  const section = (item.section || "").toLowerCase();
+
+  for (const key in SECTION_CANONICAL_MAP) {
+    if (section.includes(key)) {
+      return SECTION_CANONICAL_MAP[key];
+    }
+  }
+  return null;
+}
+
+// Canonical ordering for menu sections
+const CANONICAL_ORDER = [
+  "Appetizers",
+  "Pasta & Pizza",
+  "Mains",
+  "Sandwiches & Burgers",
+  "Salads",
+  "Soups",
+  "Sides",
+  "Breakfast & Brunch",
+  "Kids",
+  "Desserts",
+  "Other"
+];
+
+const SECTION_CANONICAL_MAP = {
+  // wings & boneless
+  wings: "Mains",
+  "boneless wings": "Mains",
+
+  // bowls / wraps
+  "all star bowls": "Mains",
+  "*build your own bowl/wrap*": "Mains",
+  "*build your own bowl": "Mains",
+  "*build your own wrap": "Mains",
+
+  // salads
+  salads: "Salads",
+
+  // burgers / specialties
+  "burger & specialties": "Sandwiches & Burgers",
+
+  // wraps (sometimes separate)
+  wraps: "Sandwiches & Burgers",
+
+  // kids
+  "kids catch": "Kids",
+
+  // desserts
+  desserts: "Desserts",
+
+  // italian-specific
+  antipasti: "Appetizers",
+  pasta: "Pasta & Pizza",
+  seafood: "Mains",
+  entrees: "Mains",
+  entree: "Mains",
+
+  // sodas / beverages — REMOVE completely via noise, but map fallback here
+  "soda, etc": "Other",
+
+  // merch never belongs in menu
+  merch: "Other"
+};
+
+// Group items by canonicalCategory
+function groupItemsIntoSections(items) {
+  const map = {};
+  for (const cat of CANONICAL_ORDER) map[cat] = [];
+
+  for (const it of items) {
+    const cat = CANONICAL_ORDER.includes(it.canonicalCategory)
+      ? it.canonicalCategory
+      : "Other";
+    map[cat].push(it);
+  }
+
+  // Build final array in order, removing empty sections
+  return CANONICAL_ORDER.filter((cat) => map[cat] && map[cat].length > 0).map(
+    (cat) => ({
+      id: `cat-${cat.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      name: cat,
+      items: map[cat]
+    })
+  );
+}
+// haversine distance in meters
+function computeDistanceMeters(lat1, lon1, lat2, lon2) {
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null)
+    return null;
+
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// main predicate: does this Uber row match the Google Place?
+function passesStrictRestaurantMatch(googleCtx, row) {
+  if (!row || !googleCtx) return false;
+
+  const uberName = row.title || row.sanitizedTitle || row.name || "";
+  const googleName = googleCtx.name || googleCtx.query || "";
+
+  if (!strictNameMatch(googleName, uberName)) return false;
+
+  // address check
+  const uberLoc =
+    row.location && (row.location.address || row.location.streetAddress)
+      ? row.location
+      : row.location || {};
+  if (!strictAddressMatch(googleCtx.address, uberLoc)) {
+    return false;
+  }
+
+  // distance check (soft)
+  const gLat = googleCtx.lat;
+  const gLng = googleCtx.lng;
+  const uLat = row.location && (row.location.latitude || row.location.lat);
+  const uLng = row.location && (row.location.longitude || row.location.lng);
+
+  const dist = computeDistanceMeters(gLat, gLng, uLat, uLng);
+  if (dist != null && dist > 60) {
+    // >60m away → very likely a different place
+    return false;
+  }
+
+  return true;
+}
+
 // Flatten Uber Eats to simple items (normalized + deduped)
 function extractMenuItemsFromUber(raw, queryText = "") {
-  const q = (queryText || "").toLowerCase().trim();
+  const out = [];
+  const seen = new Map(); // key -> item
 
   const results =
-    (raw?.data?.results &&
-      Array.isArray(raw.data.results) &&
-      raw.data.results) ||
-    (Array.isArray(raw?.results) && raw.results) ||
-    (Array.isArray(raw?.data?.data?.results) && raw.data.data.results) ||
-    [];
+    raw && raw.data && Array.isArray(raw.data.results) ? raw.data.results : [];
 
-  // Choose best-matching restaurant(s) if query given
-  let chosen = results;
-  if (q && results.length) {
+  if (!results.length) return out;
+
+  let chosenRestaurants = [];
+
+  if (results.length === 1) {
+    chosenRestaurants = [results[0]];
+  } else {
+    // legacy scoring, but choose only ONE best
     const scored = results.map((r) => {
-      const title = (r.title || r.sanitizedTitle || r.name || "").toLowerCase();
+      const name = (r.title || r.sanitizedTitle || r.name || "").toLowerCase();
+      const q = (queryText || "").toLowerCase();
+
       let score = 0;
-      if (title === q) score = 3;
-      else if (title.startsWith(q)) score = 2;
-      else if (title.includes(q)) score = 1;
-      return { r, score, title };
+      if (name && q) {
+        if (name === q) score = 100;
+        else if (name.startsWith(q)) score = 90;
+        else if (name.includes(q)) score = 80;
+        else {
+          const nTokens = name.split(/\s+/);
+          const qTokens = q.split(/\s+/);
+          const nSet = new Set(nTokens);
+          let overlap = 0;
+          for (const t of qTokens) {
+            if (nSet.has(t)) overlap++;
+          }
+          const ratio = overlap / Math.max(1, qTokens.length);
+          score = Math.round(60 * ratio);
+        }
+      }
+      return { r, score };
     });
+
     scored.sort((a, b) => b.score - a.score);
-    const bestScore = scored[0]?.score || 0;
-    chosen =
-      bestScore > 0
-        ? scored.filter((s) => s.score === bestScore).map((s) => s.r)
-        : [scored[0].r];
+    if (scored[0]) {
+      chosenRestaurants = [scored[0].r]; // ONLY top one
+    }
   }
 
   // --- normalization helpers ---
@@ -1278,21 +2409,22 @@ function extractMenuItemsFromUber(raw, queryText = "") {
         .normalize("NFKC")
         .replace(/\s+/g, " ")
         .trim();
-    const out = { ...it };
-    out.name = clean(it.name);
-    out.section = clean(it.section);
-    out.description = clean(it.description);
-    out.price_display = clean(it.price_display);
-    if (out.calories_display != null)
-      out.calories_display = clean(out.calories_display);
-    out.restaurant_name = clean(it.restaurant_name);
+    const outItem = { ...it };
+    outItem.name = clean(it.name);
+    outItem.section = clean(it.section);
+    outItem.description = clean(it.description);
+    outItem.price_display = clean(it.price_display);
+    if (outItem.calories_display != null)
+      outItem.calories_display = clean(outItem.calories_display);
+    outItem.restaurant_name = clean(it.restaurant_name);
 
     // keep price only if it’s a non-negative finite number
-    if (!(Number.isFinite(out.price) && out.price >= 0)) delete out.price;
+    if (!(Number.isFinite(outItem.price) && outItem.price >= 0))
+      delete outItem.price;
 
     // enforce source field
-    out.source = "uber_eats";
-    return out;
+    outItem.source = "uber_eats";
+    return outItem;
   }
 
   function makeItem(mi, sectionName, restaurantName) {
@@ -1310,42 +2442,54 @@ function extractMenuItemsFromUber(raw, queryText = "") {
     };
   }
 
-  // prefer items that have price/calories/longer description when de-duping
-  function better(a, b) {
-    const ap = hasPrice(a) ? 1 : 0;
-    const bp = hasPrice(b) ? 1 : 0;
-    if (ap !== bp) return ap > bp;
-    const ac = hasCalories(a) ? 1 : 0;
-    const bc = hasCalories(b) ? 1 : 0;
-    if (ac !== bc) return ac > bc;
-    const ad = (a.description || "").length;
-    const bd = (b.description || "").length;
-    if (ad !== bd) return ad > bd;
-    // keep earlier (stable) otherwise
-    return false;
-  }
+  const addItem = (item) => {
+    if (!item || !item.name) return;
+    const sectionKey = (item.section || "").toLowerCase();
+    const nameKey = item.name.toLowerCase();
+    const priceKey = item.price_display || String(item.price || "");
+    const restaurantKey = item.restaurant_id || item.restaurant_name || "";
+    const key = `${restaurantKey}|${sectionKey}|${nameKey}|${priceKey}`;
 
-  const items = [];
-  const seen = new Map(); // key = `${section}|${name}` lowercased
-
-  function addItem(it) {
-    const item = normalizeItemFields(it);
-    const key = `${(item.section || "").toLowerCase()}|${(item.name || "").toLowerCase()}`;
-    const prevIdx = seen.get(key);
-    if (prevIdx == null) {
-      seen.set(key, items.length);
-      items.push(item);
-    } else {
-      const prev = items[prevIdx];
-      if (better(item, prev)) items[prevIdx] = item;
+    const normalizedItem = normalizeItemFields(item);
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, normalizedItem);
+      out.push(normalizedItem);
+      return;
     }
-  }
 
-  // --- collect items from all vendor shapes, then dedupe via addItem() ---
-  for (const r of chosen) {
+    const existingDesc = existing.description || "";
+    const newDesc = normalizedItem.description || "";
+    const existingHasCalories = !!existing.calories_display;
+    const newHasCalories = !!normalizedItem.calories_display;
+    const existingHasPrice =
+      existing.price != null || !!existing.price_display;
+    const newHasPrice =
+      normalizedItem.price != null || !!normalizedItem.price_display;
+
+    let replace = false;
+    if (!existingHasPrice && newHasPrice) replace = true;
+    else if (existingHasPrice === newHasPrice && !existingHasCalories && newHasCalories)
+      replace = true;
+    else if (
+      existingHasPrice === newHasPrice &&
+      existingHasCalories === newHasCalories &&
+      newDesc.length > existingDesc.length + 10
+    ) {
+      replace = true;
+    }
+
+    if (replace) {
+      const idx = out.indexOf(existing);
+      if (idx >= 0) out[idx] = normalizedItem;
+      seen.set(key, normalizedItem);
+    }
+  };
+
+  for (const r of chosenRestaurants) {
     const restaurantName = r.title || r.sanitizedTitle || r.name || "";
+    const restaurantId = r.uuid || r.id || r.url || restaurantName;
 
-    // catalogs / menu sections
     let sections = [];
     if (Array.isArray(r.menu)) sections = r.menu;
     else if (Array.isArray(r.catalogs)) sections = r.catalogs;
@@ -1356,18 +2500,28 @@ function extractMenuItemsFromUber(raw, queryText = "") {
         (Array.isArray(section.catalogItems) && section.catalogItems) ||
         (Array.isArray(section.items) && section.items) ||
         [];
-      for (const mi of catalogItems)
-        addItem(makeItem(mi, sectionName, restaurantName));
+
+      for (const mi of catalogItems) {
+        const item = makeItem(mi, sectionName, restaurantName);
+        if (item) {
+          item.restaurant_id = restaurantId;
+          addItem(item);
+        }
+      }
     }
 
-    // featured
     if (Array.isArray(r.featuredItems)) {
-      for (const mi of r.featuredItems)
-        addItem(makeItem(mi, "Featured", restaurantName));
+      for (const mi of r.featuredItems) {
+        const item = makeItem(mi, "Featured", restaurantName);
+        if (item) {
+          item.restaurant_id = restaurantId;
+          addItem(item);
+        }
+      }
     }
   }
 
-  return items;
+  return out;
 }
 
 const SECTION_PRIORITY = [
@@ -4481,6 +5635,384 @@ async function handleMenuExtract(env, request, url, ctx) {
   }
 }
 
+async function resolveRecipeWithCache(
+  env,
+  {
+    dishTitle,
+    placeId = "",
+    cuisine = "",
+    lang = "en",
+    forceReanalyze = false,
+    classify = false,
+    shape = null,
+    providersOverride = null,
+    parse = true,
+    userId = "",
+    devFlag = false
+  }
+) {
+  const dish = String(dishTitle || "").trim();
+  if (!dish) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Missing "dish" (dish name).',
+      hint: "Use: /recipe/resolve?dish=Chicken%20Alfredo"
+    };
+  }
+
+  const providersParse = (
+    env.PROVIDERS_PARSE ||
+    env.provider_parse ||
+    "zestful,openai"
+  )
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const recipeProviderFns = {
+    edamam: fetchFromEdamam,
+    spoonacular: fetchFromSpoonacular,
+    openai: fetchFromOpenAI
+  };
+
+  const parseProviderFns = {
+    zestful: async (env, ingLines) => callZestful(env, ingLines),
+    openai: async () => null // placeholder (skip for now)
+  };
+
+  const cacheKey = recipeCacheKey(dish, lang);
+  const force = !!forceReanalyze;
+  let pickedSource = "cache";
+  let recipe = null;
+  let ingredients = [];
+  let notes = {};
+  let out = null;
+  let selectedProvider = null;
+  let cacheHit = false;
+  let attempts = [];
+
+  const cached = !force ? await recipeCacheRead(env, cacheKey) : null;
+  if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
+    cacheHit = true;
+    pickedSource = cached.from || cached.provider || "cache";
+    recipe = cached.recipe;
+    ingredients = [...cached.ingredients];
+    notes =
+      typeof cached.notes === "object" && cached.notes
+        ? { ...cached.notes }
+        : {};
+    out = {
+      ...cached,
+      cache: true,
+      recipe,
+      ingredients
+    };
+    selectedProvider = pickedSource;
+  } else {
+    let lastAttempt = null;
+    const providerList = Array.isArray(providersOverride)
+      ? providersOverride
+      : providerOrder(env);
+    for (const p of providerList) {
+      const fn = recipeProviderFns[p];
+      if (!fn) continue;
+      let candidate = null;
+      try {
+        candidate = await fn(env, dish, cuisine, lang);
+      } catch (err) {
+        console.warn(`[provider:${p}]`, err?.message || err);
+        continue;
+      }
+      if (candidate) {
+        lastAttempt = candidate;
+      }
+      if (
+        candidate &&
+        Array.isArray(candidate.ingredients) &&
+        candidate.ingredients.length
+      ) {
+        out = candidate;
+        selectedProvider = candidate.provider || p;
+        break;
+      }
+    }
+    if (!out && lastAttempt) {
+      out = lastAttempt;
+      if (!selectedProvider) {
+        selectedProvider = lastAttempt.provider || null;
+      }
+    }
+  }
+
+  if (!cacheHit) {
+    if (
+      selectedProvider &&
+      out &&
+      Array.isArray(out.ingredients) &&
+      out.ingredients.length
+    ) {
+      recipe = out.recipe || recipe;
+      pickedSource = selectedProvider;
+    } else {
+      pickedSource = "pending";
+      if (out?.note) notes.openai_note = out.note;
+      if (out?.error) notes.openai_error = out.error;
+      if (out?.reason) notes.provider_reason = out.reason;
+    }
+  }
+
+  const wantParse = parse !== false;
+  const sourceLines = Array.isArray(out?.ingredients)
+    ? out.ingredients
+    : Array.isArray(out?.ingredients_lines)
+      ? out.ingredients_lines
+      : [];
+
+  const ingLines = Array.isArray(sourceLines)
+    ? sourceLines.map(ingredientEntryToLine).filter(Boolean)
+    : [];
+
+  if (!out) out = {};
+  out.ingredients_lines = ingLines;
+
+  let parsed = null;
+  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const dailyCap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
+
+  if (wantParse && ingLines.length && env.ZESTFUL_RAPID_KEY) {
+    const cachedParsed = [];
+    const missingIdx = [];
+    if (kv) {
+      for (let i = 0; i < ingLines.length; i++) {
+        const k = `zestful:${ingLines[i].toLowerCase()}`;
+        let row = null;
+        try {
+          row = await kv.get(k, "json");
+        } catch {}
+        if (row) cachedParsed[i] = row;
+        else missingIdx.push(i);
+      }
+    }
+
+    let filled = cachedParsed.slice();
+    if (missingIdx.length === ingLines.length || !kv) {
+      const linesToParse = ingLines;
+      const toParse = linesToParse.length;
+      if (dailyCap) {
+        const usedNow = await getZestfulCount(env);
+        if (usedNow + toParse > dailyCap) {
+          return {
+            ok: false,
+            status: 429,
+            error: "ZESTFUL_CAP_REACHED",
+            used: usedNow,
+            toParse,
+            cap: dailyCap
+          };
+        }
+      }
+      const zest = await callZestful(env, linesToParse);
+      if (Array.isArray(zest) && zest.length) {
+        filled = zest;
+        if (kv) {
+          for (let i = 0; i < linesToParse.length; i++) {
+            const k = `zestful:${linesToParse[i].toLowerCase()}`;
+            if (zest[i]) {
+              await kv.put(k, JSON.stringify(zest[i]), {
+                expirationTtl: 60 * 60 * 24 * 30
+              });
+            }
+          }
+        }
+        await incZestfulCount(env, toParse);
+      }
+    } else if (missingIdx.length) {
+      const linesToParse = missingIdx.map((i) => ingLines[i]);
+      const toParse = linesToParse.length;
+      if (dailyCap) {
+        const usedNow = await getZestfulCount(env);
+        if (usedNow + toParse > dailyCap) {
+          return {
+            ok: false,
+            status: 429,
+            error: "ZESTFUL_CAP_REACHED",
+            used: usedNow,
+            toParse,
+            cap: dailyCap
+          };
+        }
+      }
+      const zest = await callZestful(env, linesToParse);
+      if (Array.isArray(zest) && zest.length) {
+        for (let j = 0; j < linesToParse.length; j++) {
+          const i = missingIdx[j];
+          filled[i] = zest[j];
+          if (kv && zest[j]) {
+            const k = `zestful:${ingLines[i].toLowerCase()}`;
+            await kv.put(k, JSON.stringify(zest[j]), {
+              expirationTtl: 60 * 60 * 24 * 30
+            });
+          }
+        }
+        await incZestfulCount(env, toParse);
+      }
+    }
+
+    if (filled.filter(Boolean).length === ingLines.length) parsed = filled;
+  }
+
+  if (!parsed && wantParse && ingLines.length) {
+    for (const p of providersParse) {
+      if (p === "zestful") continue;
+      const fn = parseProviderFns[p];
+      if (!fn) continue;
+      try {
+        const got = await fn(env, ingLines);
+        if (Array.isArray(got) && got.length) {
+          parsed = got;
+          break;
+        }
+      } catch (e) {
+        console.log(`[parse] provider ${p} error:`, e?.message || String(e));
+      }
+    }
+  }
+
+  if (parsed?.length) {
+    await enrichWithNutrition(env, parsed);
+    ingredients = parsed.map((row) => ({
+      name: row.name || row.original || "",
+      qty:
+        typeof row.qty === "number"
+          ? row.qty
+          : row.qty != null
+            ? Number(row.qty) || null
+            : null,
+      unit: row.unit || null,
+      comment: row.comment || row.preparationNotes || null
+    }));
+    out.ingredients_parsed = parsed;
+    out.nutrition_summary = sumNutrition(parsed);
+  } else if (
+    Array.isArray(out?.ingredients_structured) &&
+    out.ingredients_structured.length
+  ) {
+    ingredients = out.ingredients_structured.map((row) => ({
+      name: row.name || row.original || "",
+      qty: row.qty ?? row.quantity ?? null,
+      unit: row.unit ?? null,
+      comment: row.comment || row.preparation || row.preparationNotes || null
+    }));
+  } else if (
+    Array.isArray(out?.ingredients) &&
+    out.ingredients.every(
+      (x) => x && typeof x === "object" && ("name" in x || "original" in x)
+    )
+  ) {
+    ingredients = out.ingredients.map((row) => ({
+      name: row.name || row.original || "",
+      qty: row.qty ?? row.quantity ?? null,
+      unit: row.unit ?? null,
+      comment: row.comment || row.preparation || row.preparationNotes || null
+    }));
+  } else if (ingLines.length) {
+    ingredients = ingLines.map((text) => ({
+      name: text,
+      qty: null,
+      unit: null,
+      comment: null
+    }));
+  }
+
+  if (!cacheHit && recipe && Array.isArray(ingredients) && ingredients.length) {
+    await recipeCacheWrite(env, cacheKey, {
+      recipe,
+      ingredients,
+      from: pickedSource
+    });
+  }
+
+  const responseSource = cacheHit ? "cache" : pickedSource;
+
+  if (out) {
+    if (out.recipe && !out.recipe.title && out.recipe.name) {
+      out.recipe.title = out.recipe.name;
+    }
+    if (
+      Array.isArray(out.ingredients_structured) &&
+      out.ingredients_structured.length
+    ) {
+      out.ingredients_parsed = out.ingredients_structured;
+      if (
+        !Array.isArray(out.ingredients_lines) ||
+        !out.ingredients_lines.length
+      ) {
+        out.ingredients_lines = out.ingredients_structured
+          .map((x) => ingredientEntryToLine(x))
+          .filter(Boolean);
+      }
+    }
+    if (!Array.isArray(out.ingredients_lines)) {
+      if (Array.isArray(out.ingredients)) {
+        const looksStructured = out.ingredients.every(
+          (x) => x && typeof x === "object" && "name" in x
+        );
+        if (looksStructured) {
+          out.ingredients_parsed = out.ingredients;
+          out.ingredients_lines = out.ingredients.map((x) => {
+            const qty = x.qty !== undefined && x.qty !== null ? `${x.qty}` : "";
+            const unit = x.unit ? ` ${x.unit}` : "";
+            const name = x.name || "";
+            const comment = x.comment ? `, ${x.comment}` : "";
+            return [qty, unit, name, comment].join("").trim();
+          });
+        } else {
+          out.ingredients_lines = out.ingredients;
+        }
+      } else {
+        out.ingredients_lines = [];
+      }
+    }
+  }
+
+  const reply = {
+    ok: true,
+    source: responseSource,
+    dish,
+    place_id: placeId || null,
+    cuisine: cuisine || null,
+    lang,
+    cache: cacheHit,
+    recipe,
+    ingredients,
+    ...(out?.ingredients_lines
+      ? { ingredients_lines: out.ingredients_lines }
+      : {}),
+    ...(out?.ingredients_parsed
+      ? { ingredients_parsed: out.ingredients_parsed }
+      : {}),
+    ...(Object.keys(notes).length ? { notes } : {})
+  };
+
+  const mergedOut = out ? { ...out, ...reply } : { ...reply };
+
+  return {
+    ...reply,
+    responseSource,
+    cacheHit,
+    out: mergedOut,
+    notes,
+    parsed,
+    ingLines,
+    attempts,
+    classify,
+    shape,
+    userId,
+    devFlag
+  };
+}
+
 async function handleRecipeResolve(env, request, url, ctx) {
   const method = request.method || "GET";
   let dish =
@@ -6064,6 +7596,613 @@ async function pollUberJobUntilDone({ jobId, env, maxTries = 12 }) {
   throw new Error("UberEats: poll timed out before completion.");
 }
 
+// ---------- GATEWAY: Google Place Details (no restaurant_core) ----------
+// After fetching Google Place details, extract photo_reference if available
+function extractPlacePhotoReference(place) {
+  const photos = place?.photos;
+  if (!photos || !photos.length) return null;
+  return photos[0].photo_reference || null;
+}
+
+function extractGooglePhotoUrl(place, apiKey) {
+  const photos = place.photos;
+  if (!photos || !photos.length) return null;
+
+  const ref = photos[0].photo_reference;
+  if (!ref) return null;
+
+  const params = new URLSearchParams({
+    maxwidth: "1200",
+    photoreference: ref,
+    key: apiKey
+  });
+
+  return `https://maps.googleapis.com/maps/api/place/photo?${params.toString()}`;
+}
+
+async function fetchGooglePlaceDetailsGateway(env, placeId) {
+  console.log("DEBUG: fetchGooglePlaceDetailsGateway called with placeId:", placeId);
+
+  const apiKey = env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) {
+    return { ok: false, error: "Missing GOOGLE_MAPS_API_KEY" };
+  }
+
+  const params = new URLSearchParams();
+  params.set("place_id", placeId);
+  params.set("key", apiKey);
+  const url =
+    "https://maps.googleapis.com/maps/api/place/details/json?" +
+    params.toString();
+
+  try {
+    const resp = await fetch(url);
+    console.log("DEBUG: Google details status:", resp.status);
+
+    const txt = await resp.text();
+    console.log("DEBUG: Google details raw:", txt);
+
+    if (!resp.ok) {
+      return {
+        ok: false,
+        error: `Google Place Details HTTP ${resp.status}: ${txt.slice(0, 200)}`
+      };
+    }
+
+    let data;
+    try {
+      data = txt ? JSON.parse(txt) : null;
+    } catch {
+      return {
+        ok: false,
+        error: "Google Place Details: response was not JSON."
+      };
+    }
+
+    const result = data.result || {};
+    const loc =
+      result.geometry && result.geometry.location
+        ? result.geometry.location
+        : {};
+
+    return {
+      ok: true,
+      name: result.name || "",
+      address:
+        result.formatted_address ||
+        [result.vicinity, result.formatted_address]
+          .filter(Boolean)
+          .join(", "),
+      lat: loc.lat ?? null,
+      lng: loc.lng ?? null,
+      raw: data
+    };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
+// ---------- GATEWAY: Wait for Uber Job (wrapper around pollUberJobUntilDone) ----------
+async function waitForUberJobGateway(env, job, { attempts = 6 } = {}) {
+  if (!job || job.immediate) return job;
+
+  const jobId =
+    job?.job_id ||
+    job?.id ||
+    job?.data?.job_id ||
+    job?.data?.id ||
+    job?.returnvalue?.job_id ||
+    job?.returnvalue?.id;
+
+  if (!jobId) return job;
+
+  return pollUberJobUntilDone({
+    jobId,
+    env,
+    maxTries: Math.max(1, attempts)
+  });
+}
+
+// ---------- GATEWAY: Flatten Uber payload -> item list ----------
+function flattenUberPayloadToItemsGateway(payload, opts = {}) {
+  if (!payload) return [];
+
+  const targetName = (opts.targetName || "").toLowerCase().trim();
+  const candidateStores = [];
+
+  function maybePushStore(obj) {
+    if (!obj || typeof obj !== "object") return;
+    const menu = Array.isArray(obj.menu) ? obj.menu : null;
+    if (!menu) return;
+
+    const title =
+      obj.title || obj.name || obj.sanitizedTitle || obj.storeName || "";
+    if (!title) return;
+
+    candidateStores.push(obj);
+  }
+
+  const containers = [
+    payload,
+    payload.data,
+    payload.data?.data,
+    payload.data?.items,
+    payload.items,
+    payload.stores,
+    payload.data?.stores,
+    payload.returnvalue,
+    payload.returnvalue?.data
+  ].filter(Boolean);
+
+  for (const c of containers) {
+    if (Array.isArray(c)) {
+      for (const item of c) maybePushStore(item);
+    } else if (typeof c === "object") {
+      maybePushStore(c);
+      if (Array.isArray(c.items)) {
+        for (const item of c.items) maybePushStore(item);
+      }
+      if (Array.isArray(c.data)) {
+        for (const item of c.data) maybePushStore(item);
+      }
+      if (Array.isArray(c.stores)) {
+        for (const item of c.stores) maybePushStore(item);
+      }
+    }
+  }
+
+  let stores = candidateStores;
+
+  if (targetName && stores.length > 1) {
+    const scored = stores.map((s) => {
+      const title = (s.title || s.name || s.sanitizedTitle || s.storeName || "")
+        .toLowerCase()
+        .trim();
+      let score = 0;
+      if (title === targetName) score += 100;
+      if (title.includes(targetName)) score += 50;
+      if (targetName.includes(title) && title.length > 0) score += 40;
+      return { s, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const bestScore = scored[0]?.score ?? 0;
+
+    if (bestScore > 0) {
+      const best = scored.filter((x) => x.score === bestScore).map((x) => x.s);
+      stores = best.length ? best : stores;
+    }
+  }
+
+  const flat = [];
+
+  for (const store of stores) {
+    const restaurantTitle =
+      store.title ||
+      store.name ||
+      store.sanitizedTitle ||
+      store.storeName ||
+      "";
+    const restaurantAddress =
+      store.location?.address ||
+      store.location?.streetAddress ||
+      store.location?.formattedAddress ||
+      "";
+
+    const menus = Array.isArray(store.menu) ? store.menu : [];
+
+    for (const section of menus) {
+      const sectionName = section.catalogName || section.sectionName || "";
+      const items = Array.isArray(section.catalogItems)
+        ? section.catalogItems
+        : [];
+
+      for (const item of items) {
+        if (!item) continue;
+        const name = item.title || item.name || "";
+        if (!name) continue;
+
+        let imageUrl = null;
+        if (item.imageUrl || item.image_url || item.image) {
+          imageUrl = item.imageUrl || item.image_url || item.image;
+        } else if (Array.isArray(item.images) && item.images.length > 0) {
+          imageUrl =
+            item.images[0].url ||
+            item.images[0].imageUrl ||
+            item.images[0].image_url ||
+            null;
+        } else if (item.photo && typeof item.photo === "object") {
+          imageUrl =
+            item.photo.url ||
+            item.photo.imageUrl ||
+            item.photo.image_url ||
+            null;
+        }
+
+        flat.push({
+          name,
+          description: item.itemDescription || item.description || "",
+          section: sectionName,
+          price: typeof item.price === "number" ? item.price : null,
+          price_display: item.priceTagline || null,
+          calories_display: item.calories || item.calories_display || null,
+          restaurantTitle,
+          restaurantAddress,
+          imageUrl,
+          raw: item
+        });
+      }
+    }
+  }
+
+  return flat;
+}
+
+// ---------- GATEWAY: Strict filter items to this Google restaurant ----------
+// ---------- GATEWAY: Strict filter + scored fallback to a single restaurant ----------
+function filterUberItemsByGoogleContextGateway(items, googleContext) {
+  if (!Array.isArray(items) || !items.length || !googleContext) return [];
+
+  const gName = googleContext.name || "";
+  const gAddr = googleContext.address || "";
+
+  // If we somehow don't have either, we can't reliably match.
+  if (!gName && !gAddr) return [];
+
+  // 1) Primary: strict Google-based filter (same as before)
+  const strict = items.filter((it) => {
+    const rName =
+      it.restaurantTitle ||
+      it.restaurant_name ||
+      (it.restaurant && it.restaurant.name) ||
+      "";
+    const rAddr =
+      it.restaurantAddress ||
+      it.restaurant_address ||
+      (it.restaurant && it.restaurant.address) ||
+      "";
+
+    if (gName && !strictNameMatch(gName, rName)) return false;
+    if (gAddr && !strictAddressMatch(gAddr, rAddr)) return false;
+
+    return true;
+  });
+
+  if (strict.length) {
+    return strict;
+  }
+
+  // 2) Fallback: choose ONE best restaurant group by similarity to Google name+address.
+  //    Still guarantees "one restaurant only", but not empty if Uber labels differ.
+
+  // Group items by restaurant identity
+  const groups = new Map();
+  for (const it of items) {
+    const rName =
+      it.restaurantTitle ||
+      it.restaurant_name ||
+      (it.restaurant && it.restaurant.name) ||
+      "";
+    const rAddr =
+      it.restaurantAddress ||
+      it.restaurant_address ||
+      (it.restaurant && it.restaurant.address) ||
+      "";
+
+    const key = `${rName}||${rAddr}`;
+    if (!groups.has(key)) {
+      groups.set(key, { name: rName, address: rAddr, items: [] });
+    }
+    groups.get(key).items.push(it);
+  }
+
+  if (!groups.size) {
+    return [];
+  }
+
+  // Helper: name similarity using the same token machinery we already have
+  function nameSimilarity(a, b) {
+    const aTokens = nameTokens(a);
+    const bTokens = nameTokens(b);
+    if (!aTokens.length || !bTokens.length) return 0;
+    return tokenSetSimilarity(aTokens, bTokens); // 0..1
+  }
+
+  // Helper: address similarity by token overlap
+  function addressSimilarity(a, b) {
+    const aNorm = normalizeAddress(a || "");
+    const bNorm = normalizeAddress(b || "");
+    if (!aNorm || !bNorm) return 0;
+    const aTokens = aNorm.split(" ");
+    const bTokens = bNorm.split(" ");
+    const aSet = new Set(aTokens);
+    let intersect = 0;
+    for (const t of bTokens) {
+      if (aSet.has(t)) intersect++;
+    }
+    const minLen = Math.min(aTokens.length, bTokens.length);
+    if (!minLen) return 0;
+    return intersect / minLen; // 0..1
+  }
+
+  let bestGroup = null;
+  let bestScore = 0;
+
+  for (const [, group] of groups.entries()) {
+    const rName = group.name || "";
+    const rAddr = group.address || "";
+
+    const nSim = gName ? nameSimilarity(gName, rName) : 0;
+    const aSim = gAddr ? addressSimilarity(gAddr, rAddr) : 0;
+
+    // Weighted score: name is more important than address
+    const score = nSim * 0.7 + aSim * 0.3;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestGroup = group;
+    }
+  }
+
+  // Threshold: if it's really not similar, better return no menu than wrong menu
+  const MIN_SCORE = 0.4; // you can tweak this after testing
+  if (!bestGroup || bestScore < MIN_SCORE) {
+    return [];
+  }
+
+  return bestGroup.items || [];
+}
+
+// ---------- GATEWAY: Uber menu caller (single-restaurant, strict) ----------
+async function callUberMenuGateway(env, googleContext, opts = {}) {
+  const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+  const key = env.RAPIDAPI_KEY || env.RAPID_API_KEY;
+  if (!key) {
+    return { ok: false, source: "uber_gateway_menu", error: "Missing RAPIDAPI_KEY" };
+  }
+  if (!host) {
+    return { ok: false, source: "uber_gateway_menu", error: "Missing UBER_RAPID_HOST" };
+  }
+
+  const query = googleContext.name || "";
+  const address = googleContext.address || "";
+
+  if (!query || !address) {
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "Missing query or address for Uber menu"
+    };
+  }
+
+  const maxRows = opts.maxRows ?? 150;
+  const locale = opts.locale || "en-US";
+  const page = opts.page || 1;
+  const attempts = opts.attempts || 8;
+
+  let job = await postJobByAddress(
+    { query, address, maxRows, locale, page, webhook: null },
+    env
+  );
+  let payload = await waitForUberJobGateway(env, job, { attempts });
+  payload = payload?.raw || payload || job?.raw || job;
+
+  let uberItems = flattenUberPayloadToItemsGateway(payload, {
+    targetName: ""
+  });
+  if (!Array.isArray(uberItems)) {
+    uberItems = [];
+  }
+
+  if (!uberItems.length) {
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "Uber job completed but no items were found in payload."
+    };
+  }
+
+  const strictItems = filterUberItemsByGoogleContextGateway(
+    uberItems,
+    googleContext
+  );
+  if (!strictItems.length) {
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "No items matched Google restaurant after strict filter."
+    };
+  }
+
+  return { ok: true, source: "uber_gateway_menu", items: strictItems };
+}
+
+// ---------- GATEWAY: Full menu extractor (used by /menu/extract) ----------
+async function extractMenuGateway(
+  env,
+  { placeId, url, restaurantName, address, lat, lng }
+) {
+  if (!placeId) {
+    return {
+      ok: false,
+      source: "menu_extract",
+      error: "Missing placeId"
+    };
+  }
+
+  const place = await fetchGooglePlaceDetailsGateway(env, placeId);
+  if (!place.ok) {
+    return {
+      ok: false,
+      source: "google_place_details_failed",
+      restaurant: {
+        id: placeId,
+        name: restaurantName || "Unknown Restaurant",
+        address: address || "",
+        url: url || ""
+      },
+      googleError: place.error || null
+    };
+  }
+
+  const {
+    name: placeName,
+    address: placeAddress,
+    lat: placeLat,
+    lng: placeLng
+  } = place;
+  const placePhotoRef = extractPlacePhotoReference(place?.raw?.result || {});
+  const placePhotoUrl = extractGooglePhotoUrl(
+    place?.raw?.result || {},
+    env.GOOGLE_MAPS_API_KEY
+  );
+
+  // Prefer Google lat/lng; only fall back to query params if Google is missing
+  const resolvedLat =
+    typeof placeLat === "number" && Number.isFinite(placeLat)
+      ? placeLat
+      : typeof lat === "number" && Number.isFinite(lat)
+        ? lat
+        : null;
+
+  const resolvedLng =
+    typeof placeLng === "number" && Number.isFinite(placeLng)
+      ? placeLng
+      : typeof lng === "number" && Number.isFinite(lng)
+        ? lng
+        : null;
+
+  // ✅ Ground truth: Google Place wins. Frontend is only a weak fallback.
+  const finalName = placeName || restaurantName || "";
+  const finalAddress = placeAddress || address || "";
+
+  const googleCtx = {
+    name: finalName,
+    address: finalAddress,
+    lat: resolvedLat ?? null,
+    lng: resolvedLng ?? null,
+    photoUrl: placePhotoUrl || null,
+    photoRef: placePhotoRef || null
+  };
+
+  const uber = await callUberMenuGateway(env, googleCtx, {
+    maxRows: 150,
+    locale: "en-US",
+    attempts: 8
+  });
+
+  if (!uber.ok || !Array.isArray(uber.items) || uber.items.length === 0) {
+    return {
+      ok: false,
+      source: "uber_gateway_menu_failed",
+      restaurant: {
+        id: placeId,
+        name: finalName || "Unknown Restaurant",
+        address: finalAddress || "",
+        url: url || ""
+      },
+      uberDebug: uber
+    };
+  }
+
+  const dishes = (uber.items || []).map((it, idx) => {
+    const raw = it.raw || {};
+    const imageUrl =
+      it.imageUrl ||
+      raw.imageUrl ||
+      raw.image_url ||
+      raw.image ||
+      null;
+
+    return {
+      id: `canon-${idx + 1}`,
+      name: it.name || `Item ${idx + 1}`,
+      description: it.description || "",
+      section: it.section || null,
+      source: "uber",
+      rawPrice: typeof it.price === "number" ? it.price : null,
+      priceText: it.price_display || null,
+      imageUrl
+    };
+  });
+
+  // 1) Drop noise items (drinks, sides, utensils, etc.)
+  const filteredDishes = filterMenuForDisplay(dishes);
+
+  // 2) Assign canonicalCategory to each dish
+  const classified = filteredDishes.map((d) => {
+    const category = canonicalCategoryFromSectionAndName(d.section, d.name);
+    return { ...d, canonicalCategory: classifyCanonicalCategory({ ...d, canonicalCategory: category }) };
+  });
+
+  // Wing-specific override
+  const withWingOverride = classified.map((it) => {
+    const override = classifyWingPlatter(it);
+    return {
+      ...it,
+      canonicalCategory: override || it.canonicalCategory
+    };
+  });
+
+  // Bowl-specific override (after wing override)
+  const withBowlOverride = withWingOverride.map((it) => {
+    const override = classifyBowl(it);
+    return {
+      ...it,
+      canonicalCategory: override || it.canonicalCategory
+    };
+  });
+
+  // Wrap/Quesadilla/Melt/Philly override (after bowl override)
+  const withWrapOverride = withBowlOverride.map((it) => {
+    const override = classifyWrapQuesadilla(it);
+    return {
+      ...it,
+      canonicalCategory: override || it.canonicalCategory
+    };
+  });
+
+  // Section-based remap (fallback) after wraps
+  const withSectionRemap = withWrapOverride.map((it) => {
+    const override = classifyBySectionFallback(it);
+    return {
+      ...it,
+      canonicalCategory: override || it.canonicalCategory
+    };
+  });
+
+  // Tier 3 LLM classification + overrides
+  const withLLM =
+    env.MENU_CLASSIFIER_CACHE && env.AI
+      ? await applyLLMClassification(env, withSectionRemap)
+      : withSectionRemap;
+  const hardFilteredLLM = normalizeWrapsAndSaladBowls(
+    applyLLMOverrides(withLLM)
+  ).filter(
+    (it) => !hardBlockItem(it.name, it.description)
+  );
+
+  // Final hard blocklist (no exceptions)
+  const hardFiltered = hardFilteredLLM;
+
+  const normalizedFinal = finalNormalizeCategories(hardFiltered);
+  const sections = groupItemsIntoSections(normalizedFinal);
+
+  return {
+    ok: true,
+    source: "uber_gateway_menu",
+    restaurant: {
+      id: placeId,
+      name: finalName,
+      address: finalAddress,
+      url,
+      imageUrl: googleCtx.photoUrl || null,
+      imageRef: googleCtx.photoRef || null
+    },
+    sections
+  };
+}
+
 // ---- POST /api/job exactly like the working debug route ----
 async function runAddressJobRaw(
   {
@@ -6109,38 +8248,77 @@ async function runAddressJobRaw(
 }
 
 // ---- Choose the single best restaurant match by title similarity ----
-function pickBestRestaurant({ rows, query }) {
+function pickBestRestaurant({ rows, query, googleContext }) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  const q = (query || "").trim().toLowerCase();
 
-  function norm(s) {
-    return String(s || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .replace(/[^\p{L}\p{N}\s&'-]/gu, "")
-      .trim();
+  // 1) Strict identity filter using Google info (name + address + lat/lng)
+  if (googleContext) {
+    const strictMatches = rows.filter((r) =>
+      passesStrictRestaurantMatch(
+        {
+          name: googleContext.name || query,
+          address: googleContext.address,
+          lat: googleContext.lat,
+          lng: googleContext.lng
+        },
+        r
+      )
+    );
+
+    if (strictMatches.length === 1) {
+      return strictMatches[0];
+    }
+    if (strictMatches.length > 1) {
+      // choose closest by distance among strict matches
+      let best = strictMatches[0];
+      let bestDist = Infinity;
+      for (const r of strictMatches) {
+        const uLat = r.location && (r.location.latitude || r.location.lat);
+        const uLng = r.location && (r.location.longitude || r.location.lng);
+        const d = computeDistanceMeters(
+          googleContext.lat,
+          googleContext.lng,
+          uLat,
+          uLng
+        );
+        if (d != null && d < bestDist) {
+          bestDist = d;
+          best = r;
+        }
+      }
+      return best;
+    }
+    // if no strict matches → fall through to legacy scoring as a fallback
   }
 
-  function scoreRow(r) {
-    const title = norm(r?.title || r?.name || r?.displayName || r?.storeName);
-    if (!q || !title) return 0;
-    if (title === norm(q)) return 100;
-    if (title.startsWith(norm(q))) return 90;
-    if (title.includes(norm(q))) return 80;
-    const qtoks = new Set(norm(q).split(" ").filter(Boolean));
-    const ttoks = new Set(title.split(" ").filter(Boolean));
+  // 2) Legacy scoring fallback (keeps system working if no googleContext)
+  function scoreRow(row) {
+    const name = (row.title || row.sanitizedTitle || row.name || "").toLowerCase();
+    const q = (query || "").toLowerCase();
+    if (!name || !q) return 0;
+
+    if (name === q) return 100;
+    if (name.startsWith(q)) return 90;
+    if (name.includes(q)) return 80;
+
+    const nameTokens = name.split(/\s+/);
+    const qTokens = q.split(/\s+/);
+    const nSet = new Set(nameTokens);
     let overlap = 0;
-    for (const t of qtoks) if (ttoks.has(t)) overlap++;
-    const ratio = overlap / Math.max(1, qtoks.size);
+    for (const t of qTokens) {
+      if (nSet.has(t)) overlap++;
+    }
+    const ratio = overlap / Math.max(1, qTokens.length);
     return Math.round(60 * ratio);
   }
 
-  let best = null;
-  for (const r of rows) {
-    const s = scoreRow(r);
-    if (!best || s > best.score) best = { row: r, score: s };
-  }
-  return best?.row || null;
+  const scored = rows.map((r) => ({
+    row: r,
+    score: scoreRow(r)
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0] ? scored[0].row : null;
 }
 
 // [38.6] — explain how we score/choose the best restaurant
@@ -6782,6 +8960,10 @@ const _worker_impl = {
           request.headers.get("x-correlation-id") || crypto.randomUUID(),
         preview: bodyPreview
       });
+      // NOTE: metrics_core is used as a BEST-EFFORT logging sink only.
+      // The canonical app data (analysis jobs, meal logs, etc.) lives in the gateway D1_DB.
+      // Nothing in the main pipeline depends on metrics_core responses.
+      // It is safe to treat failures here as non-fatal.
       ctx.waitUntil(
         env.metrics_core.fetch(
           "https://tb-metrics-core.tummybuddy.workers.dev/metrics/ingest",
@@ -6808,383 +8990,21 @@ const _worker_impl = {
     }
 
     if (pathname === "/pipeline/analyze-dish" && request.method === "POST") {
+      const { status, result } = await runDishAnalysis(env, ctx, request);
+      return okJson(result, status);
+    }
+    if (pathname === "/pipeline/analyze-dish/card" && request.method === "POST") {
+      const { status, result } = await runDishAnalysis(env, ctx, request);
+      if (status !== 200) return okJson(result, status);
       const body = (await readJsonSafe(request)) || {};
-      let {
-        dishName,
-        restaurantName,
-        userFlags = {},
-        menuDescription = null,
-        menuSection = null
-      } = body || {};
-      let forceLLM = false;
-
-      dishName =
-        dishName ||
-        body?.dish ||
-        body?.title ||
-        body?.name ||
-        "";
-
-      if (!dishName || typeof dishName !== "string" || !dishName.trim()) {
-        return okJson({ ok: false, error: "dishName is required" }, 400);
-      }
-
-      const correlationId =
-        request.headers.get("x-correlation-id") ||
-        (crypto && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `tb-${Date.now()}`);
-
-      console.log(
-        "bindings",
-        JSON.stringify({
-          recipe_core: !!env.recipe_core,
-          recipe_core_fetch:
-            env.recipe_core && typeof env.recipe_core.fetch === "function",
-          allergen_organs: !!env.allergen_organs,
-          allergen_organs_fetch:
-            env.allergen_organs &&
-            typeof env.allergen_organs.fetch === "function",
-          ai: !!env.AI
-        })
-      );
-
-      // --- CANONICAL NAME FALLBACK (LLM NORMALIZATION) ---
-      let originalName = dishName;
-      let canonicalDishName = dishName;
-
-      // If dish name is too branded, vague, or short → canonicalize
-      if (!dishName || dishName.trim().length < 3 || /big mac|baconator|cheesy|loaded|signature|special/i.test(dishName)) {
-        try {
-          const llmRes = await env.AI.run('@cf/meta/llama-3.2-11b-instruct', {
-            prompt: `You are helping normalize restaurant menu items into generic dish names 
-for recipe databases like Edamam or Spoonacular.
-
-Dish name: "${dishName}"
-Menu section: "${menuSection || ''}"
-Menu description: "${menuDescription || ''}"
-
-Rewrite this into a generic, descriptive food name that captures the likely key ingredients 
-(e.g. "double bacon cheeseburger", "mozzarella pizza with buffalo sauce").
-
-Return ONLY the improved dish name, no explanations.`
-          });
-
-          if (llmRes && typeof llmRes === 'string' && llmRes.trim().length > 0) {
-            canonicalDishName = llmRes.trim();
-            console.log('canonicalDishName:', canonicalDishName);
-          }
-        } catch (err) {
-          console.log('Canonicalization failed, using original name.');
-          canonicalDishName = dishName;
-        }
-
-        forceLLM = true;
-      }
-
-      // replace dishName sent to recipe core
-      dishName = canonicalDishName;
-
-      // STEP 1: recipe-core /recipe/resolve
-      const recipeResolveUrl = env.recipe_core
-        ? "https://recipe-core/recipe/resolve"
-        : "https://tb-recipe-core.tummybuddy.workers.dev/recipe/resolve";
-      const recipeFetcher =
-        (env.recipe_core && typeof env.recipe_core.fetch === "function")
-          ? env.recipe_core.fetch.bind(env.recipe_core)
-          : fetch;
-      const recipeResp = await recipeFetcher(recipeResolveUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-correlation-id": correlationId
-        },
-        body: JSON.stringify({
-          title: dishName,
-          restaurantName,
-          menuDescription,
-          menuSection,
-          forceLLM
-        })
-      });
-
-      const recipeText = await recipeResp.text();
-      let recipe;
-      try {
-        recipe = JSON.parse(recipeText);
-      } catch (e) {
-        recipe = {
-          ok: false,
-          error: "recipe_core returned non-JSON",
-          raw: recipeText
-        };
-      }
-
-      // STEP 2: recipe-core /ingredients/normalize
-      const ingredientLines = Array.isArray(recipe?.recipe?.ingredients)
-        ? recipe.recipe.ingredients
-            .map((row) =>
-              row.text ||
-              `${row.qty ?? row.quantity ?? ""} ${row.unit || ""} ${row.name || ""}`.trim()
-            )
-            .filter(Boolean)
-        : [];
-
-      const normResp = await recipeFetcher(
-        env.recipe_core
-          ? "https://recipe-core/ingredients/normalize"
-          : "https://tb-recipe-core.tummybuddy.workers.dev/ingredients/normalize",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-correlation-id": correlationId
-          },
-          body: JSON.stringify({ lines: ingredientLines })
-        }
-      );
-
-      const normText = await normResp.text();
-      let normalized;
-      try {
-        normalized = JSON.parse(normText);
-      } catch (e) {
-        normalized = {
-          ok: false,
-          error: "recipe_core.normalize returned non-JSON",
-          raw: normText
-        };
-      }
-
-      // STEP 3: build ingredients array for organs_core
-      let ingredients = [];
-
-      if (
-        normalized &&
-        Array.isArray(normalized.items) &&
-        normalized.items.length > 0
-      ) {
-        // Normal path: use fully-normalized items (Zestful/USDA/molecular, when present)
-        ingredients = normalized.items.map((row) => ({
-          name: row.name || row.original || "",
-          qty: row.qty ?? null,
-          unit: row.unit || null,
-          comment: row.comment || null
-        }));
-      } else if (Array.isArray(recipe?.recipe?.ingredients)) {
-        // Fallback path (current reality): use heuristic/Edamam/Spoonacular recipe ingredients
-        // so organs_core + Lexicon have rich text to work with.
-        ingredients = recipe.recipe.ingredients.map((row) => ({
-          // Prefer the full text as 'name' so normalizeIngredientsArray picks up
-          // things like "wheat burger bun (contains gluten)", "American cheese slices (dairy)".
-          name: row.text || row.name || "",
-          qty: row.qty ?? row.quantity ?? null,
-          unit: row.unit || null,
-          comment: row.comment || null
-        }));
-      } else {
-        ingredients = [];
-      }
-
-      // Build ingredient list for per-ingredient Lex visibility
-      const ingredientsForLex = (() => {
-        if (normalized && Array.isArray(normalized.items) && normalized.items.length) {
-          return normalized.items
-            .map((it) => it.name || it.text || it.original || "")
-            .filter((s) => !!s && s.trim().length > 1);
-        }
-        if (recipe && recipe.recipe && Array.isArray(recipe.recipe.ingredients)) {
-          return recipe.recipe.ingredients
-            .map((i) => i.name || i.text || "")
-            .filter((s) => !!s && s.trim().length > 1);
-        }
-        const parts = [body.dishName, body.menuDescription]
-          .filter(Boolean)
-          .map((s) => s.trim());
-        return parts.length ? parts : [];
-      })();
-
-      const lexPerIngredient = await classifyIngredientsWithLex(
-        env,
-        ingredientsForLex,
-        "en"
-      );
-      const allIngredientLexHits = lexPerIngredient.allHits || [];
-
-      // STEP 3.5: precompute Lexicon hits to pass downstream
-      let lex = null;
-      let finalLexHits = [];
-      try {
-        const lexParts = [];
-        if (dishName) lexParts.push(dishName);
-        if (menuDescription) lexParts.push(menuDescription);
-        if (Array.isArray(recipe?.recipe?.ingredients)) {
-          lexParts.push(
-            recipe.recipe.ingredients
-              .map((row) => row.text || row.name || "")
-              .filter(Boolean)
-              .join(", ")
-          );
-        }
-        const lexText = lexParts.filter(Boolean).join(". ");
-
-        if (lexText) {
-          // callLexicon already knows how to use LEXICON_API_URL + LEXICON_API_KEY
-          lex = await callLexicon(env, lexText, "en");
-          const rawHits = Array.isArray(lex?.data?.hits) ? lex.data.hits : [];
-          const hits = rawHits.map((h) => ({
-            term: h.term,
-            canonical: h.canonical,
-            classes: Array.isArray(h.classes) ? h.classes : [],
-            tags: Array.isArray(h.tags) ? h.tags : [],
-            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
-            fodmap: h.fodmap ?? h.fodmap_level,
-            lactose_band: h.lactose_band || null,
-            milk_source: h.milk_source || null
-          }));
-          const finalLexHitsLocal = hits;
-          finalLexHits = finalLexHitsLocal;
-        }
-      } catch (e) {
-        // swallow lex errors here; later debug block records if needed
-      }
-
-      const blobHits = finalLexHits || [];
-      const primaryLexHits =
-        allIngredientLexHits && allIngredientLexHits.length
-          ? allIngredientLexHits
-          : blobHits;
-
-      // STEP 4: allergen-organs /organs/assess
-      const allergenUrl = env.allergen_organs
-        ? "https://allergen-organs/organs/assess"
-        : "https://tb-allergen-organs-production.tummybuddy.workers.dev/organs/assess";
-      const allergenFetcher =
-        (env.allergen_organs && typeof env.allergen_organs.fetch === "function")
-          ? env.allergen_organs.fetch.bind(env.allergen_organs)
-          : fetch;
-      const organsResp = await allergenFetcher(allergenUrl, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-correlation-id": correlationId
-        },
-        body: JSON.stringify({
-          ingredients,
-          user_flags: userFlags,
-          lex_hits: primaryLexHits
-        })
-      });
-
-      const organsText = await organsResp.text();
-      let organs;
-      try {
-        organs = JSON.parse(organsText);
-      } catch (e) {
-        organs = {
-          ok: false,
-          error: "allergen_organs returned non-JSON",
-          raw: organsText
-        };
-      }
-
-      // STEP 5 — Lexicon super-brain: FODMAP + allergens (no manual short list)
-      try {
-        if (!organs || typeof organs !== "object") organs = {};
-        if (!organs.flags) organs.flags = {};
-        if (!Array.isArray(organs.flags.allergens)) organs.flags.allergens = [];
-
-        // Attach raw lexicon payload for debugging (optional)
-        if (!organs.debug) organs.debug = {};
-        organs.debug.lexicon_raw = lex || null;
-
-        if (lex && lex.ok) {
-          // Normalize lex hits into the shape expected by scoreDishFromHits
-          const hits = primaryLexHits;
-
-          const scoring = scoreDishFromHits(hits);
-
-          // ---- FODMAP from lexicon only ----
-          if (scoring.flags && scoring.flags.fodmap) {
-            organs.flags.fodmap = {
-              level: scoring.flags.fodmap,
-              reason: `FODMAP level ${scoring.flags.fodmap} inferred from lexicon.`,
-              source: "lexicon"
-            };
-          }
-
-          // ---- Allergens from lexicon only ----
-          const existing = Array.isArray(organs.flags.allergens)
-            ? organs.flags.allergens.slice()
-            : [];
-          const existingKinds = new Set(
-            existing
-              .map((a) => (a && typeof a.kind === "string" ? a.kind : null))
-              .filter(Boolean)
-          );
-
-          const lexAllergenKinds = Array.isArray(scoring.flags?.allergens)
-            ? scoring.flags.allergens
-            : [];
-
-          for (const k of lexAllergenKinds) {
-            const kind = String(k || "").toLowerCase();
-            if (!kind || existingKinds.has(kind)) continue;
-            existingKinds.add(kind);
-            existing.push({
-              kind,
-              message: `Contains or may contain ${kind} (from lexicon).`,
-              source: "lexicon"
-            });
-          }
-
-          organs.flags.allergens = existing;
-
-          // ---- Lactose level from lexicon ----
-          const lactoseInfo = extractLactoseFromHits(hits);
-          if (lactoseInfo) {
-            organs.flags.lactose = lactoseInfo;
-
-            // If lactose is not "none", ensure milk allergen is present
-            if (lactoseInfo.level !== "none") {
-              const hasMilk = organs.flags.allergens.some(
-                (a) => a && a.kind === "milk"
-              );
-              if (!hasMilk) {
-                organs.flags.allergens.push({
-                  kind: "milk",
-                  message: "Contains or may contain milk/lactose (from lexicon).",
-                  source: "lexicon"
-                });
-              }
-            }
-          }
-        }
-      } catch (e) {
-        if (!organs.debug) organs.debug = {};
-        organs.debug.lexicon_error = String(e?.message || e);
-      }
-
-      // STEP 6: final combined response
-      return okJson(
-        {
-          ok: true,
-          source: "pipeline.analyze-dish",
-          dishName,
-          restaurantName,
-          recipe,
-          normalized,
-          organs,
-          debug: {
-            ...(organs && organs.debug ? organs.debug : {}),
-            lex_blob_raw: lex,
-            lex_blob_hits: blobHits,
-            lex_per_ingredient: lexPerIngredient,
-            lex_primary_hits: primaryLexHits
-          }
-        },
-        200
-      );
+      const card = {
+        apiVersion: result.apiVersion || "v1",
+        dishName: result.dishName || body?.dishName || body?.dish || null,
+        restaurantName:
+          result.restaurantName || body?.restaurantName || body?.restaurant || null,
+        summary: result.summary || null
+      };
+      return okJson(card, status);
     }
 
     if (pathname === "/organs/from-dish" && request.method === "GET") {
@@ -7212,6 +9032,7 @@ Return ONLY the improved dish name, no explanations.`
     if (pathname === "/debug/whoami" && request.method === "GET") {
       return tbWhoami(env);
     }
+    // DEBUG ONLY: calls whoami on bound cores
     if (pathname === "/debug/brain-health" && request.method === "GET") {
       const urlBase = new URL(request.url).origin;
       const results = {};
@@ -7223,8 +9044,6 @@ Return ONLY the improved dish name, no explanations.`
         base: urlBase
       };
 
-      const restaurantFetch =
-        env.restaurant_core?.fetch?.bind(env.restaurant_core) || null;
       const recipeFetch =
         env.recipe_core?.fetch?.bind(env.recipe_core) || null;
       const allergenFetch =
@@ -7232,9 +9051,6 @@ Return ONLY the improved dish name, no explanations.`
       const metricsFetch =
         env.metrics_core?.fetch?.bind(env.metrics_core) || null;
 
-      const restaurantUrl =
-        env.RESTAURANT_CORE_URL ||
-        "https://tb-restaurant-core.internal/debug/whoami";
       const recipeUrl =
         env.RECIPE_CORE_URL ||
         "https://tb-recipe-core.internal/debug/whoami";
@@ -7245,12 +9061,6 @@ Return ONLY the improved dish name, no explanations.`
         env.METRICS_CORE_URL ||
         "https://tb-metrics-core.internal/debug/whoami";
 
-      results.restaurant_core = await callJson(restaurantUrl, {
-        fetcher: restaurantFetch
-      }).catch((e) => ({
-        ok: false,
-        error: String(e)
-      }));
       results.recipe_core = await callJson(recipeUrl, {
         fetcher: recipeFetch
       }).catch((e) => ({
@@ -7272,7 +9082,6 @@ Return ONLY the improved dish name, no explanations.`
 
       const overallOk =
         results.gateway.ok &&
-        results.restaurant_core.ok &&
         results.recipe_core.ok &&
         results.allergen_organs.ok &&
         results.metrics_core.ok;
@@ -8138,13 +9947,47 @@ Return ONLY the improved dish name, no explanations.`
       const url = new URL(request.url);
       const placeId = url.searchParams.get("placeId") || "";
       const urlParam = url.searchParams.get("url") || "";
+      const restaurantName = url.searchParams.get("restaurantName") || "";
+      const address = url.searchParams.get("address") || "";
 
-      const result = await restaurantCore.extractMenu(env, {
-        placeId,
-        url: urlParam
-      });
+      const latParam = url.searchParams.get("lat");
+      const lngParam = url.searchParams.get("lng");
+      const lat = latParam != null ? Number(latParam) : undefined;
+      const lng = lngParam != null ? Number(lngParam) : undefined;
 
-      return okJson(result);
+      try {
+        const result = await extractMenuGateway(env, {
+          placeId,
+          url: urlParam,
+          lat,
+          lng,
+          restaurantName,
+          address
+        });
+
+        return okJson(result);
+      } catch (err) {
+        console.error("MENU_EXTRACT_UNHANDLED_ERROR_GATEWAY", {
+          placeId,
+          restaurantName,
+          address,
+          lat,
+          lng,
+          error: String(err?.message || err)
+        });
+
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            source: "menu_extract_gateway",
+            error: String(err?.message || err)
+          }),
+          {
+            status: 500,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
     }
     if (pathname === "/recipe/resolve")
       return handleRecipeResolve(env, request, url, ctx);
@@ -8431,7 +10274,18 @@ Return ONLY the improved dish name, no explanations.`
               );
             }
 
-            const best = pickBestRestaurant({ rows: rowsUS, query });
+            const googleContext = {
+              name: query,
+              address: addressRaw,
+              lat: lat ? Number(lat) : null,
+              lng: lng ? Number(lng) : null
+            };
+
+            const best = pickBestRestaurant({
+              rows: rowsUS,
+              query,
+              googleContext
+            });
             const chosen =
               best ||
               (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
@@ -8562,7 +10416,18 @@ Return ONLY the improved dish name, no explanations.`
             [];
           const rowsUS = filterRowsUS(rows, forceUSFlag);
 
-          const best = pickBestRestaurant({ rows: rowsUS, query });
+          const googleContext = {
+            name: query,
+            address: addressRaw,
+            lat: lat ? Number(lat) : null,
+            lng: lng ? Number(lng) : null
+          };
+
+          const best = pickBestRestaurant({
+            rows: rowsUS,
+            query,
+            googleContext
+          });
           const chosen =
             best || (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
           if (debug === "why") {
@@ -10654,46 +12519,6 @@ Return ONLY the improved dish name, no explanations.`
     if (pathname === "/restaurants/find") {
       return handleRestaurantsFindGateway(env, url);
     }
-    // /ingredients/normalize → tb-recipe-core
-    if (pathname === "/ingredients/normalize" && request.method === "POST") {
-      const id = ((h) => h.get("x-correlation-id") || crypto.randomUUID())(
-        request.headers
-      );
-      const init = {
-        method: "POST",
-        headers: new Headers(request.headers),
-        body: await request.text()
-      };
-      init.headers.set("x-correlation-id", id);
-      const res = await env.recipe_core.fetch(new Request(request.url, init));
-      const out = new Headers(res.headers);
-      out.set("x-correlation-id", id);
-      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
-      out.set("x-tb-env", env.ENV || "production");
-      out.set("x-tb-git", env.GIT_SHA || "n/a");
-      out.set("x-tb-built", env.BUILT_AT || "n/a");
-      return new Response(res.body, { status: res.status, headers: out });
-    }
-    // /recipe/resolve → tb-recipe-core
-    if (pathname === "/recipe/resolve" && request.method === "POST") {
-      const id = ((h) => h.get("x-correlation-id") || crypto.randomUUID())(
-        request.headers
-      );
-      const init = {
-        method: "POST",
-        headers: new Headers(request.headers),
-        body: await request.text()
-      };
-      init.headers.set("x-correlation-id", id);
-      const res = await env.recipe_core.fetch(new Request(request.url, init));
-      const out = new Headers(res.headers);
-      out.set("x-correlation-id", id);
-      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
-      out.set("x-tb-env", env.ENV || "production");
-      out.set("x-tb-git", env.GIT_SHA || "n/a");
-      out.set("x-tb-built", env.BUILT_AT || "n/a");
-      return new Response(res.body, { status: res.status, headers: out });
-    }
     if (pathname === "/debug/zestful-usage") {
       const today = new Date().toISOString().slice(0, 10);
       const key = `zestful:count:${today}`;
@@ -11552,6 +13377,61 @@ function cleanHost(h) {
 function normalizeBase(u) {
   return (u || "").trim().replace(/\/+$/, "");
 }
+function filterLexHitsForIngredient(ingredientName, hits) {
+  if (!ingredientName || !Array.isArray(hits)) return [];
+
+  const lowerName = String(ingredientName || "").toLowerCase();
+  const fishKeywords = [
+    "fish",
+    "salmon",
+    "tuna",
+    "cod",
+    "anchovy",
+    "sardine",
+    "bacalao",
+    "bacalhau",
+    "trout",
+    "tilapia",
+    "shrimp",
+    "prawn",
+    "crab",
+    "lobster"
+  ];
+
+  return hits.filter((hit) => {
+    if (!hit) return false;
+
+    const term = (hit.term || "").toLowerCase();
+    const canonical = (hit.canonical || "").toLowerCase();
+    const tags = Array.isArray(hit.tags)
+      ? hit.tags.map((t) => (t || "").toLowerCase())
+      : [];
+    const classes = Array.isArray(hit.classes)
+      ? hit.classes.map((c) => (c || "").toLowerCase())
+      : [];
+
+    if (tags.includes("brand_label_exception")) return false;
+
+    const nameHasTerm = term && lowerName.includes(term);
+    const termHasName = term && term.includes(lowerName);
+    const nameHasCanonical = canonical && lowerName.includes(canonical);
+    const canonicalHasName = canonical && canonical.includes(lowerName);
+
+    const overlapsTextually =
+      nameHasTerm || termHasName || nameHasCanonical || canonicalHasName;
+    if (!overlapsTextually) return false;
+
+    const isFishClass = classes.includes("fish");
+    if (isFishClass) {
+      const ingredientLooksLikeFish = fishKeywords.some((w) =>
+        lowerName.includes(w)
+      );
+      if (!ingredientLooksLikeFish) return false;
+    }
+
+    return true;
+  });
+}
 function buildLexiconAnalyzeURL(base) {
   const b = normalizeBase(base);
   return `${b}/v1/search`;
@@ -11566,6 +13446,318 @@ function buildLexiconAnalyzeCandidates(base) {
     `${b}/api/analyze`,
     `${b}/v1/lexicon/analyze`
   ];
+}
+
+// Shared helper for /pipeline/analyze-dish and /pipeline/analyze-dish/card
+async function runDishAnalysis(env, ctx, request) {
+  const correlationId = _cid(request.headers);
+  const body = (await readJsonSafe(request)) || {};
+
+  const dishName = (body.dishName || body.dish || "").trim();
+  const restaurantName = (body.restaurantName || body.restaurant || "").trim();
+  const menuDescription =
+    (body.menuDescription ||
+      body.description ||
+      body.dishDescription ||
+      "").trim();
+
+  if (!dishName) {
+    return {
+      status: 400,
+      result: {
+        ok: false,
+        error: "dishName is required",
+        hint: "Include dishName (or dish) in the request body."
+      }
+    };
+  }
+
+  const recipeResult = await resolveRecipeWithCache(env, {
+    dishTitle: dishName,
+    placeId: body.placeId || body.place_id || "",
+    cuisine: body.cuisine || "",
+    lang: body.lang || "en",
+    forceReanalyze:
+      body.force_reanalyze === true ||
+      body.forceReanalyze === true ||
+      body.force_reanalyze === 1,
+    classify: true,
+    shape: "recipe_card",
+    providersOverride: Array.isArray(body.providers)
+      ? body.providers.map((p) => String(p || "").toLowerCase())
+      : null,
+    parse: true,
+    userId: body.user_id || body.userId || "",
+    devFlag: body.dev === true || body.dev === 1 || body.dev === "1"
+  });
+
+  const ingredients = Array.isArray(recipeResult?.ingredients)
+    ? recipeResult.ingredients
+    : [];
+
+  const normalized = {
+    ok: true,
+    source: recipeResult?.responseSource || recipeResult?.source || null,
+    cache: recipeResult?.cacheHit || recipeResult?.cache || false,
+    items: ingredients,
+    ingredients_lines:
+      (recipeResult?.out && recipeResult.out.ingredients_lines) ||
+      recipeResult?.ingLines ||
+      [],
+    ingredients_parsed:
+      recipeResult?.out?.ingredients_parsed ||
+      recipeResult?.parsed ||
+      null
+  };
+
+  const ingredientsForLex = (() => {
+    if (Array.isArray(normalized.items) && normalized.items.length) {
+      return normalized.items
+        .map((it) => it.name || it.text || it.original || "")
+        .filter((s) => !!s && s.trim().length > 1);
+    }
+    if (
+      Array.isArray(normalized.ingredients_lines) &&
+      normalized.ingredients_lines.length
+    ) {
+      return normalized.ingredients_lines.filter(
+        (s) => !!s && s.trim().length > 1
+      );
+    }
+    const parts = [dishName, menuDescription]
+      .filter(Boolean)
+      .map((s) => s.trim());
+    return parts.length ? parts : [];
+  })();
+
+  const lexPerIngredient = await classifyIngredientsWithLex(
+    env,
+    ingredientsForLex,
+    "en"
+  );
+  const filteredPerIngredient = Array.isArray(lexPerIngredient?.perIngredient)
+    ? lexPerIngredient.perIngredient.map((entry) => ({
+        ...entry,
+        hits: filterLexHitsForIngredient(entry?.ingredient, entry?.hits || [])
+      }))
+    : [];
+  const allIngredientLexHits = filteredPerIngredient.flatMap(
+    (p) => p.hits || []
+  );
+
+  let lex = null;
+  let finalLexHits = [];
+  try {
+    const lexParts = [];
+    if (dishName) lexParts.push(dishName);
+    if (menuDescription) lexParts.push(menuDescription);
+    if (Array.isArray(normalized.items) && normalized.items.length) {
+      lexParts.push(
+        normalized.items
+          .map((row) => row.name || row.text || row.original || "")
+          .filter(Boolean)
+          .join(", ")
+      );
+    }
+    const lexText = lexParts.filter(Boolean).join(". ");
+
+    if (lexText) {
+      lex = await callLexicon(env, lexText, "en");
+      const rawHits = Array.isArray(lex?.data?.hits) ? lex.data.hits : [];
+      finalLexHits = rawHits.map((h) => ({
+        term: h.term,
+        canonical: h.canonical,
+        classes: Array.isArray(h.classes) ? h.classes : [],
+        tags: Array.isArray(h.tags) ? h.tags : [],
+        allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
+        fodmap: h.fodmap ?? h.fodmap_level,
+        lactose_band: h.lactose_band || null,
+        milk_source: h.milk_source || null
+      }));
+    }
+  } catch (e) {
+    // swallow lex errors; captured in debug below
+  }
+
+  const blobHits = finalLexHits || [];
+  const primaryLexHits =
+    allIngredientLexHits && allIngredientLexHits.length
+      ? allIngredientLexHits
+      : blobHits;
+
+  const userFlags = body.user_flags || body.userFlags || {};
+  const allergenUrl = env.allergen_organs
+    ? "https://allergen-organs/organs/assess"
+    : "https://tb-allergen-organs-production.tummybuddy.workers.dev/organs/assess";
+  const allergenFetcher =
+    env.allergen_organs?.fetch?.bind(env.allergen_organs) || fetch;
+  const organsResp = await allergenFetcher(allergenUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-correlation-id": correlationId
+    },
+    body: JSON.stringify({
+      ingredients,
+      user_flags: userFlags,
+      lex_hits: primaryLexHits
+    })
+  });
+
+  const organsText = await organsResp.text();
+  let organs;
+  try {
+    organs = JSON.parse(organsText);
+  } catch {
+    organs = {
+      ok: false,
+      error: "allergen_organs returned non-JSON",
+      raw: organsText
+    };
+  }
+
+  try {
+    if (!organs || typeof organs !== "object") organs = {};
+    if (!organs.flags) organs.flags = {};
+    if (!Array.isArray(organs.flags.allergens)) organs.flags.allergens = [];
+    if (!organs.debug) organs.debug = {};
+    organs.debug.lexicon_raw = lex || null;
+
+    if (lex && lex.ok) {
+      const hits = primaryLexHits;
+      const scoring = scoreDishFromHits(hits);
+
+      if (scoring.flags && scoring.flags.fodmap) {
+        organs.flags.fodmap = {
+          level: scoring.flags.fodmap,
+          reason: `FODMAP level ${scoring.flags.fodmap} inferred from lexicon.`,
+          source: "lexicon"
+        };
+      }
+
+      const existing = Array.isArray(organs.flags.allergens)
+        ? organs.flags.allergens.slice()
+        : [];
+      const existingKinds = new Set(
+        existing
+          .map((a) => (a && typeof a.kind === "string" ? a.kind : null))
+          .filter(Boolean)
+      );
+
+      const lexAllergenKinds = Array.isArray(scoring.flags?.allergens)
+        ? scoring.flags.allergens
+        : [];
+
+      for (const k of lexAllergenKinds) {
+        const kind = String(k || "").toLowerCase();
+        if (!kind || existingKinds.has(kind)) continue;
+        existingKinds.add(kind);
+        existing.push({
+          kind,
+          message: `Contains or may contain ${kind} (from lexicon).`,
+          source: "lexicon"
+        });
+      }
+
+      organs.flags.allergens = existing;
+
+      const lactoseInfo = extractLactoseFromHits(hits);
+      if (lactoseInfo) {
+        organs.flags.lactose = lactoseInfo;
+
+        if (lactoseInfo.level !== "none") {
+          const hasMilk = organs.flags.allergens.some(
+            (a) => a && a.kind === "milk"
+          );
+          if (!hasMilk) {
+            organs.flags.allergens.push({
+              kind: "milk",
+              message: "Contains or may contain milk/lactose (from lexicon).",
+              source: "lexicon"
+            });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    if (!organs.debug) organs.debug = {};
+    organs.debug.lexicon_error = String(e?.message || e);
+  }
+
+  const summary = (() => {
+    if (!organs || !organs.ok) {
+      return null;
+    }
+
+    const tb = organs.tummy_barometer || {};
+    const flags = organs.flags || {};
+    const organsList = Array.isArray(organs.organs) ? organs.organs : [];
+
+    const allergenKinds = Array.isArray(flags.allergens)
+      ? flags.allergens
+          .map((a) => a && a.kind)
+          .filter(Boolean)
+      : [];
+
+    return {
+      tummyBarometer: {
+        score: tb.score ?? null,
+        label: tb.label ?? null
+      },
+      organs: organsList.map((o) => ({
+        organ: o.organ ?? null,
+        score: o.score ?? null,
+        level: o.level ?? null
+      })),
+      keyFlags: {
+        allergens: allergenKinds,
+        fodmapLevel: flags.fodmap?.level ?? null,
+        lactoseLevel: flags.lactose?.level ?? null,
+        onionGarlic: flags.onion_garlic ?? false,
+        spicy: flags.spicy ?? false,
+        alcohol: flags.alcohol ?? false
+      }
+    };
+  })();
+
+  const recipe_debug = {
+    provider:
+      recipeResult?.out?.provider ??
+      recipeResult?.source ??
+      recipeResult?.responseSource ??
+      null,
+    reason: recipeResult?.notes || null,
+    card_ingredients: ingredients.length,
+    providers_order: providerOrder(env),
+    attempts: recipeResult?.attempts ?? []
+  };
+
+  const debug = {
+    ...(organs && organs.debug ? organs.debug : {}),
+    lex_blob_raw: lex,
+    lex_blob_hits: blobHits,
+    lex_per_ingredient: {
+      ...(lexPerIngredient || {}),
+      perIngredient: filteredPerIngredient
+    },
+    lex_primary_hits: primaryLexHits,
+    recipe_debug
+  };
+
+  const result = {
+    ok: true,
+    apiVersion: "v1",
+    source: "pipeline.analyze-dish",
+    dishName,
+    restaurantName,
+    summary,
+    recipe: recipeResult,
+    normalized,
+    organs,
+    debug
+  };
+
+  return { status: 200, result };
 }
 
 async function callRapid(env, query, address) {
