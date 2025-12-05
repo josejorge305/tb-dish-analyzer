@@ -4562,6 +4562,7 @@ function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
   }));
 
   const block = {
+    ok: true,
     tummy_barometer:
       tummy ||
       (existingOrgansBlock && existingOrgansBlock.tummy_barometer) || {
@@ -5252,6 +5253,28 @@ async function callUSDAFDC(env, name) {
     serving: null,
     source: "USDA_FDC"
   };
+}
+
+async function resolveNutritionFromUSDA(env, dishName, description) {
+  if (!dishName && !description) return null;
+
+  let hit = null;
+  try {
+    hit = await callUSDAFDC(env, dishName || "");
+  } catch {}
+
+  if (!hit && description) {
+    const shortDesc = description.split(/[.,;]/)[0].slice(0, 80);
+    try {
+      hit = await callUSDAFDC(env, shortDesc);
+    } catch {}
+  }
+
+  if (hit && hit.nutrients && typeof hit.nutrients === "object") {
+    return hit.nutrients;
+  }
+
+  return null;
 }
 
 // Calls our own /menu/uber-test INTERNALLY (no network), returns { ok, source, items: [...] }
@@ -13101,6 +13124,7 @@ function filterLexHitsForIngredient(ingredientName, hits) {
 async function runDishAnalysis(env, ctx, request) {
   const correlationId = _cid(request.headers);
   const body = (await readJsonSafe(request)) || {};
+  const lang = body.lang || body.language || "en";
 
   const dishName = (body.dishName || body.dish || "").trim();
   const restaurantName = (body.restaurantName || body.restaurant || "").trim();
@@ -13231,16 +13255,51 @@ async function runDishAnalysis(env, ctx, request) {
     }));
   }
 
+  if (!finalNutritionSummary) {
+    try {
+      // Tier 2 fallback: use parsed rows if available
+      if (Array.isArray(ingredientsParsed) && ingredientsParsed.length) {
+        await enrichWithNutrition(env, ingredientsParsed);
+        finalNutritionSummary = sumNutrition(ingredientsParsed);
+      }
+
+      // Tier 3 fallback: use normalized items if no summary yet
+      if (
+        !finalNutritionSummary &&
+        normalized &&
+        Array.isArray(normalized.items) &&
+        normalized.items.length
+      ) {
+        await enrichWithNutrition(env, normalized.items);
+        finalNutritionSummary = sumNutrition(normalized.items);
+      }
+
+      if (finalNutritionSummary && recipeResult?.out) {
+        recipeResult.out.nutrition_summary = finalNutritionSummary;
+      }
+    } catch (e) {
+      // non-fatal; leave nutrition summary null
+      // swallow fallback errors
+    }
+  }
+
   if (
     !finalNutritionSummary &&
-    Array.isArray(ingredientsParsed) &&
-    ingredientsParsed.length
+    recipeResult &&
+    recipeResult.out &&
+    recipeResult.out.reason === "no_edamam_hits"
   ) {
-    // Try to compute from parsed rows using existing helper
     try {
-      finalNutritionSummary = sumNutrition(ingredientsParsed);
-      if (recipeResult?.out) {
-        recipeResult.out.nutrition_summary = finalNutritionSummary;
+      const usdaSummary = await resolveNutritionFromUSDA(
+        env,
+        dishName,
+        menuDescription || description || ""
+      );
+      if (usdaSummary) {
+        finalNutritionSummary = usdaSummary;
+        if (recipeResult.out) {
+          recipeResult.out.nutrition_summary = finalNutritionSummary;
+        }
       }
     } catch (e) {
       // non-fatal; leave nutrition summary null
@@ -13314,7 +13373,7 @@ async function runDishAnalysis(env, ctx, request) {
       : [])
   ];
 
-  const userFlags = body.user_flags || body.userFlags || {};
+  const user_flags = body.user_flags || body.userFlags || {};
 
   let organs = null;
   let organsLLMDebug = null;
@@ -13325,13 +13384,9 @@ async function runDishAnalysis(env, ctx, request) {
     ingredientLines:
       normalized?.ingredients_lines || normalized?.lines || [],
     ingredientsNormalized: normalized?.items || ingredients || [],
-    existingFlags: {
-      allergens: summary?.keyFlags?.allergens || [],
-      fodmapLevel: summary?.keyFlags?.fodmapLevel || null,
-      lactoseLevel: summary?.keyFlags?.lactoseLevel || null
-    },
-    userFlags,
-    locale: lang || "en"
+    existingFlags: {},
+    userFlags: user_flags,
+    locale: lang
   };
 
   const organsLLMResult = await runOrgansLLM(env, llmPayload);
@@ -13340,11 +13395,17 @@ async function runDishAnalysis(env, ctx, request) {
     organs = mapOrgansLLMToOrgansBlock(organsLLMResult.data, null);
     organsLLMDebug = organsLLMResult.data;
   } else {
-    organs = await assessOrgansLocally(env, {
-      ingredients,
-      user_flags: userFlags,
-      lex_hits: combinedHits
-    });
+    organs = {
+      ok: false,
+      error: organsLLMResult?.error || "organs_llm_failed",
+      flags: {},
+      organs: [],
+      tummy_barometer: {
+        score: 0,
+        label: "Analysis unavailable"
+      }
+    };
+    organsLLMDebug = organsLLMResult || null;
   }
 
   const edamamFodmap = getEdamamFodmapOverrideFromRecipe(recipeResult);
