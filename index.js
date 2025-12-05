@@ -4392,6 +4392,196 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
   }
 }
 
+
+// --- LLM organ engine: GPT-4o-mini ---
+//
+// payload must include:
+// {
+//   dishName: string,
+//   restaurantName?: string,
+//   ingredientLines: string[],
+//   ingredientsNormalized?: any[],
+//   existingFlags?: any,
+//   userFlags?: any,
+//   locale?: string
+// }
+//
+// Returns: { ok: boolean, data?: any, error?: string }
+
+async function runOrgansLLM(env, payload) {
+  if (!env.OPENAI_API_KEY) {
+    return { ok: false, error: "missing-openai-api-key" };
+  }
+
+  const model = "gpt-4o-mini";
+
+  const systemPrompt = `
+You are a diet and organ comfort analysis assistant for an IBS / gut-sensitivity app.
+You work at a wellness / educational level (not medical advice).
+
+You MUST:
+- Analyze ONLY the dish provided (no external knowledge).
+- Score organ comfort, not exact clinical risk.
+- Be conservative: when unsure, choose a milder negative level instead of the worst.
+- Always return VALID JSON only, with no extra commentary.
+
+Organs: always exactly these 7 IDs:
+- gut
+- liver
+- heart
+- metabolic
+- immune
+- brain
+- kidney
+
+Severity levels:
+- high_negative, moderate_negative, mild_negative, neutral,
+  mild_positive, moderate_positive, high_positive
+
+FODMAP & lactose:
+- Levels: high, medium, low, unknown.
+- Treat onion, garlic, wheat/gluten, many beans, some dairy, honey, high-fructose fruits,
+  and inulin-type fibers as potential FODMAP triggers.
+
+Allergens kinds:
+- milk, egg, fish, shellfish, peanut, tree_nut, soy, wheat, gluten, sesame, sulfites, other.
+
+You MUST return JSON with this shape:
+
+{
+  "tummy_barometer": { "score": number, "label": string },
+  "organs": [
+    {
+      "organ": "gut" | "liver" | "heart" | "metabolic" | "immune" | "brain" | "kidney",
+      "score": number,
+      "level": "high_negative" | "moderate_negative" | "mild_negative" | "neutral" | "mild_positive" | "moderate_positive" | "high_positive",
+      "reasons": string[]
+    },
+    ... 6 more organs ...
+  ],
+  "flags": {
+    "allergens": [
+      {
+        "kind": "milk" | "egg" | "fish" | "shellfish" | "peanut" | "tree_nut" | "soy" | "wheat" | "gluten" | "sesame" | "sulfites" | "other",
+        "message": string
+      }
+    ],
+    "fodmap": {
+      "level": "high" | "medium" | "low" | "unknown",
+      "reason": string,
+      "triggers": string[]
+    },
+    "lactose": {
+      "level": "high" | "medium" | "low" | "unknown",
+      "reason": string,
+      "examples": string[]
+    },
+    "onion_garlic": boolean,
+    "spicy": boolean,
+    "alcohol": boolean
+  },
+  "sentences": {
+    "overall": string,
+    "allergens": string,
+    "fodmap": string,
+    "organs_overview": string
+  }
+}
+`;
+
+  const body = {
+    model,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt.trim() },
+      {
+        role: "user",
+        content: JSON.stringify(payload, null, 2)
+      }
+    ]
+  };
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return {
+        ok: false,
+        error: `openai-organ-error-${res.status}`,
+        details: text
+      };
+    }
+
+    const json = await res.json();
+    const content = json?.choices?.[0]?.message?.content || "";
+
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      return {
+        ok: false,
+        error: "openai-organ-json-parse-error",
+        details: String(e),
+        raw: content
+      };
+    }
+
+    return { ok: true, data: parsed };
+  } catch (err) {
+    return {
+      ok: false,
+      error: "openai-organ-exception",
+      details: String(err)
+    };
+  }
+}
+
+function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
+  if (!llm || typeof llm !== "object") {
+    return existingOrgansBlock || null;
+  }
+
+  const tummy = llm.tummy_barometer || llm.tummyBarometer || null;
+  const organsArray = Array.isArray(llm.organs) ? llm.organs : [];
+  const flags = llm.flags || {};
+
+  const normalizedOrgans = organsArray.map((o) => ({
+    organ: o.organ || "gut",
+    score: typeof o.score === "number" ? o.score : 0,
+    level: o.level || "neutral",
+    reasons: Array.isArray(o.reasons) ? o.reasons : []
+  }));
+
+  const block = {
+    tummy_barometer:
+      tummy ||
+      (existingOrgansBlock && existingOrgansBlock.tummy_barometer) || {
+        score: 0,
+        label: "Unknown comfort"
+      },
+    flags: {
+      ...(existingOrgansBlock && existingOrgansBlock.flags
+        ? existingOrgansBlock.flags
+        : {}),
+      ...flags
+    },
+    organs: normalizedOrgans.length
+      ? normalizedOrgans
+      : (existingOrgansBlock && existingOrgansBlock.organs) || []
+  };
+
+  return block;
+}
+
 // === PATCH C: OpenAI recipe extractor (JSON output) ===
 // Needs env.OPENAI_API_KEY
 
@@ -13125,11 +13315,37 @@ async function runDishAnalysis(env, ctx, request) {
   ];
 
   const userFlags = body.user_flags || body.userFlags || {};
-  let organs = await assessOrgansLocally(env, {
-    ingredients,
-    user_flags: userFlags,
-    lex_hits: combinedHits
-  });
+
+  let organs = null;
+  let organsLLMDebug = null;
+
+  const llmPayload = {
+    dishName,
+    restaurantName,
+    ingredientLines:
+      normalized?.ingredients_lines || normalized?.lines || [],
+    ingredientsNormalized: normalized?.items || ingredients || [],
+    existingFlags: {
+      allergens: summary?.keyFlags?.allergens || [],
+      fodmapLevel: summary?.keyFlags?.fodmapLevel || null,
+      lactoseLevel: summary?.keyFlags?.lactoseLevel || null
+    },
+    userFlags,
+    locale: lang || "en"
+  };
+
+  const organsLLMResult = await runOrgansLLM(env, llmPayload);
+
+  if (organsLLMResult && organsLLMResult.ok && organsLLMResult.data) {
+    organs = mapOrgansLLMToOrgansBlock(organsLLMResult.data, null);
+    organsLLMDebug = organsLLMResult.data;
+  } else {
+    organs = await assessOrgansLocally(env, {
+      ingredients,
+      user_flags: userFlags,
+      lex_hits: combinedHits
+    });
+  }
 
   const edamamFodmap = getEdamamFodmapOverrideFromRecipe(recipeResult);
 
@@ -13274,7 +13490,8 @@ async function runDishAnalysis(env, ctx, request) {
     inferred_ingredient_hits: inferredIngredientHits,
     recipe_debug,
     fodmap_edamam: edamamFodmap || null,
-    edamam_healthLabels: edamamHealthLabels
+    edamam_healthLabels: edamamHealthLabels,
+    organs_llm_raw: organsLLMDebug || null
   };
 
   const result = {
