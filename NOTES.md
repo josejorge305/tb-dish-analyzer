@@ -1,7 +1,7 @@
 # SwiftUI Handoff Notes
 
 ## Auth/Env
-- Secrets required: `EDAMAM_APP_ID`, `EDAMAM_APP_KEY`, `SPOONACULAR_KEY`, `OPENAI_API_KEY`, `RAPIDAPI_KEY`, `LEXICON_API_KEY`.
+- Secrets required: `EDAMAM_APP_ID`, `EDAMAM_APP_KEY`, `SPOONACULAR_KEY`, `OPENAI_API_KEY`, `RAPIDAPI_KEY`.
 - How to verify: `GET /healthz` should return `"secrets_missing": []` when everything is configured.
 
 ## Endpoints (app-facing)

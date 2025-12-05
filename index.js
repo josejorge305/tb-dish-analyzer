@@ -105,7 +105,7 @@ async function requirePremium(env, url) {
   }
 
   const kvKey = `tier/user:${userId}`;
-  const tier = await (env.LEXICON_CACHE ? env.LEXICON_CACHE.get(kvKey) : null);
+  const tier = await (env.MENUS_CACHE ? env.MENUS_CACHE.get(kvKey) : null);
   if (String(tier || "").toLowerCase() === "premium") {
     return { ok: true, user: userId, tier: "premium" };
   }
@@ -692,35 +692,31 @@ async function handleOrgansFromDish(url, env, request) {
   }));
 
   let organ = null;
-  const origin = url.origin;
-  let assessResp = null;
-  const payload = JSON.stringify({
-    ingredients,
-    user_id: userId,
-    method,
-    weight_kg,
-    user_prefs
-  });
-
   try {
-    if (env.SELF && typeof env.SELF.fetch === "function") {
-      console.log("[ASSESS] internal SELF.fetch /organs/assess");
-      assessResp = await env.SELF.fetch(
-        new Request("https://internal/organs/assess?user_id=" + userId, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: payload
-        })
-      );
-    } else {
-      const assessUrl = url.origin.replace(/\/$/, "") + "/organs/assess";
-      console.log("[ASSESS] external fetch", assessUrl);
-      assessResp = await fetch(assessUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: payload
-      });
-    }
+    const fatsecretResult = await classifyIngredientsWithFatSecret(
+      env,
+      ingredients.map((i) => i?.name || "").filter(Boolean),
+      "en"
+    );
+    const fatsecretHits =
+      fatsecretResult && fatsecretResult.ok
+        ? fatsecretResult.allIngredientHits || []
+        : [];
+    const inferredTextHits = inferHitsFromText(finalDish, "");
+    const inferredIngredientHits = inferHitsFromIngredients(ingredients);
+    const combinedHits = [
+      ...fatsecretHits,
+      ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
+      ...(Array.isArray(inferredIngredientHits)
+        ? inferredIngredientHits
+        : [])
+    ];
+
+    organ = await assessOrgansLocally(env, {
+      ingredients,
+      user_flags: user_prefs,
+      lex_hits: combinedHits
+    });
   } catch (err) {
     return okJson({
       ok: true,
@@ -731,21 +727,6 @@ async function handleOrgansFromDish(url, env, request) {
       ingredients
     });
   }
-
-  const data = await parseResSafe(assessResp);
-  console.log("[ASSESS] status", assessResp.status);
-  if (!assessResp.ok || !data || typeof data !== "object") {
-    return okJson({
-      ok: true,
-      dish: finalDish,
-      note: "assess_upstream_error",
-      status: assessResp.status,
-      detail: data?.__nonjson__ || data,
-      recipe_debug,
-      ingredients
-    });
-  }
-  organ = data;
 
   if (!organLevels || !Object.keys(organLevels).length) {
     organLevels = organ?.levels ?? organ?.organ_levels ?? {};
@@ -2966,7 +2947,7 @@ function recipeCacheKey(dish, lang = "en") {
 }
 
 async function recipeCacheRead(env, key) {
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   if (!kv) return null;
   try {
     const raw = await kv.get(key);
@@ -2977,7 +2958,7 @@ async function recipeCacheRead(env, key) {
 }
 
 async function recipeCacheWrite(env, key, payload) {
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   if (!kv) return false;
   try {
     await kv.put(
@@ -3119,48 +3100,150 @@ function inferHitsFromText(title = "", desc = "") {
   const hits = [];
   const push = (o) =>
     hits.push({
+      term: o.term || o.canonical || o.label || null,
+      canonical: o.canonical || o.term || o.label || null,
       allergens: o.allergens || [],
       classes: o.classes || [],
+      fodmap: o.fodmap,
+      tags: o.tags || [],
       source: "infer:title"
     });
 
-  if (/\bgarlic\b/.test(text)) push({ classes: ["garlic"] });
-  if (/\bonion\b|shallot|scallion/.test(text)) push({ classes: ["onion"] });
+  if (/\bgarlic\b/.test(text)) {
+    push({
+      term: "garlic",
+      canonical: "garlic",
+      classes: ["garlic", "allium"],
+      fodmap: {
+        level: "high",
+        relevant: true,
+        drivers: ["garlic", "fructans"]
+      }
+    });
+  }
+  if (/\bonion\b|shallot|scallion/.test(text)) {
+    push({
+      term: "onion",
+      canonical: "onion",
+      classes: ["onion", "allium"],
+      fodmap: {
+        level: "high",
+        relevant: true,
+        drivers: ["onion", "fructans"]
+      }
+    });
+  }
   if (
     /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
       text
     )
-  )
-    push({ allergens: ["dairy"] });
-  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text))
-    push({ allergens: ["shellfish"] });
+  ) {
+    push({
+      term: "dairy",
+      canonical: "dairy",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      fodmap: {
+        level: "low",
+        relevant: true,
+        drivers: ["lactose"]
+      }
+    });
+  }
+  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text)) {
+    push({
+      term: "shellfish",
+      canonical: "shellfish",
+      allergens: ["shellfish"],
+      classes: ["shellfish"]
+    });
+  }
 
   return hits;
 }
 
 function inferHitsFromIngredients(ingredients = []) {
   const hits = [];
-  const push = (o) =>
-    hits.push({
-      allergens: o.allergens || [],
-      classes: o.classes || [],
-      source: "infer:ingredients"
-    });
-
   for (const ing of ingredients) {
-    const name = String(ing?.name || "").toLowerCase();
+    const nameRaw =
+      typeof ing === "string"
+        ? ing
+        : ing?.name || ing?.original || ing?.text || "";
+    const name = String(nameRaw || "").toLowerCase();
+    if (!name) continue;
+
+    const push = (o) =>
+      hits.push({
+        term: o.term || o.canonical || name,
+        canonical: o.canonical || o.term || name,
+        allergens: o.allergens || [],
+        classes: o.classes || [],
+        fodmap: o.fodmap,
+        tags: o.tags || [],
+        source: "infer:ingredients"
+      });
 
     if (
       /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
         name
       )
-    )
-      push({ allergens: ["dairy"] });
-    if (/\bgarlic\b/.test(name)) push({ classes: ["garlic"] });
-    if (/\bonion\b|shallot|scallion/.test(name)) push({ classes: ["onion"] });
-    if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(name))
-      push({ allergens: ["shellfish"] });
-    if (/\bflour|wheat\b/.test(name)) push({ allergens: ["gluten"] });
+    ) {
+      push({
+        term: "dairy",
+        canonical: "dairy",
+        allergens: ["milk"],
+        classes: ["dairy"],
+        fodmap: {
+          level: "low",
+          relevant: true,
+          drivers: ["lactose"]
+        }
+      });
+    }
+
+    if (/\bgarlic\b/.test(name)) {
+      push({
+        term: "garlic",
+        canonical: "garlic",
+        classes: ["garlic", "allium"],
+        fodmap: {
+          level: "high",
+          relevant: true,
+          drivers: ["garlic", "fructans"]
+        }
+      });
+    }
+
+    if (/\bonion\b|shallot|scallion/.test(name)) {
+      push({
+        term: "onion",
+        canonical: "onion",
+        classes: ["onion", "allium"],
+        fodmap: {
+          level: "high",
+          relevant: true,
+          drivers: ["onion", "fructans"]
+        }
+      });
+    }
+
+    if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(name)) {
+      push({
+        term: "shellfish",
+        canonical: "shellfish",
+        allergens: ["shellfish"],
+        classes: ["shellfish"]
+      });
+    }
+
+    if (/\bflour\b|\bwheat\b|\bpasta\b|\bspaghetti\b|\bnoodles?\b/.test(name)) {
+      push({
+        term: "gluten",
+        canonical: "gluten",
+        allergens: ["gluten", "wheat"],
+        classes: ["gluten"]
+      });
+    }
   }
   return hits;
 }
@@ -4064,7 +4147,7 @@ function classifyStampKey(dish, place_id = "", lang = "en") {
 }
 
 async function getClassifyStamp(env, key) {
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   if (!kv) return null;
   try {
     const raw = await kv.get(key);
@@ -4075,7 +4158,7 @@ async function getClassifyStamp(env, key) {
 }
 
 async function setClassifyStamp(env, key, payload, ttlSeconds = 6 * 3600) {
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   if (!kv) return false;
   try {
     await kv.put(
@@ -4782,6 +4865,28 @@ function extractMacrosFromFDC(full) {
     perServing: perServing || (per100g ? { ...per100g } : empty()),
     per100g,
     serving
+  };
+}
+
+function nutritionSummaryFromEdamamTotalNutrients(totalNutrients) {
+  if (!totalNutrients || typeof totalNutrients !== "object") return null;
+
+  const energy = totalNutrients.ENERC_KCAL?.quantity;
+  const protein = totalNutrients.PROCNT?.quantity;
+  const fat = totalNutrients.FAT?.quantity;
+  const carbs = totalNutrients.CHOCDF?.quantity;
+  const sugar = totalNutrients.SUGAR?.quantity;
+  const fiber = totalNutrients.FIBTG?.quantity;
+  const sodium = totalNutrients.NA?.quantity;
+
+  return {
+    energyKcal: typeof energy === "number" ? energy : null,
+    protein_g: typeof protein === "number" ? protein : null,
+    fat_g: typeof fat === "number" ? fat : null,
+    carbs_g: typeof carbs === "number" ? carbs : null,
+    sugar_g: typeof sugar === "number" ? sugar : null,
+    fiber_g: typeof fiber === "number" ? fiber : null,
+    sodium_mg: typeof sodium === "number" ? sodium : null
   };
 }
 
@@ -5777,7 +5882,7 @@ async function resolveRecipeWithCache(
   out.ingredients_lines = ingLines;
 
   let parsed = null;
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   const dailyCap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
 
   if (wantParse && ingLines.length && env.ZESTFUL_RAPID_KEY) {
@@ -5974,6 +6079,22 @@ async function resolveRecipeWithCache(
         out.ingredients_lines = [];
       }
     }
+
+    // Derive Edamam-based nutrition summary once, so it survives caching
+    if (
+      out &&
+      out.raw &&
+      out.raw.totalNutrients &&
+      !out.nutrition_summary &&
+      typeof nutritionSummaryFromEdamamTotalNutrients === "function"
+    ) {
+      const ns = nutritionSummaryFromEdamamTotalNutrients(
+        out.raw.totalNutrients
+      );
+      if (ns) {
+        out.nutrition_summary = ns;
+      }
+    }
   }
 
   const reply = {
@@ -6127,9 +6248,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
       const gateParams = new URLSearchParams(url.search);
       const userId = (gateParams.get("user_id") || "").trim();
       if (gateParams.get("dev") === "1") isPremium = true;
-      else if (userId && env.LEXICON_CACHE) {
+      else if (userId && env.MENUS_CACHE) {
         const kvKey = `tier/user:${userId}`;
-        const tier = await env.LEXICON_CACHE.get(kvKey);
+        const tier = await env.MENUS_CACHE.get(kvKey);
         isPremium = String(tier || "").toLowerCase() === "premium";
       }
 
@@ -6465,7 +6586,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
   out.ingredients_lines = ingLines;
 
   let parsed = null;
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   const dailyCap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
 
   if (wantParse && ingLines.length && env.ZESTFUL_RAPID_KEY) {
@@ -6858,9 +6979,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
     if (gateParams.get("dev") === "1") isPremium = true;
     else if (userId) {
       const kvKey = `tier/user:${userId}`;
-      const tier = await (env.LEXICON_CACHE
-        ? env.LEXICON_CACHE.get(kvKey)
-        : null);
+      const tier = await (env.MENUS_CACHE ? env.MENUS_CACHE.get(kvKey) : null);
       isPremium = String(tier || "").toLowerCase() === "premium";
     }
 
@@ -8374,576 +8493,9 @@ function explainRestaurantChoices({ rows, query, limit = 10 }) {
   return { winner, top };
 }
 
-// ========== Lexicon & Shards (KV-backed with live fallback) ==========
-const INDEX_KV_KEY = "shards/INDEX.json";
-
-const STATIC_INGREDIENT_SHARDS = [
-  "en_global_ingredients",
-  "en_global_oils_fats",
-  "en_global_noodles_pastas",
-  "en_global_grains_flours",
-  "en_global_bakery_desserts",
-  "en_global_condiments",
-  "en_global_herbs_spices",
-  "en_global_broths_stocks",
-  "en_global_batters_breading",
-  "en_global_beverages",
-  "en_global_cheeses_expanded"
-];
-
-async function refreshShardIndex(env) {
-  const base = normalizeBase(env.LEXICON_API_URL);
-  const key = env.LEXICON_API_KEY;
-  if (!base || !key)
-    throw new Error("Missing LEXICON_API_URL or LEXICON_API_KEY");
-
-  const candidates = [`${base}/v1/index`, `${base}/v1/shards`];
-  let text = null;
-  const statusTried = [];
-  for (const url of candidates) {
-    try {
-      const r = await fetch(url, { headers: { "x-api-key": key } });
-      statusTried.push({ url, status: r.status });
-      if (!r.ok) continue;
-      text = await r.text();
-      break;
-    } catch (e) {
-      statusTried.push({ url, status: 0, error: String(e?.message || e) });
-    }
-  }
-  if (!text)
-    return {
-      ok: false,
-      error: "No index endpoint succeeded",
-      tried: statusTried
-    };
-
-  const js = parseJsonSafe(text, null);
-  if (!js)
-    return { ok: false, error: "Index JSON invalid", tried: statusTried };
-
-  if (env.LEXICON_CACHE) {
-    await env.LEXICON_CACHE.put(INDEX_KV_KEY, text, { expirationTtl: 86400 });
-  }
-  const size = Array.isArray(js) ? js.length : Object.keys(js).length;
-  return { ok: true, tried: statusTried, index_len: size };
-}
-
-async function readShardIndexFromKV(env) {
-  if (!env.LEXICON_CACHE) return null;
-  const raw = await env.LEXICON_CACHE.get(INDEX_KV_KEY);
-  if (!raw) return null;
-  return parseJsonSafe(raw, null);
-}
-
-function pickIngredientShardNamesFromIndex(indexJson) {
-  const names = new Set();
-  if (Array.isArray(indexJson)) {
-    for (const n of indexJson) {
-      const s = String(n || "").trim();
-      if (s.startsWith("en_global_")) names.add(s);
-    }
-  } else if (indexJson && typeof indexJson === "object") {
-    if (Array.isArray(indexJson.shards)) {
-      for (const n of indexJson.shards) {
-        const s = String(n || "").trim();
-        if (s.startsWith("en_global_")) names.add(s);
-      }
-    } else {
-      for (const k of Object.keys(indexJson)) {
-        const s = String(k || "").trim();
-        if (s.startsWith("en_global_")) names.add(s);
-      }
-    }
-  }
-  if (names.size === 0) for (const s of STATIC_INGREDIENT_SHARDS) names.add(s);
-  return Array.from(names);
-}
-
-async function loadIngredientShards(env) {
-  const used_shards = [];
-  const used_shards_meta = {};
-  const entriesAll = [];
-
-  const indexJson = await readShardIndexFromKV(env);
-  const names = pickIngredientShardNamesFromIndex(indexJson) || [];
-  const list = names.length ? names : STATIC_INGREDIENT_SHARDS;
-
-  for (const name of list) {
-    let shard = null;
-    const key = `shards/${name}.json`;
-
-    if (env.LEXICON_CACHE) {
-      try {
-        const cached = await env.LEXICON_CACHE.get(key);
-        shard = cached ? parseJsonSafe(cached, null) : null;
-      } catch {}
-    }
-
-    if (!shard) {
-      const base = normalizeBase(env.LEXICON_API_URL);
-      const apiKey = env.LEXICON_API_KEY;
-      if (base && apiKey) {
-        try {
-          const res = await fetch(`${base}/v1/shards/${name}`, {
-            headers: { "x-api-key": apiKey, accept: "application/json" }
-          });
-          if (res.ok) {
-            shard = await res.json();
-            if (env.LEXICON_CACHE && shard) {
-              try {
-                await env.LEXICON_CACHE.put(key, JSON.stringify(shard), {
-                  expirationTtl: 86400
-                });
-              } catch {}
-            }
-          }
-        } catch (err) {
-          console.log(
-            "[lexicon] shard fetch failed",
-            name,
-            err?.message || err
-          );
-        }
-      }
-    }
-
-    if (shard && Array.isArray(shard.entries)) {
-      used_shards.push(name);
-      used_shards_meta[name] = {
-        version: shard.version ?? null,
-        entries_len: shard.entries.length
-      };
-      for (const e of shard.entries) entriesAll.push(e);
-    }
-  }
-
-  return { used_shards, used_shards_meta, entriesAll };
-}
-
-// ---- MINI FALLBACK TERMS (disabled; lexicon-only) ----
-const FALLBACK_INGREDIENTS = [];
-
-function fallbackEntriesFromText(_corpus) {
-  // Super-brain mode: NO manual fallback list.
-  // All hits must come from Lexicon shards (entriesAll) or lexicon API.
-  return [];
-}
-
-// --- Tidy helpers ---
-function tidyIngredientHits(hits, limit = 25) {
-  const byCanon = new Map();
-  for (const h of hits) {
-    const key = lc(h.canonical || h.term || "");
-    if (!key) continue;
-    const prev = byCanon.get(key);
-    if (!prev || scoreHit(h) > scoreHit(prev)) byCanon.set(key, h);
-  }
-  const out = Array.from(byCanon.values()).sort((a, b) => {
-    const sa = scoreHit(a),
-      sb = scoreHit(b);
-    if (sb !== sa) return sb - sa;
-    const la = (a.term || "").length,
-      lb = (b.term || "").length;
-    if (lb !== la) return lb - la;
-    return (a.canonical || a.term || "").localeCompare(
-      b.canonical || b.term || ""
-    );
-  });
-  return out.slice(0, limit);
-}
-
-function scoreHit(h) {
-  const classes = Array.isArray(h.classes) ? h.classes.map(lc) : [];
-  let s = 0;
-  if (classes.includes("dairy")) s += 3;
-  if (classes.includes("gluten")) s += 3;
-  if (classes.includes("allium")) s += 2;
-  if (h.source === "kv_multi_shards") s += 0.6;
-  if (h.source === "fallback") s += 0.2;
-  s += Math.min(2, (h.term || "").length / 10);
-  if (typeof h.weight === "number")
-    s += Math.max(-1, Math.min(1, h.weight - 0.5));
-  return s;
-}
-
-// ========== Queue Consumer + HTTP Router ==========
 const _worker_impl = {
-  // ---- Queue consumer: pulls messages from tb-dish-analysis-queue ----
-  async queue(batch, env, ctx) {
-    console.log("[QUEUE] handler enter", {
-      batchSize: (batch && batch.messages && batch.messages.length) || 0
-    });
-    for (const msg of batch.messages) {
-      let id = null;
-      try {
-        const job =
-          typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
-        const body = (job && job.body) || job || {};
-        const {
-          kind,
-          user_id,
-          dish,
-          dish_name,
-          ingredients,
-          organ_levels,
-          organ_top_drivers,
-          tummy_barometer,
-          calories_kcal = null,
-          created_at
-        } = body;
-        // --- Minimal meal_log handler: write to D1 and ACK ---
-        if (kind === "meal_log") {
-          try {
-            const dishName = dish || dish_name || job?.dish_name || "unknown";
-            const userId = user_id || job?.user_id || "UNKNOWN_USER";
-            const createdAt =
-              created_at || job?.created_at || new Date().toISOString();
-            const calories = job?.calories_kcal ?? calories_kcal ?? null;
-
-            const organLevelsObj =
-              organ_levels ||
-              body?.organ_levels ||
-              (body?.organs_summary && body.organs_summary.levels) ||
-              (job?.organs_summary && job.organs_summary.levels) ||
-              {};
-            const topDriversObj =
-              organ_top_drivers ||
-              body?.organ_top_drivers ||
-              (body?.organs_summary && body.organs_summary.top_drivers) ||
-              (job?.organs_summary && job.organs_summary.top_drivers) ||
-              {};
-            const tummyBarometer =
-              tummy_barometer ||
-              body?.tummy_barometer ||
-              job?.tummy_barometer ||
-              barometerFromOrgans(organLevelsObj);
-
-            const ingredientList =
-              ingredients || body?.ingredients || job?.ingredients || [];
-            const ingredientsJson = JSON.stringify(ingredientList);
-            const organLevelsJson = JSON.stringify(organLevelsObj);
-            const topDriversJson = JSON.stringify(topDriversObj);
-            console.log("[QUEUE] meal_log preview:", {
-              has_levels: !!Object.keys(organLevelsObj).length,
-              has_top: !!Object.keys(topDriversObj).length
-            });
-            console.log("[CONSUMER] calories_kcal =", calories);
-
-            if (!env.D1_DB) throw new Error("D1_DB not bound");
-
-            await env.D1_DB.prepare(
-              `INSERT INTO user_meal_logs
-       (user_id, dish, ingredients_json, organ_levels_json, top_drivers_json, calories_kcal, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-            )
-              .bind(
-                userId,
-                dishName,
-                ingredientsJson,
-                organLevelsJson,
-                topDriversJson,
-                calories,
-                createdAt
-              )
-              .run();
-            await recordMetric(env, "d1:user_meal_logs:insert_ok");
-
-            console.log("[QUEUE] meal_log wrote to D1:", {
-              dish,
-              userId,
-              createdAt
-            });
-            msg.ack();
-            continue;
-          } catch (e) {
-            await recordMetric(env, "d1:user_meal_logs:insert_fail");
-            console.error("[QUEUE] meal_log failed:", e);
-            msg.retry();
-            continue;
-          }
-        }
-        // 47.1: Skip if result already exists in R2
-        const dummyUrl = new URL("https://dummy.local/cache-check");
-        if (job?.force_reanalyze)
-          dummyUrl.searchParams.set("force_reanalyze", "1");
-        const cachedResult = await maybeReturnCachedResult(
-          new Request(dummyUrl.toString()),
-          env,
-          {
-            place_id: job?.place_id,
-            title: job?.dish_name
-          }
-        );
-        if (cachedResult) {
-          console.log("[QUEUE] skip existing results in R2");
-          msg.ack();
-          continue;
-        }
-
-        id = job?.id || crypto.randomUUID();
-        const key = `jobs/${id}.json`;
-
-        console.log("[QUEUE] received:", { id, dish: job?.dish_name });
-
-        // Load shards (venue + ingredients)
-        const venueShard = await getShardFromKV(env, "venue_mitigations");
-        const { used_shards, used_shards_meta, entriesAll } =
-          await loadIngredientShards(env);
-        if (venueShard.ok) {
-          used_shards.push("venue_mitigations");
-          used_shards_meta["venue_mitigations"] = {
-            version: venueShard.version ?? null,
-            entries_len: venueShard.entries.length
-          };
-        }
-
-        // Build text corpus
-        const dishName = lc(job?.dish_name);
-        const dishDesc = lc(job?.dish_desc || job?.dish_description || "");
-        const cuisine = lc(job?.cuisine || "");
-        const ingNames = Array.isArray(job?.ingredients)
-          ? job.ingredients
-              .map((i) => i?.name || "")
-              .filter(Boolean)
-              .join(" ")
-          : "";
-        const corpus = [dishName, dishDesc, cuisine, lc(ingNames)]
-          .filter(Boolean)
-          .join(" ");
-
-        // Ingredient matching from KV shards
-        const ingredient_hits_raw = [];
-        const seenCanon = new Set();
-        if (entriesAll.length > 0) {
-          const stoplist = new Set([
-            "and",
-            "with",
-            "of",
-            "in",
-            "a",
-            "the",
-            "or"
-          ]);
-          for (const entry of entriesAll) {
-            const canonical = lc(
-              entry?.canonical ?? entry?.name ?? entry?.term ?? ""
-            );
-            const classes = Array.isArray(entry?.classes)
-              ? entry.classes.map(lc)
-              : [];
-            const tags = Array.isArray(entry?.tags) ? entry.tags.map(lc) : [];
-            const weight =
-              typeof entry?.weight === "number" ? entry.weight : undefined;
-
-            const terms = entryTerms(entry).filter((t) => !stoplist.has(t));
-            let matchedTerm = null;
-            for (const t of terms) {
-              if (t.length < 2) continue;
-              if (termMatches(corpus, t)) {
-                matchedTerm = t;
-                break;
-              }
-            }
-            if (!matchedTerm) continue;
-
-            const canonKey = canonical || matchedTerm;
-            if (seenCanon.has(canonKey)) continue;
-            seenCanon.add(canonKey);
-
-            ingredient_hits_raw.push({
-              term: matchedTerm,
-              canonical: canonical || matchedTerm,
-              classes,
-              tags,
-              weight,
-              allergens: Array.isArray(entry?.allergens)
-                ? entry.allergens
-                : undefined,
-              fodmap: entry?.fodmap ?? entry?.fodmap_level,
-              source: "kv_multi_shards"
-            });
-          }
-        }
-
-        // Fallback preview/application when shards are skinny
-        const FALLBACK_TRIGGER = getEnvInt(env, "FALLBACK_TRIGGER_UNDER", 50);
-        const fallback_debug = []; // no manual fallback in super-brain mode
-        let ingredient_hits = ingredient_hits_raw.slice();
-        // NOTE: entriesAll length no longer triggers any hard-coded additions.
-        // All ingredient_hits must come from Lexicon shards/API only.
-
-        // Tidy (dedupe + prioritize + top N)
-        const HITS_LIMIT = getEnvInt(env, "HITS_LIMIT", 25);
-        ingredient_hits = tidyIngredientHits(ingredient_hits, HITS_LIMIT);
-
-        // ---- Primary brain: Lexicon API (always runs first) ----
-        let lexiconResult = null;
-        try {
-          lexiconResult = await callLexicon(
-            env,
-            `${job?.dish_name ?? ""} ${job?.dish_desc ?? ""}`,
-            "en"
-          );
-          console.log("[LEXICON] success");
-        } catch (e) {
-          lexiconResult = {
-            error: `Lexicon failed: ${e?.message || String(e)}`
-          };
-          console.log("[LEXICON] error:", e?.message || e);
-        }
-
-        // Prefer Lexicon hits if present; else local ingredient_hits.
-        let resolvedHits = [];
-        if (lexiconResult?.ok && Array.isArray(lexiconResult?.data?.hits)) {
-          resolvedHits = lexiconResult.data.hits.map((h) => ({
-            term: h.term,
-            canonical: h.canonical,
-            classes: Array.isArray(h.classes) ? h.classes : [],
-            tags: Array.isArray(h.tags) ? h.tags : [],
-            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
-            fodmap: h.fodmap ?? h.fodmap_level
-          }));
-        } else {
-          resolvedHits = (ingredient_hits || []).map((h) => ({
-            term: h.term,
-            canonical: h.canonical,
-            classes: Array.isArray(h.classes) ? h.classes : [],
-            tags: Array.isArray(h.tags) ? h.tags : [],
-            allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
-            fodmap: h.fodmap ?? h.fodmap_level
-          }));
-        }
-
-        const scoring = scoreDishFromHits(resolvedHits);
-
-        const legacyFlags = deriveFlags(ingredient_hits);
-        const tb_score = scoring.tummy_barometer;
-        const flags = {
-          ...legacyFlags,
-          allergens: scoring.flags.allergens,
-          fodmap: scoring.flags.fodmap
-        };
-        const sentences = buildHumanSentences(flags, tb_score);
-
-        // ---- Secondary (fallback) call: RapidAPI mirror (simple counter) ----
-        let rapidResult = null;
-        try {
-          rapidResult = await callRapid(
-            env,
-            job?.dish_name ?? "",
-            job?.address || ""
-          );
-          console.log("[RAPID] success");
-        } catch (e) {
-          rapidResult = {
-            error: `RapidAPI failed: ${e?.message || String(e)}`
-          };
-          console.log("[RAPID] error:", e?.message || e);
-        }
-
-        // Stats (best-effort)
-        try {
-          await bumpDaily(env, { jobs: 1 });
-          if (lexiconResult?.ok) {
-            const isLive = lexiconResult?.mode === "live_shards";
-            await bumpDaily(env, {
-              lex_ok: isLive ? 0 : 1,
-              lex_live: isLive ? 1 : 0
-            });
-            await bumpApi(env, "lexicon", { calls: 1, ok: 1 });
-          } else {
-            await bumpDaily(env, { lex_err: 1 });
-            await bumpApi(env, "lexicon", { calls: 1, err: 1 });
-          }
-          if (rapidResult && !rapidResult.error) {
-            await bumpDaily(env, { rap_ok: 1 });
-            await bumpApi(env, "rapid", { calls: 1, ok: 1 });
-          } else {
-            await bumpDaily(env, { rap_err: 1 });
-            await bumpApi(env, "rapid", { calls: 1, err: 1 });
-          }
-        } catch (e) {
-          console.log(
-            "[STATS] bump error (non-fatal):",
-            e?.message || String(e)
-          );
-        }
-
-        // Persist record to R2
-        if (env.R2_BUCKET) {
-          const lean = {
-            id,
-            receivedAt: Date.now(),
-            job,
-            dish_name: job?.dish_name ?? null,
-            dish_desc: job?.dish_desc ?? job?.dish_description ?? null,
-            cuisine: job?.cuisine ?? null,
-            used_shards,
-            used_shards_meta,
-            entries_all_len: entriesAll.length,
-            corpus,
-            fallback_terms_preview: fallback_debug.map((h) => h.term),
-            ingredient_hits: (ingredient_hits || []).map((h) => ({
-              term: h.term,
-              canonical: h.canonical,
-              classes: h.classes,
-              tags: h.tags,
-              allergens: h.allergens,
-              fodmap: h.fodmap,
-              source: h.source
-            })),
-            flags,
-            tummy_barometer: tb_score,
-            sentences,
-            rapidResult
-          };
-
-          const resultsKey = `results/${id}.json`;
-          await env.R2_BUCKET.put(resultsKey, JSON.stringify(lean, null, 2), {
-            httpMetadata: { contentType: "application/json" }
-          });
-        }
-
-        // KV bookmarks
-        if (env.LEXICON_CACHE) {
-          await env.LEXICON_CACHE.put("last_job_id", id, {
-            expirationTtl: 3600
-          });
-          await env.LEXICON_CACHE.put("last_job_ts", String(Date.now()), {
-            expirationTtl: 3600
-          });
-        }
-
-        // D1 log
-        if (env.D1_DB) {
-          try {
-            await env.D1_DB.prepare(
-              "INSERT INTO logs (kind, ref, created_at) VALUES (?, ?, ?)"
-            )
-              .bind("dish_job", key, Date.now())
-              .run();
-            await recordMetric(env, "d1:logs:insert_ok");
-          } catch (e2) {
-            await recordMetric(env, "d1:logs:insert_fail");
-            console.log(
-              "[QUEUE] D1 log error (non-fatal):",
-              e2?.message || String(e2)
-            );
-          }
-        }
-
-        console.log("[QUEUE] done:", { id, dish: job?.dish_name });
-        msg.ack();
-      } catch (e3) {
-        console.log("[QUEUE] error:", { id, error: e3?.message || String(e3) });
-        msg.retry();
-      }
-    }
-  },
-
-  // ---- HTTP routes (health + debug + enqueue + results + uber-test) ----
-  async fetch(request, env, ctx) {
+// ---- HTTP routes (health + debug + enqueue + results + uber-test) ----
+  fetch: async (request, env, ctx) => {
     const url = new URL(request.url);
     // async fire-and-forget metrics logging
     try {
@@ -9008,19 +8560,7 @@ const _worker_impl = {
     }
 
     if (pathname === "/organs/from-dish" && request.method === "GET") {
-      const id = _cid(request.headers);
-      const init = { method: "GET", headers: new Headers(request.headers) };
-      init.headers.set("x-correlation-id", id);
-      const res = await env.allergen_organs.fetch(
-        new Request(request.url, init)
-      );
-      const out = new Headers(res.headers);
-      out.set("x-correlation-id", id);
-      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
-      out.set("x-tb-env", env.ENV || "production");
-      out.set("x-tb-git", env.GIT_SHA || "n/a");
-      out.set("x-tb-built", env.BUILT_AT || "n/a");
-      return new Response(res.body, { status: res.status, headers: out });
+      return handleOrgansFromDish(url, env, request);
     }
     if (pathname === "/organs/list" && request.method === "GET") {
       const ORGANS = await getOrgans(env);
@@ -9044,35 +8584,25 @@ const _worker_impl = {
         base: urlBase
       };
 
-      const recipeFetch =
-        env.recipe_core?.fetch?.bind(env.recipe_core) || null;
-      const allergenFetch =
-        env.allergen_organs?.fetch?.bind(env.allergen_organs) || null;
       const metricsFetch =
         env.metrics_core?.fetch?.bind(env.metrics_core) || null;
 
-      const recipeUrl =
-        env.RECIPE_CORE_URL ||
-        "https://tb-recipe-core.internal/debug/whoami";
-      const allergenUrl =
-        env.ALLERGEN_ORGANS_URL ||
-        "https://tb-allergen-organs.internal/debug/whoami";
       const metricsUrl =
         env.METRICS_CORE_URL ||
         "https://tb-metrics-core.internal/debug/whoami";
 
-      results.recipe_core = await callJson(recipeUrl, {
-        fetcher: recipeFetch
-      }).catch((e) => ({
-        ok: false,
-        error: String(e)
-      }));
-      results.allergen_organs = await callJson(allergenUrl, {
-        fetcher: allergenFetch
-      }).catch((e) => ({
-        ok: false,
-        error: String(e)
-      }));
+      // Legacy recipe core worker has been demoted; main gateway now owns recipe resolution.
+      results.recipeCoreLegacy = {
+        ok: true,
+        note: "legacy recipe core demoted; using main gateway only"
+      };
+
+      // Legacy allergen core worker has been demoted; main gateway now owns organ scoring.
+      results.allergenCoreLegacy = {
+        ok: true,
+        note: "legacy allergen core demoted; using main gateway only"
+      };
+
       results.metrics_core = await callJson(metricsUrl, {
         fetcher: metricsFetch
       }).catch((e) => ({
@@ -9081,10 +8611,7 @@ const _worker_impl = {
       }));
 
       const overallOk =
-        results.gateway.ok &&
-        results.recipe_core.ok &&
-        results.allergen_organs.ok &&
-        results.metrics_core.ok;
+        results.gateway.ok && results.metrics_core.ok;
 
       return new Response(
         JSON.stringify(
@@ -9315,13 +8842,11 @@ const _worker_impl = {
         uptime_seconds,
         bindings: {
           r2: !!env.R2_BUCKET,
-          kv: !!env.LEXICON_CACHE,
+          kv: !!env.MENUS_CACHE,
           d1: !!env.D1_DB,
           queue: !!env.ANALYSIS_QUEUE,
           rapidapi_host: !!env.RAPIDAPI_HOST || !!env.UBER_RAPID_HOST,
-          rapidapi_key: !!env.RAPIDAPI_KEY,
-          lexicon_api_url: !!env.LEXICON_API_URL,
-          lexicon_api_key: !!env.LEXICON_API_KEY
+          rapidapi_key: !!env.RAPIDAPI_KEY
         }
       };
 
@@ -9361,12 +8886,10 @@ const _worker_impl = {
           version,
           bindings: {
             r2: !!env.R2_BUCKET,
-            kv: !!env.LEXICON_CACHE,
+            kv: !!env.MENUS_CACHE,
             d1: !!env.D1_DB,
             RAPIDAPI_HOST: !!env.RAPIDAPI_HOST,
-            RAPIDAPI_KEY: !!env.RAPIDAPI_KEY,
-            LEXICON_API_URL: !!env.LEXICON_API_URL,
-            LEXICON_API_KEY: !!env.LEXICON_API_KEY
+            RAPIDAPI_KEY: !!env.RAPIDAPI_KEY
           }
         }),
         { headers: { "content-type": "application/json" } }
@@ -9440,16 +8963,6 @@ const _worker_impl = {
       return json({ ok: true, name, hit });
     }
 
-    if (pathname === "/debug/last") {
-      const id = env.LEXICON_CACHE
-        ? await env.LEXICON_CACHE.get("last_job_id")
-        : null;
-      const ts = env.LEXICON_CACHE
-        ? await env.LEXICON_CACHE.get("last_job_ts")
-        : null;
-      return jsonResponse({ ok: true, last_job_id: id, last_job_ts: ts });
-    }
-
     if (pathname === "/debug/job") {
       const id = searchParams.get("id");
       if (!id) return jsonResponse({ ok: false, error: "missing id" }, 400);
@@ -9473,22 +8986,6 @@ const _worker_impl = {
       return jsonResponse({ ok: true, key: keyUsed, data: JSON.parse(body) });
     }
 
-    if (pathname === "/debug/config") {
-      const rapidHost = cleanHost(env.RAPIDAPI_HOST);
-      const lexBase = normalizeBase(env.LEXICON_API_URL);
-      const builtLexURL = buildLexiconAnalyzeURL(lexBase);
-      return jsonResponse({
-        ok: true,
-        rapidapi_host_preview: rapidHost || null,
-        lexicon_url_preview: lexBase || null,
-        lexicon_analyze_url_built: builtLexURL || null,
-        has_kv: !!env.LEXICON_CACHE,
-        has_queue: !!env.ANALYSIS_QUEUE,
-        has_d1: !!env.D1_DB,
-        has_r2: !!env.R2_BUCKET
-      });
-    }
-
     if (pathname === "/debug/llm-config") {
       return jsonResponse({
         ok: true,
@@ -9501,230 +8998,6 @@ const _worker_impl = {
           base: env.OPENAI_API_BASE || "https://api.openai.com"
         }
       });
-    }
-
-    if (pathname === "/debug/ping-lexicon") {
-      const lexBase = normalizeBase(env.LEXICON_API_URL);
-      const urlToCall = buildLexiconAnalyzeURL(lexBase);
-      const key = env.LEXICON_API_KEY;
-      if (!lexBase || !key)
-        return jsonResponse(
-          { ok: false, error: "Missing LEXICON_API_URL or LEXICON_API_KEY" },
-          400
-        );
-
-      const tryXKey = await fetch(urlToCall, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "Accept-Language": "en"
-        },
-        body: JSON.stringify({
-          text: "test chicken with rice",
-          lang: "en",
-          normalize: { diacritics: "fold" }
-        })
-      }).catch((e) => ({ ok: false, status: 0, _err: e?.message }));
-      const tryBearer = await fetch(urlToCall, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-          "Accept-Language": "en"
-        },
-        body: JSON.stringify({
-          text: "test chicken with rice",
-          lang: "en",
-          normalize: { diacritics: "fold" }
-        })
-      }).catch((e) => ({ ok: false, status: 0, _err: e?.message }));
-
-      let bodyX = "";
-      try {
-        bodyX = typeof tryXKey.text === "function" ? await tryXKey.text() : "";
-      } catch {}
-      let bodyB = "";
-      try {
-        bodyB =
-          typeof tryBearer.text === "function" ? await tryBearer.text() : "";
-      } catch {}
-
-      return jsonResponse({
-        ok: (tryXKey?.ok || tryBearer?.ok) ?? false,
-        url_called: urlToCall,
-        used_env_LEXICON_API_URL: env.LEXICON_API_URL || null,
-        results: {
-          x_api_key: {
-            ok: !!tryXKey?.ok,
-            status: tryXKey?.status ?? 0,
-            preview: (bodyX || "").slice(0, 200)
-          },
-          bearer: {
-            ok: !!tryBearer?.ok,
-            status: tryBearer?.status ?? 0,
-            preview: (bodyB || "").slice(0, 200)
-          }
-        }
-      });
-    }
-
-    if (pathname === "/debug/read-kv-shard") {
-      const name = (searchParams.get("name") || "").trim();
-      if (!name) return jsonResponse({ ok: false, error: "missing name" }, 400);
-      if (!env.LEXICON_CACHE)
-        return jsonResponse({ ok: false, error: "KV not bound" }, 500);
-
-      const key = `shards/${name}.json`;
-      const raw = await env.LEXICON_CACHE.get(key);
-      if (!raw)
-        return jsonResponse({ ok: false, error: "not_in_kv", key }, 404);
-
-      let js;
-      try {
-        js = JSON.parse(raw);
-      } catch {
-        return jsonResponse({ ok: false, error: "bad_json" }, 500);
-      }
-
-      const total = Array.isArray(js?.entries) ? js.entries.length : 0;
-      const sample = Array.isArray(js?.entries) ? js.entries.slice(0, 25) : [];
-      return jsonResponse({
-        ok: true,
-        name,
-        version: js?.version ?? null,
-        entries_len: total,
-        sample_count: sample.length,
-        sample_terms: sample.map((e) => ({
-          canonical: e?.canonical ?? e?.name ?? e?.term ?? null,
-          term: e?.term ?? null,
-          terms: Array.isArray(e?.terms) ? e.terms.slice(0, 5) : null,
-          synonyms: Array.isArray(e?.synonyms) ? e.synonyms.slice(0, 5) : null,
-          classes: e?.classes ?? null,
-          tags: e?.tags ?? null
-        }))
-      });
-    }
-
-    if (pathname === "/debug/warm-lexicon") {
-      const list = lc(searchParams.get("names") || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (!list.length)
-        return jsonResponse({ ok: false, error: "missing names" }, 400);
-
-      const base = normalizeBase(env.LEXICON_API_URL);
-      const key = env.LEXICON_API_KEY;
-      if (!base || !key)
-        return jsonResponse(
-          { ok: false, error: "Missing LEXICON_API_URL or LEXICON_API_KEY" },
-          400
-        );
-
-      const out = [];
-      for (const name of list) {
-        const url = `${base}/v1/shards/${name}`;
-        try {
-          const r = await fetch(url, { headers: { "x-api-key": key } });
-          if (!r.ok) {
-            out.push({ shard: name, url, status: r.status, ok: false });
-            continue;
-          }
-          const text = await r.text();
-          const js = parseJsonSafe(text, null);
-          const entries_len = Array.isArray(js?.entries)
-            ? js.entries.length
-            : 0;
-          if (env.LEXICON_CACHE) {
-            await env.LEXICON_CACHE.put(`shards/${name}.json`, text, {
-              expirationTtl: 86400
-            });
-          }
-          out.push({
-            shard: name,
-            url,
-            status: 200,
-            ok: true,
-            entries_len,
-            version: js?.version ?? null
-          });
-        } catch (e) {
-          out.push({
-            shard: name,
-            url,
-            status: 0,
-            ok: false,
-            error: e?.message || String(e)
-          });
-        }
-      }
-      return jsonResponse({ ok: true, warmed: out });
-    }
-
-    if (pathname === "/debug/refresh-ingredient-shards") {
-      try {
-        const idx = await refreshShardIndex(env);
-        const indexFromKV = await readShardIndexFromKV(env);
-        const names = indexFromKV
-          ? pickIngredientShardNamesFromIndex(indexFromKV)
-          : STATIC_INGREDIENT_SHARDS;
-
-        const base = normalizeBase(env.LEXICON_API_URL);
-        const key = env.LEXICON_API_KEY;
-        if (!base || !key)
-          return jsonResponse(
-            { ok: false, error: "Missing LEXICON_API_URL or LEXICON_API_KEY" },
-            400
-          );
-
-        const warmed = [];
-        for (const name of names) {
-          const url = `${base}/v1/shards/${name}`;
-          try {
-            const r = await fetch(url, { headers: { "x-api-key": key } });
-            if (!r.ok) {
-              warmed.push({ shard: name, url, status: r.status, ok: false });
-              continue;
-            }
-            const text = await r.text();
-            const js = parseJsonSafe(text, null);
-            const entries_len = Array.isArray(js?.entries)
-              ? js.entries.length
-              : 0;
-            if (env.LEXICON_CACHE) {
-              await env.LEXICON_CACHE.put(`shards/${name}.json`, text, {
-                expirationTtl: 86400
-              });
-            }
-            warmed.push({
-              shard: name,
-              url,
-              status: 200,
-              ok: true,
-              entries_len,
-              version: js?.version ?? null
-            });
-          } catch (e) {
-            warmed.push({
-              shard: name,
-              url,
-              status: 0,
-              ok: false,
-              error: e?.message || String(e)
-            });
-          }
-        }
-
-        return jsonResponse({
-          ok: true,
-          index_refresh: idx,
-          warmed_count: warmed.length,
-          warmed
-        });
-      } catch (e) {
-        return jsonResponse({ ok: false, error: e?.message || String(e) }, 500);
-      }
     }
 
     // --- Public lean results with CORS: GET /results/<id>.json (+ preflight) ---
@@ -11609,9 +10882,7 @@ const _worker_impl = {
       }
       try {
         const key = `tier/user:${uid}`;
-        const val = await (env.LEXICON_CACHE
-          ? env.LEXICON_CACHE.get(key)
-          : null);
+        const val = await (env.MENUS_CACHE ? env.MENUS_CACHE.get(key) : null);
         return new Response(
           JSON.stringify({ ok: true, user_id: uid, key, value: val ?? null }),
           {
@@ -11653,7 +10924,18 @@ const _worker_impl = {
         );
       }
       const key = `tier/user:${uid}`;
-      await env.LEXICON_CACHE.put(key, tier);
+      if (!env.MENUS_CACHE)
+        return new Response(
+          JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }),
+          {
+            status: 500,
+            headers: {
+              "content-type": "application/json",
+              "access-control-allow-origin": "*"
+            }
+          }
+        );
+      await env.MENUS_CACHE.put(key, tier);
       return new Response(JSON.stringify({ ok: true, wrote: { key, tier } }), {
         status: 200,
         headers: {
@@ -12082,7 +11364,7 @@ const _worker_impl = {
 
       const okR2 = !!env.R2_BUCKET;
       const okD1 = !!env.D1_DB;
-      const okKV = !!env.LEXICON_CACHE;
+      const okKV = !!env.MENUS_CACHE;
       const modeHint = okR2 ? "live" : "static";
 
       const body = {
@@ -12535,22 +11817,33 @@ const _worker_impl = {
 
     if (pathname === "/organs/assess" && request.method === "POST") {
       const id = _cid(request.headers);
-      const init = {
-        method: "POST",
-        headers: new Headers(request.headers),
-        body: await request.text()
-      };
-      init.headers.set("x-correlation-id", id);
-      const res = await env.allergen_organs.fetch(
-        new Request(request.url, init)
-      );
-      const out = new Headers(res.headers);
-      out.set("x-correlation-id", id);
-      out.set("x-tb-worker", env.WORKER_NAME || "tb-dish-processor-production");
-      out.set("x-tb-env", env.ENV || "production");
-      out.set("x-tb-git", env.GIT_SHA || "n/a");
-      out.set("x-tb-built", env.BUILT_AT || "n/a");
-      return new Response(res.body, { status: res.status, headers: out });
+      const body = (await readJsonSafe(request)) || {};
+
+      const ingredients = Array.isArray(body.ingredients)
+        ? body.ingredients
+        : [];
+      const user_flags = body.user_flags || body.userFlags || {};
+      const lex_hits = Array.isArray(body.lex_hits) ? body.lex_hits : [];
+
+      const organs = await assessOrgansLocally(env, {
+        ingredients,
+        user_flags,
+        lex_hits
+      });
+
+      const headers = new Headers({
+        "content-type": "application/json; charset=utf-8",
+        "x-correlation-id": id,
+        "x-tb-worker": env.WORKER_NAME || "tb-dish-processor-production",
+        "x-tb-env": env.ENV || "production",
+        "x-tb-git": env.GIT_SHA || "n/a",
+        "x-tb-built": env.BUILT_AT || "n/a"
+      });
+
+      return new Response(JSON.stringify(organs), {
+        status: 200,
+        headers
+      });
     }
 
     if (pathname === "/user/prefs") {
@@ -12625,8 +11918,7 @@ const _worker_impl = {
     // Welcome / help text
     return new Response(
       "HELLO — tb-dish-processor is running.\n" +
-        "Try: GET /health, /debug/config, /debug/ping-lexicon, /debug/read-kv-shard?name=..., /debug/warm-lexicon?names=...,\n" +
-        "/debug/refresh-ingredient-shards, /debug/read-index, /debug/job?id=..., /results/<id>.json, /menu/uber-test;\n" +
+        "Try: GET /health, /debug/ping, /debug/job?id=..., /results/<id>.json, /menu/uber-test;\n" +
         "POST /enqueue",
       { status: 200, headers: { "content-type": "text/plain" } }
     );
@@ -12638,13 +11930,13 @@ const lc = (s) => (s ?? "").toLowerCase().normalize("NFKC").trim();
 
 // [39.2] — mark first-seen boot time in KV (best-effort)
 async function ensureBootTime(env) {
-  if (!env?.LEXICON_CACHE) return null;
+  if (!env?.MENUS_CACHE) return null;
   try {
     const key = "meta/boot_at";
-    let boot = await env.LEXICON_CACHE.get(key);
+    let boot = await env.MENUS_CACHE.get(key);
     if (!boot) {
       boot = new Date().toISOString();
-      await env.LEXICON_CACHE.put(key, boot, { expirationTtl: 30 * 24 * 3600 });
+      await env.MENUS_CACHE.put(key, boot, { expirationTtl: 30 * 24 * 3600 });
     }
     return boot;
   } catch {
@@ -12723,7 +12015,7 @@ function limitsSnapshot({ maxRows, radius }) {
 }
 
 async function getZestfulCount(env) {
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   if (!kv) return 0;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -12744,7 +12036,7 @@ async function getZestfulCount(env) {
 async function incZestfulCount(env, linesCount = 0) {
   if (!linesCount || linesCount <= 0) return 0;
 
-  const kv = env.MENUS_CACHE || env.LEXICON_CACHE;
+  const kv = env.MENUS_CACHE;
   if (!kv) return 0;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -12773,45 +12065,6 @@ async function incZestfulCount(env, linesCount = 0) {
   return next;
 }
 
-async function getShardFromKV(env, name) {
-  if (!env?.LEXICON_CACHE) return { ok: false, name, reason: "KV not bound" };
-  const key = `shards/${name}.json`;
-  const raw = await env.LEXICON_CACHE.get(key);
-  if (!raw) return { ok: false, name, reason: "not_in_kv" };
-  const js = parseJsonSafe(raw, null);
-  if (!js || !Array.isArray(js.entries))
-    return { ok: false, name, reason: "bad_format" };
-  return { ok: true, name, version: js.version ?? null, entries: js.entries };
-}
-
-// Gather terms from one entry
-function entryTerms(entry) {
-  const out = new Set();
-  const t = lc(entry?.term);
-  if (t && t.length >= 2) out.add(t);
-  if (Array.isArray(entry?.terms))
-    for (const v of entry.terms) {
-      const s = lc(String(v));
-      if (s && s.length >= 2) out.add(s);
-    }
-  if (Array.isArray(entry?.synonyms))
-    for (const v of entry.synonyms) {
-      const s = lc(String(v));
-      if (s && s.length >= 2) out.add(s);
-    }
-  const alias = lc(entry?.alias);
-  if (alias && alias.length >= 2) out.add(alias);
-  return Array.from(out);
-}
-
-// Word-boundary match for a term
-function termMatches(corpus, term) {
-  const t = lc(term);
-  if (t.length < 2) return false;
-  const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`\\b${esc}\\b`, "i");
-  return re.test(corpus);
-}
 
 // === Risk scoring (allergens + FODMAP -> flags + tummy_barometer) ===
 const RISK = {
@@ -12834,9 +12087,9 @@ const RISK = {
   },
   fodmapWeights: { high: 20, medium: 12, low: 3, unknown: 5 },
   labels: [
-    { max: 39, name: "Avoid" },
+    { max: 30, name: "Likely OK" },
     { max: 69, name: "Caution" },
-    { max: 100, name: "Likely OK" }
+    { max: 100, name: "Avoid" }
   ],
   maxRaw: 100
 };
@@ -12844,7 +12097,7 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const toScore = (raw, maxRaw = RISK.maxRaw) =>
   Math.round(clamp01(raw / maxRaw) * 100);
 const labelFor = (score) =>
-  score <= 39 ? "Avoid" : score <= 69 ? "Caution" : "Likely OK";
+  score >= 70 ? "Avoid" : score >= 40 ? "Caution" : "Likely OK";
 
 function extractAllergenKeys(hit) {
   return inferAllergensFromClassesTags(hit).map((x) =>
@@ -12864,14 +12117,68 @@ function normalizeFodmapValue(v) {
   if (["low", "very_low", "trace"].includes(lvl)) return "low";
   return "unknown";
 }
+function getEdamamHealthLabelsFromRecipe(recipeResult) {
+  if (!recipeResult || !recipeResult.out) return [];
+
+  const raw = recipeResult.out.raw || {};
+  let labels = raw.healthLabels;
+
+  if (!Array.isArray(labels) && raw.recipe && Array.isArray(raw.recipe.healthLabels)) {
+    labels = raw.recipe.healthLabels;
+  }
+
+  if (!Array.isArray(labels)) return [];
+
+  return labels
+    .map((l) => (l || "").toString().trim())
+    .filter(Boolean);
+}
+function getEdamamFodmapOverrideFromRecipe(recipeResult) {
+  if (!recipeResult || !recipeResult.out) return null;
+
+  const raw = recipeResult.out.raw || {};
+  let labels = raw.healthLabels;
+
+  if (!Array.isArray(labels) && raw.recipe && Array.isArray(raw.recipe.healthLabels)) {
+    labels = raw.recipe.healthLabels;
+  }
+
+  if (!Array.isArray(labels) || !labels.length) {
+    return null;
+  }
+
+  const normalized = labels
+    .map((l) =>
+      (l || "")
+        .toString()
+        .toLowerCase()
+        .replace(/[_-]/g, " ")
+        .trim()
+    )
+    .filter(Boolean);
+
+  const hasFodmapFree = normalized.some(
+    (l) => l.includes("fodmap") && l.includes("free")
+  );
+
+  if (!hasFodmapFree) {
+    return null;
+  }
+
+  return {
+    level: "low",
+    reason: "Edamam healthLabels include FODMAP-free.",
+    source: "edamam"
+  };
+}
 function extractLactoseFromLexHits(rawHits) {
   for (const h of rawHits || []) {
     const lac = h && h.lactose;
     if (lac && typeof lac.level === "string") {
       return {
         level: String(lac.level).toLowerCase(),
-        reason: lac.reason || "Lactose level from lexicon.",
-        source: "lexicon"
+        reason: lac.reason || "Lactose level from classifier.",
+        source: "classifier"
       };
     }
   }
@@ -12961,27 +12268,41 @@ function extractLactoseFromHits(hits) {
   } else if (level === "high") {
     reason = "Includes high-lactose dairy ingredients.";
   } else {
-    reason = "Lactose level inferred from lexicon classification.";
+    reason = "Lactose level inferred from classifier output.";
   }
 
   return {
     level,
-    source: "lexicon",
+    source: "classifier",
     reason,
     examples: Array.from(examples)
   };
 }
 function scoreDishFromHits(hits) {
+  const safeHits = Array.isArray(hits) ? hits : [];
+
+  // Prefer non-inference hits; only fall back to inference if none exist
+  const primaryHits = safeHits.filter((h) => {
+    const src = String(h?.source || "").toLowerCase();
+    if (!src) return true;
+    if (src.startsWith("infer:")) return false;
+    return true;
+  });
+  const effectiveHits = primaryHits.length ? primaryHits : safeHits;
+
   const allergenSet = new Set();
   const rank = { high: 3, medium: 2, low: 1, unknown: 0 };
   let worstFodmap = "unknown";
-  for (const h of hits || []) {
+
+  for (const h of effectiveHits) {
     for (const k of extractAllergenKeys(h)) allergenSet.add(k);
     const f = extractFodmapLevel(h);
     if (rank[f] > rank[worstFodmap]) worstFodmap = f;
   }
+
   let rawRisk = 0;
   const reasons = [];
+
   for (const k of Array.from(allergenSet).sort()) {
     let w = RISK.allergenWeights[k] || 0;
     if (k === "milk" && worstFodmap === "low") {
@@ -12997,13 +12318,16 @@ function scoreDishFromHits(hits) {
     }
     rawRisk += w;
   }
+
   const fWeight = RISK.fodmapWeights[worstFodmap] || 0;
   if (fWeight > 0) {
     reasons.push({ kind: "fodmap", level: worstFodmap, weight: fWeight });
     rawRisk += fWeight;
   }
+
   const score = toScore(rawRisk);
   const label = labelFor(score);
+
   return {
     flags: { allergens: Array.from(allergenSet).sort(), fodmap: worstFodmap },
     tummy_barometer: { score, label, reasons },
@@ -13018,7 +12342,9 @@ function buildHumanSentences(flags, tummy_barometer) {
     const list = flags.allergens.slice(0, 4).join(", ");
     out.push(`Allergen risk: ${list}.`);
   }
-  const f = String(flags?.fodmap || "unknown").toLowerCase();
+  const f = String(
+    (flags && flags.fodmap && flags.fodmap.level) || flags?.fodmap || "unknown"
+  ).toLowerCase();
   if (f === "high")
     out.push(
       "FODMAP level appears high; sensitive users should avoid or confirm."
@@ -13063,6 +12389,191 @@ function buildHumanSentences(flags, tummy_barometer) {
     return core.endsWith(".") ? core : core + "…";
   });
   return trimmed.slice(0, 4);
+}
+
+function buildOrganSentences(organsArr = []) {
+  const out = [];
+  if (!Array.isArray(organsArr) || !organsArr.length) return out;
+
+  for (const o of organsArr) {
+    const key = o.organ || "";
+    if (!key) continue;
+    const organName =
+      key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " ");
+    const plus = typeof o.plus === "number" ? o.plus : 0;
+    const minus = typeof o.minus === "number" ? o.minus : 0;
+    const neutral = typeof o.neutral === "number" ? o.neutral : 0;
+    const compounds = Array.isArray(o.compounds) ? o.compounds : [];
+
+    const countsText = `benefit: ${plus}, risk: ${minus}, neutral: ${neutral}`;
+    const compoundsText = compounds.length
+      ? ` [compounds: ${compounds.join(", ")}]`
+      : "";
+
+    out.push(`${organName}: ${countsText}${compoundsText}.`);
+  }
+
+  return out;
+}
+
+async function getOrganEffectsForIngredients(env, ingredients = []) {
+  if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {} };
+
+  const names = Array.from(
+    new Set(
+      (ingredients || [])
+        .map((ing) =>
+          (ing && ing.name
+            ? ing.name
+            : ing && ing.original
+              ? ing.original
+              : ing && ing.text
+                ? ing.text
+                : ""
+          )
+            .toString()
+            .trim()
+            .toLowerCase()
+        )
+        .filter(Boolean)
+    )
+  );
+
+  const organs = {};
+  const compoundsByOrgan = {};
+
+  for (const name of names) {
+    try {
+      const like = `%${name}%`;
+      const compRes = await env.D1_DB.prepare(
+        `SELECT id, name, common_name, cid
+         FROM compounds
+         WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+         ORDER BY name LIMIT 3`
+      )
+        .bind(like, like)
+        .all();
+      const comps = compRes?.results || [];
+      for (const c of comps) {
+        const effRes = await env.D1_DB.prepare(
+          `SELECT organ, effect, strength
+           FROM compound_organ_effects
+           WHERE compound_id = ?`
+        )
+          .bind(c.id)
+          .all();
+        const effs = effRes?.results || [];
+        for (const e of effs) {
+          const organKey = (e.organ || "unknown").toLowerCase().trim();
+          if (!organKey) continue;
+          if (!organs[organKey]) {
+            organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
+            compoundsByOrgan[organKey] = new Set();
+          }
+          if (e.effect === "benefit") organs[organKey].plus++;
+          else if (e.effect === "risk") organs[organKey].minus++;
+          else organs[organKey].neutral++;
+
+          compoundsByOrgan[organKey].add(c.name || c.common_name || name);
+        }
+      }
+    } catch {
+      // ignore individual ingredient failures
+    }
+  }
+
+  const compoundsByOrganOut = {};
+  for (const [org, set] of Object.entries(compoundsByOrgan)) {
+    compoundsByOrganOut[org] = Array.from(set);
+  }
+
+  return { organs, compoundsByOrgan: compoundsByOrganOut };
+}
+
+function organLevelFromCounts({ plus = 0, minus = 0 }) {
+  if (plus === 0 && minus === 0) return "Neutral";
+  if (plus > 0 && minus === 0) {
+    if (plus >= 3) return "High Benefit";
+    return "Benefit";
+  }
+  if (minus > 0 && plus === 0) {
+    if (minus >= 3) return "High Caution";
+    return "Caution";
+  }
+  // mixed
+  if (minus > plus) return "Caution";
+  if (plus > minus) return "Benefit";
+  return "Neutral";
+}
+
+async function assessOrgansLocally(
+  env,
+  { ingredients = [], user_flags = {}, lex_hits = [] }
+) {
+  const hits = Array.isArray(lex_hits) ? lex_hits : [];
+  const scoring = scoreDishFromHits(hits);
+  const baseFlags = deriveFlags(hits);
+  const lactoseInfo = extractLactoseFromHits(hits);
+
+  const fodmapLevel = scoring.flags?.fodmap || "unknown";
+
+  const organsFlags = {
+    ...baseFlags,
+    allergens: Array.isArray(scoring.flags?.allergens)
+      ? scoring.flags.allergens
+      : [],
+    fodmap: {
+      level: fodmapLevel,
+      reason: `FODMAP level ${fodmapLevel} inferred from classifier hits.`,
+      source: "classifier"
+    },
+    ...(lactoseInfo ? { lactose: lactoseInfo } : {})
+  };
+
+  // --- Molecular organ graph (D1): ingredient -> compounds -> organ effects ---
+  let organGraph = { organs: {}, compoundsByOrgan: {} };
+  try {
+    organGraph = await getOrganEffectsForIngredients(env, ingredients);
+  } catch {
+    // ignore graph failures, keep flags-only
+  }
+
+  const organsArr = [];
+  for (const [organKey, counts] of Object.entries(organGraph.organs || {})) {
+    const level = organLevelFromCounts(counts);
+    organsArr.push({
+      organ: organKey,
+      level,
+      plus: counts.plus,
+      minus: counts.minus,
+      neutral: counts.neutral,
+      compounds: organGraph.compoundsByOrgan?.[organKey] || []
+    });
+  }
+
+  const organs = {
+    ok: true,
+    source: "assessOrgansLocally",
+    tummy_barometer: scoring.tummy_barometer,
+    flags: organsFlags,
+    organs: organsArr,
+    user_flags: user_flags || {},
+    ingredients
+  };
+
+  // lightweight debug block
+  organs.debug = organs.debug || {};
+  organs.debug.molecular_summary = {
+    organ_count: organsArr.length,
+    organs: organsArr.map((o) => ({
+      organ: o.organ,
+      level: o.level,
+      plus: o.plus,
+      minus: o.minus
+    }))
+  };
+
+  return organs;
 }
 
 function deriveFlags(hits) {
@@ -13171,7 +12682,6 @@ async function handleHealthz(env) {
   const missing = [];
   for (const name of [
     "RAPIDAPI_KEY",
-    "LEXICON_API_KEY",
     "OPENAI_API_KEY",
     "SPOONACULAR_KEY",
     "EDAMAM_APP_ID",
@@ -13228,41 +12738,6 @@ function dayStrUTC(d = new Date()) {
     .toISOString()
     .slice(0, 10);
 }
-async function bumpDaily(
-  env,
-  {
-    jobs = 0,
-    lex_ok = 0,
-    lex_live = 0,
-    lex_err = 0,
-    rap_ok = 0,
-    rap_err = 0
-  } = {}
-) {
-  if (!env.D1_DB) return;
-  const day = dayStrUTC();
-  try {
-    await env.D1_DB.prepare(
-      `
-    INSERT INTO daily_stats(day, jobs, lexicon_ok, lexicon_live, lexicon_err, rapid_ok, rapid_err)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(day) DO UPDATE SET
-      jobs = jobs + excluded.jobs,
-      lexicon_ok = lexicon_ok + excluded.lexicon_ok,
-      lexicon_live = lexicon_live + excluded.lexicon_live,
-      lexicon_err = lexicon_err + excluded.lexicon_err,
-      rapid_ok = rapid_ok + excluded.rapid_ok,
-      rapid_err = rapid_err + excluded.rapid_err
-  `
-    )
-      .bind(day, jobs, lex_ok, lex_live, lex_err, rap_ok, rap_err)
-      .run();
-    await recordMetric(env, "d1:daily_stats:upsert_ok");
-  } catch (err) {
-    await recordMetric(env, "d1:daily_stats:upsert_fail");
-    throw err;
-  }
-}
 async function bumpApi(env, service, { calls = 0, ok = 0, err = 0 } = {}) {
   if (!env.D1_DB) return;
   const day = dayStrUTC();
@@ -13290,9 +12765,9 @@ async function bumpApi(env, service, { calls = 0, ok = 0, err = 0 } = {}) {
 const STATUS_KV_KEY = "meta/uber_test_status_v1";
 
 async function readStatusKV(env) {
-  if (!env?.LEXICON_CACHE) return null;
+  if (!env?.MENUS_CACHE) return null;
   try {
-    const raw = await env.LEXICON_CACHE.get(STATUS_KV_KEY);
+    const raw = await env.MENUS_CACHE.get(STATUS_KV_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -13300,7 +12775,7 @@ async function readStatusKV(env) {
 }
 
 async function bumpStatusKV(env, delta = {}) {
-  if (!env?.LEXICON_CACHE) return;
+  if (!env?.MENUS_CACHE) return;
   try {
     const cur = (await readStatusKV(env)) || {
       updated_at: null,
@@ -13322,7 +12797,7 @@ async function bumpStatusKV(env, delta = {}) {
       cur.counts[k] += Number(v) || 0;
     }
     cur.updated_at = new Date().toISOString();
-    await env.LEXICON_CACHE.put(STATUS_KV_KEY, JSON.stringify(cur), {
+    await env.MENUS_CACHE.put(STATUS_KV_KEY, JSON.stringify(cur), {
       expirationTtl: 7 * 24 * 3600
     });
   } catch {}
@@ -13343,9 +12818,9 @@ function cacheKeyForMenu(query, address, forceUS = false) {
 
 // Read a cached menu snapshot from KV. Returns { savedAt, data } or null.
 async function readMenuFromCache(env, key) {
-  if (!env?.LEXICON_CACHE) return null;
+  if (!env?.MENUS_CACHE) return null;
   try {
-    const raw = await env.LEXICON_CACHE.get(key);
+    const raw = await env.MENUS_CACHE.get(key);
     if (!raw) return null;
     const js = JSON.parse(raw);
     // Expect shape: { savedAt: ISO, data: { query, address, forceUS, items: [...] } }
@@ -13358,10 +12833,10 @@ async function readMenuFromCache(env, key) {
 
 // Write a cached menu snapshot to KV (best-effort).
 async function writeMenuToCache(env, key, data) {
-  if (!env?.LEXICON_CACHE) return false;
+  if (!env?.MENUS_CACHE) return false;
   try {
     const body = JSON.stringify({ savedAt: new Date().toISOString(), data });
-    await env.LEXICON_CACHE.put(key, body, { expirationTtl: MENU_TTL_SECONDS });
+    await env.MENUS_CACHE.put(key, body, { expirationTtl: MENU_TTL_SECONDS });
     return true;
   } catch {
     return false;
@@ -13432,22 +12907,6 @@ function filterLexHitsForIngredient(ingredientName, hits) {
     return true;
   });
 }
-function buildLexiconAnalyzeURL(base) {
-  const b = normalizeBase(base);
-  return `${b}/v1/search`;
-}
-function buildLexiconAnalyzeCandidates(base) {
-  const b = normalizeBase(base);
-  if (!b) return [];
-  // Try the usual suspects, in order of likelihood
-  return [
-    `${b}/v1/analyze`,
-    `${b}/analyze`,
-    `${b}/api/analyze`,
-    `${b}/v1/lexicon/analyze`
-  ];
-}
-
 // Shared helper for /pipeline/analyze-dish and /pipeline/analyze-dish/card
 async function runDishAnalysis(env, ctx, request) {
   const correlationId = _cid(request.headers);
@@ -13491,9 +12950,112 @@ async function runDishAnalysis(env, ctx, request) {
     devFlag: body.dev === true || body.dev === 1 || body.dev === "1"
   });
 
-  const ingredients = Array.isArray(recipeResult?.ingredients)
+  const nutritionSummaryFromRecipe =
+    (recipeResult &&
+      recipeResult.out &&
+      recipeResult.out.nutrition_summary) ||
+    recipeResult.nutrition_summary ||
+    null;
+  let finalNutritionSummary = nutritionSummaryFromRecipe || null;
+
+  if (
+    !finalNutritionSummary &&
+    recipeResult &&
+    recipeResult.out &&
+    recipeResult.out.raw &&
+    recipeResult.out.raw.totalNutrients
+  ) {
+    try {
+      const ns = nutritionSummaryFromEdamamTotalNutrients(
+        recipeResult.out.raw.totalNutrients
+      );
+      if (ns) {
+        finalNutritionSummary = ns;
+        if (recipeResult.out) {
+          recipeResult.out.nutrition_summary = ns;
+        }
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  if (
+    !finalNutritionSummary &&
+    recipeResult &&
+    recipeResult.out &&
+    recipeResult.out.raw &&
+    recipeResult.out.raw.totalNutrients
+  ) {
+    try {
+      const tn = recipeResult.out.raw.totalNutrients || {};
+      const energy = tn.ENERC_KCAL?.quantity;
+      const protein = tn.PROCNT?.quantity;
+      const fat = tn.FAT?.quantity;
+      const carbs = tn.CHOCDF?.quantity;
+      const sugar = tn.SUGAR?.quantity;
+      const fiber = tn.FIBTG?.quantity;
+      const sodium = tn.NA?.quantity;
+
+      finalNutritionSummary = {
+        energyKcal: typeof energy === "number" ? energy : null,
+        protein_g: typeof protein === "number" ? protein : null,
+        fat_g: typeof fat === "number" ? fat : null,
+        carbs_g: typeof carbs === "number" ? carbs : null,
+        sugar_g: typeof sugar === "number" ? sugar : null,
+        fiber_g: typeof fiber === "number" ? fiber : null,
+        sodium_mg: typeof sodium === "number" ? sodium : null
+      };
+
+      if (recipeResult.out) {
+        recipeResult.out.nutrition_summary = finalNutritionSummary;
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  const ingredientsParsed =
+    (recipeResult?.out && Array.isArray(recipeResult.out.ingredients_parsed)
+      ? recipeResult.out.ingredients_parsed
+      : Array.isArray(recipeResult?.parsed)
+        ? recipeResult.parsed
+        : null);
+
+  // Rebuild ingredients from parsed rows if present
+  let ingredients = Array.isArray(recipeResult?.ingredients)
     ? recipeResult.ingredients
     : [];
+  if ((!ingredients || !ingredients.length) && Array.isArray(ingredientsParsed)) {
+    ingredients = ingredientsParsed.map((row) => ({
+      name: row.name || row.original || "",
+      qty:
+        typeof row.qty === "number"
+          ? row.qty
+          : row.qty != null
+            ? Number(row.qty) || null
+            : null,
+      unit: row.unit || null,
+      comment:
+        row.comment || row.preparation || row.preparationNotes || null
+    }));
+  }
+
+  if (
+    !finalNutritionSummary &&
+    Array.isArray(ingredientsParsed) &&
+    ingredientsParsed.length
+  ) {
+    // Try to compute from parsed rows using existing helper
+    try {
+      finalNutritionSummary = sumNutrition(ingredientsParsed);
+      if (recipeResult?.out) {
+        recipeResult.out.nutrition_summary = finalNutritionSummary;
+      }
+    } catch (e) {
+      // non-fatal; leave nutrition summary null
+    }
+  }
 
   const normalized = {
     ok: true,
@@ -13511,17 +13073,26 @@ async function runDishAnalysis(env, ctx, request) {
   };
 
   const ingredientsForLex = (() => {
+    // Prefer parsed/enriched rows first
+    const parsed = Array.isArray(ingredientsParsed) ? ingredientsParsed : [];
+    if (parsed.length) {
+      return parsed
+        .map((it) => it.name || it.text || it.original || "")
+        .filter((s) => s && s.trim().length > 1);
+    }
+
+    // Fallback to normalized items/lines if needed
     if (Array.isArray(normalized.items) && normalized.items.length) {
       return normalized.items
         .map((it) => it.name || it.text || it.original || "")
-        .filter((s) => !!s && s.trim().length > 1);
+        .filter((s) => s && s.trim().length > 1);
     }
     if (
       Array.isArray(normalized.ingredients_lines) &&
       normalized.ingredients_lines.length
     ) {
       return normalized.ingredients_lines.filter(
-        (s) => !!s && s.trim().length > 1
+        (s) => s && s.trim().length > 1
       );
     }
     const parts = [dishName, menuDescription]
@@ -13530,89 +13101,45 @@ async function runDishAnalysis(env, ctx, request) {
     return parts.length ? parts : [];
   })();
 
-  const lexPerIngredient = await classifyIngredientsWithLex(
+  const fatsecretResult = await classifyIngredientsWithFatSecret(
     env,
     ingredientsForLex,
     "en"
   );
-  const filteredPerIngredient = Array.isArray(lexPerIngredient?.perIngredient)
-    ? lexPerIngredient.perIngredient.map((entry) => ({
-        ...entry,
-        hits: filterLexHitsForIngredient(entry?.ingredient, entry?.hits || [])
-      }))
-    : [];
-  const allIngredientLexHits = filteredPerIngredient.flatMap(
-    (p) => p.hits || []
+  const fatsecretHits =
+    fatsecretResult && fatsecretResult.ok
+      ? fatsecretResult.allIngredientHits || []
+      : [];
+  const inferredTextHits = inferHitsFromText(dishName, menuDescription);
+  const inferredIngredientHits = inferHitsFromIngredients(
+    Array.isArray(ingredients) && ingredients.length
+      ? ingredients
+      : normalized.items || []
   );
-
-  let lex = null;
-  let finalLexHits = [];
-  try {
-    const lexParts = [];
-    if (dishName) lexParts.push(dishName);
-    if (menuDescription) lexParts.push(menuDescription);
-    if (Array.isArray(normalized.items) && normalized.items.length) {
-      lexParts.push(
-        normalized.items
-          .map((row) => row.name || row.text || row.original || "")
-          .filter(Boolean)
-          .join(", ")
-      );
-    }
-    const lexText = lexParts.filter(Boolean).join(". ");
-
-    if (lexText) {
-      lex = await callLexicon(env, lexText, "en");
-      const rawHits = Array.isArray(lex?.data?.hits) ? lex.data.hits : [];
-      finalLexHits = rawHits.map((h) => ({
-        term: h.term,
-        canonical: h.canonical,
-        classes: Array.isArray(h.classes) ? h.classes : [],
-        tags: Array.isArray(h.tags) ? h.tags : [],
-        allergens: Array.isArray(h.allergens) ? h.allergens : undefined,
-        fodmap: h.fodmap ?? h.fodmap_level,
-        lactose_band: h.lactose_band || null,
-        milk_source: h.milk_source || null
-      }));
-    }
-  } catch (e) {
-    // swallow lex errors; captured in debug below
-  }
-
-  const blobHits = finalLexHits || [];
-  const primaryLexHits =
-    allIngredientLexHits && allIngredientLexHits.length
-      ? allIngredientLexHits
-      : blobHits;
+  const combinedHits = [
+    ...fatsecretHits,
+    ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
+    ...(Array.isArray(inferredIngredientHits)
+      ? inferredIngredientHits
+      : [])
+  ];
 
   const userFlags = body.user_flags || body.userFlags || {};
-  const allergenUrl = env.allergen_organs
-    ? "https://allergen-organs/organs/assess"
-    : "https://tb-allergen-organs-production.tummybuddy.workers.dev/organs/assess";
-  const allergenFetcher =
-    env.allergen_organs?.fetch?.bind(env.allergen_organs) || fetch;
-  const organsResp = await allergenFetcher(allergenUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-correlation-id": correlationId
-    },
-    body: JSON.stringify({
-      ingredients,
-      user_flags: userFlags,
-      lex_hits: primaryLexHits
-    })
+  let organs = await assessOrgansLocally(env, {
+    ingredients,
+    user_flags: userFlags,
+    lex_hits: combinedHits
   });
 
-  const organsText = await organsResp.text();
-  let organs;
-  try {
-    organs = JSON.parse(organsText);
-  } catch {
-    organs = {
-      ok: false,
-      error: "allergen_organs returned non-JSON",
-      raw: organsText
+  const edamamFodmap = getEdamamFodmapOverrideFromRecipe(recipeResult);
+
+  if (edamamFodmap && organs && organs.flags) {
+    const prev = organs.flags.fodmap || null;
+    organs.flags.fodmap = {
+      level: edamamFodmap.level,
+      reason: edamamFodmap.reason,
+      source: edamamFodmap.source,
+      previous: prev
     };
   }
 
@@ -13621,67 +13148,14 @@ async function runDishAnalysis(env, ctx, request) {
     if (!organs.flags) organs.flags = {};
     if (!Array.isArray(organs.flags.allergens)) organs.flags.allergens = [];
     if (!organs.debug) organs.debug = {};
-    organs.debug.lexicon_raw = lex || null;
-
-    if (lex && lex.ok) {
-      const hits = primaryLexHits;
-      const scoring = scoreDishFromHits(hits);
-
-      if (scoring.flags && scoring.flags.fodmap) {
-        organs.flags.fodmap = {
-          level: scoring.flags.fodmap,
-          reason: `FODMAP level ${scoring.flags.fodmap} inferred from lexicon.`,
-          source: "lexicon"
-        };
-      }
-
-      const existing = Array.isArray(organs.flags.allergens)
-        ? organs.flags.allergens.slice()
-        : [];
-      const existingKinds = new Set(
-        existing
-          .map((a) => (a && typeof a.kind === "string" ? a.kind : null))
-          .filter(Boolean)
-      );
-
-      const lexAllergenKinds = Array.isArray(scoring.flags?.allergens)
-        ? scoring.flags.allergens
-        : [];
-
-      for (const k of lexAllergenKinds) {
-        const kind = String(k || "").toLowerCase();
-        if (!kind || existingKinds.has(kind)) continue;
-        existingKinds.add(kind);
-        existing.push({
-          kind,
-          message: `Contains or may contain ${kind} (from lexicon).`,
-          source: "lexicon"
-        });
-      }
-
-      organs.flags.allergens = existing;
-
-      const lactoseInfo = extractLactoseFromHits(hits);
-      if (lactoseInfo) {
-        organs.flags.lactose = lactoseInfo;
-
-        if (lactoseInfo.level !== "none") {
-          const hasMilk = organs.flags.allergens.some(
-            (a) => a && a.kind === "milk"
-          );
-          if (!hasMilk) {
-            organs.flags.allergens.push({
-              kind: "milk",
-              message: "Contains or may contain milk/lactose (from lexicon).",
-              source: "lexicon"
-            });
-          }
-        }
-      }
-    }
   } catch (e) {
-    if (!organs.debug) organs.debug = {};
-    organs.debug.lexicon_error = String(e?.message || e);
+    if (!organs || typeof organs !== "object") {
+      organs = {
+        ok: false,
+        error: "organs_post_process_failed",
+        debug: { error: String(e?.message || e) }
+      };
+    }
   }
 
   const summary = (() => {
@@ -13695,9 +13169,28 @@ async function runDishAnalysis(env, ctx, request) {
 
     const allergenKinds = Array.isArray(flags.allergens)
       ? flags.allergens
-          .map((a) => a && a.kind)
+          .map((a) => {
+            if (typeof a === "string") return a;
+            if (a && typeof a === "object" && typeof a.kind === "string") {
+              return a.kind;
+            }
+            return null;
+          })
           .filter(Boolean)
       : [];
+
+    const fodmapReason =
+      Array.isArray(tb.reasons) && tb.reasons.length
+        ? tb.reasons.find((r) => r && r.kind === "fodmap")
+        : null;
+
+    const fodmapLevel =
+      (flags.fodmap && flags.fodmap.level) ||
+      (fodmapReason && fodmapReason.level) ||
+      null;
+
+    const onionGarlic =
+      !!flags.onion || !!flags.garlic || !!flags.onion_garlic;
 
     return {
       tummyBarometer: {
@@ -13706,19 +13199,60 @@ async function runDishAnalysis(env, ctx, request) {
       },
       organs: organsList.map((o) => ({
         organ: o.organ ?? null,
-        score: o.score ?? null,
-        level: o.level ?? null
+        level: o.level ?? null,
+        plus:
+          typeof o.plus === "number"
+            ? o.plus
+            : typeof o.counts?.plus === "number"
+              ? o.counts.plus
+              : null,
+        minus:
+          typeof o.minus === "number"
+            ? o.minus
+            : typeof o.counts?.minus === "number"
+              ? o.counts.minus
+              : null,
+        neutral:
+          typeof o.neutral === "number"
+            ? o.neutral
+            : typeof o.counts?.neutral === "number"
+              ? o.counts.neutral
+              : null,
+        compounds: Array.isArray(o.compounds) ? o.compounds : []
       })),
       keyFlags: {
         allergens: allergenKinds,
-        fodmapLevel: flags.fodmap?.level ?? null,
+        fodmapLevel,
         lactoseLevel: flags.lactose?.level ?? null,
-        onionGarlic: flags.onion_garlic ?? false,
-        spicy: flags.spicy ?? false,
-        alcohol: flags.alcohol ?? false
+        onionGarlic,
+        spicy: !!flags.spicy,
+        alcohol: !!flags.alcohol
       }
     };
   })();
+
+  let summarySentences = [];
+  try {
+    if (summary && summary.tummyBarometer) {
+      summarySentences = buildHumanSentences(
+        organs.flags || {},
+        summary.tummyBarometer
+      );
+
+      // Factual organ sentences from organ graph
+      let organSentences = [];
+      if (Array.isArray(organs.organs) && organs.organs.length) {
+        organSentences = buildOrganSentences(organs.organs);
+      }
+
+      summary.sentences = [...summarySentences, ...organSentences];
+    }
+  } catch {}
+
+  const edamamHealthLabels = getEdamamHealthLabelsFromRecipe(recipeResult);
+  if (summary) {
+    summary.edamamLabels = edamamHealthLabels;
+  }
 
   const recipe_debug = {
     provider:
@@ -13734,14 +13268,13 @@ async function runDishAnalysis(env, ctx, request) {
 
   const debug = {
     ...(organs && organs.debug ? organs.debug : {}),
-    lex_blob_raw: lex,
-    lex_blob_hits: blobHits,
-    lex_per_ingredient: {
-      ...(lexPerIngredient || {}),
-      perIngredient: filteredPerIngredient
-    },
-    lex_primary_hits: primaryLexHits,
-    recipe_debug
+    fatsecret_per_ingredient: fatsecretResult?.perIngredient || [],
+    fatsecret_hits: fatsecretHits,
+    inferred_text_hits: inferredTextHits,
+    inferred_ingredient_hits: inferredIngredientHits,
+    recipe_debug,
+    fodmap_edamam: edamamFodmap || null,
+    edamam_healthLabels: edamamHealthLabels
   };
 
   const result = {
@@ -13754,8 +13287,28 @@ async function runDishAnalysis(env, ctx, request) {
     recipe: recipeResult,
     normalized,
     organs,
+    nutrition_summary: finalNutritionSummary || null,
     debug
   };
+
+  if (finalNutritionSummary) {
+    const n = finalNutritionSummary;
+    result.nutrition_badges = [
+      typeof n.energyKcal === "number"
+        ? `${Math.round(n.energyKcal)} kcal`
+        : null,
+      typeof n.protein_g === "number"
+        ? `${Math.round(n.protein_g)} g protein`
+        : null,
+      typeof n.fat_g === "number" ? `${Math.round(n.fat_g)} g fat` : null,
+      typeof n.carbs_g === "number"
+        ? `${Math.round(n.carbs_g)} g carbs`
+        : null,
+      typeof n.sodium_mg === "number"
+        ? `${Math.round(n.sodium_mg)} mg sodium`
+        : null
+    ].filter(Boolean);
+  }
 
   return { status: 200, result };
 }
@@ -13778,206 +13331,191 @@ async function callRapid(env, query, address) {
 }
 
 // Per-ingredient Lexicon classification (phase 1 visibility)
-async function classifyIngredientsWithLex(env, ingredientsForLex, lang = "en") {
-  const perIngredient = [];
-  const allHits = [];
-
-  for (const raw of ingredientsForLex) {
-    const name = (raw || "").trim();
-    if (!name || name.length < 2) continue;
-
-    const res = await callLexicon(env, name, lang);
-    const entry = {
-      ingredient: name,
-      ok: !!(res && res.ok),
-      hits: []
-    };
-
-    let localHits = [];
-    if (res && res.ok && res.data && Array.isArray(res.data.hits)) {
-      localHits = res.data.hits;
-      entry.hits = localHits;
-      allHits.push(...localHits);
-    }
-
-    perIngredient.push(entry);
-  }
-
-  return { perIngredient, allHits };
-}
-async function callLexicon(env, text, lang = "en") {
-  const base = normalizeBase(env.LEXICON_API_URL);
-  const key = env.LEXICON_API_KEY || env.API_KEY;
-  if (!base || !key) {
-    throw new Error("LEXICON_API_URL or LEXICON_API_KEY missing");
-  }
-  if (!text) {
-    return { ok: false, reason: "missing-text", data: { hits: [] } };
-  }
-
-  // Try correct lexicon endpoint
-  const url = `${base}/v1/search`;
-
-  const payload = {
-    q: text,
-    shard_ids: null, // let server choose shards
-    include_lists: ["cheeses", "seafood", "animals"] // leverage your lactose + allergen lists
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "Accept-Language": lang
-    },
-    body: JSON.stringify(payload)
-  });
-
-  let js = null;
-  try {
-    js = await res.json();
-  } catch {
-    js = null;
-  }
-
-  if (!res.ok || !js) {
+// ---- FatSecret integration (proxy → lex-style hits) -----------------------
+async function fetchFatSecretAllergensViaProxy(
+  env,
+  ingredients,
+  lang = "en"
+) {
+  if (!env?.FATSECRET_PROXY_URL) {
     return {
       ok: false,
-      status: res.status,
-      reason: "lexicon-search-failed",
-      data: { hits: [] }
+      reason: "missing-fatsecret-proxy-url",
+      perIngredient: [],
+      allIngredientHits: []
     };
   }
 
-  // js.matches is your API's shape. Normalize to "hits" array the rest of the code expects.
-  const matches = Array.isArray(js.matches) ? js.matches : [];
-
-  const hits = matches.map((m) => {
-    const e = m.entry || {};
-    const mapsTo = Array.isArray(e.maps_to) ? e.maps_to : [];
-    const tags = [];
-    // Use maps_to (milk, shellfish, etc.) and category as tags
-    for (const t of mapsTo) tags.push(String(t).toLowerCase());
-    if (e.category) tags.push(String(e.category).toLowerCase());
-    if (m.source) tags.push(String(m.source).toLowerCase());
-
-    // Classes: derive coarse allergen classes from maps_to
-    const classes = [];
-    if (mapsTo.includes("milk")) classes.push("dairy");
-    if (mapsTo.includes("shellfish")) classes.push("shellfish");
-    if (mapsTo.includes("fish")) classes.push("fish");
-    if (mapsTo.includes("wheat") || mapsTo.includes("gluten")) {
-      classes.push("gluten");
-    }
-
+  let res;
+  try {
+    res = await fetch(`${env.FATSECRET_PROXY_URL}/fatsecret/allergens`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": env.PROXY_API_KEY
+      },
+      body: JSON.stringify({ ingredients, lang })
+    });
+  } catch (e) {
     return {
-      term: e.term || text,
-      canonical: e.canonical || null,
-      classes,
-      tags,
-      // Lexicon can optionally add "allergens" later if you extend schema
-      allergens: Array.isArray(e.allergens) ? e.allergens : undefined,
-      fodmap: e.fodmap ?? e.fodmap_level,
-      lactose_band: e.lactose_band || null,
-      milk_source: e.milk_source || null
+      ok: false,
+      reason: "fatsecret-proxy-error",
+      status: 0,
+      data: { error: e?.message || String(e) },
+      perIngredient: [],
+      allIngredientHits: []
     };
-  });
+  }
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+
+  if (!res.ok || (data && data.ok === false)) {
+    return {
+      ok: false,
+      reason: "fatsecret-proxy-error",
+      status: res.status,
+      data,
+      perIngredient: [],
+      allIngredientHits: []
+    };
+  }
+
+  return { ok: true, results: data?.results || [] };
+}
+
+function mapFatSecretFoodAttributesToLexHits(ingredientName, foodAttributes) {
+  const hit = {
+    term: ingredientName,
+    canonical: (ingredientName || "").toLowerCase(),
+    classes: [],
+    tags: [],
+    allergens: [],
+    fodmap: null,
+    lactose_band: null,
+    milk_source: null,
+    source: "fatsecret:food_attributes"
+  };
+
+  const allergens =
+    foodAttributes?.allergens &&
+    Array.isArray(foodAttributes.allergens.allergen)
+      ? foodAttributes.allergens.allergen
+      : [];
+
+  for (const a of allergens) {
+    if (!a || !a.name || !a.value) continue;
+    const name = String(a.name).toLowerCase();
+    const value = Number(a.value);
+    if (!value) continue;
+    if (name === "milk") {
+      hit.allergens.push("milk");
+      hit.classes.push("dairy");
+    } else if (name === "lactose") {
+      hit.lactose_band = "high";
+      hit.classes.push("dairy");
+    } else if (name === "gluten") {
+      hit.allergens.push("gluten");
+      hit.classes.push("gluten");
+    } else if (name === "egg") {
+      hit.allergens.push("egg");
+      hit.classes.push("egg");
+    } else if (name === "fish") {
+      hit.allergens.push("fish");
+      hit.classes.push("fish");
+    } else if (name === "shellfish") {
+      hit.allergens.push("shellfish");
+      hit.classes.push("shellfish");
+    } else if (name === "nuts") {
+      hit.allergens.push("tree_nuts");
+      hit.classes.push("nuts");
+    } else if (name === "peanuts") {
+      hit.allergens.push("peanuts");
+      hit.classes.push("nuts");
+    } else if (name === "soy") {
+      hit.allergens.push("soy");
+      hit.classes.push("soy");
+    } else if (name === "sesame") {
+      hit.allergens.push("sesame");
+      hit.classes.push("sesame");
+    }
+  }
+
+  const preferences =
+    foodAttributes?.preferences &&
+    Array.isArray(foodAttributes.preferences.preference)
+      ? foodAttributes.preferences.preference
+      : [];
+  for (const p of preferences) {
+    if (!p || !p.name || !p.value) continue;
+    const name = String(p.name).toLowerCase();
+    const value = Number(p.value);
+    if (!value) continue;
+    if (name === "vegan") hit.tags.push("vegan");
+    else if (name === "vegetarian") hit.tags.push("vegetarian");
+  }
+
+  if (!hit.allergens.length && !hit.lactose_band) return [];
+  return [hit];
+}
+
+// classifyIngredientsWithFatSecret:
+// Uses our FatSecret proxy (Render) to turn ingredient names into
+// lex-style hits focused on allergens + lactose.
+async function classifyIngredientsWithFatSecret(
+  env,
+  ingredientsForLex,
+  lang = "en"
+) {
+  const ingredientNames = (ingredientsForLex || [])
+    .map((ing) =>
+      typeof ing === "string" ? ing : ing?.name || ing?.ingredient || ""
+    )
+    .filter(Boolean);
+
+  const result = await fetchFatSecretAllergensViaProxy(
+    env,
+    ingredientNames,
+    lang
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      reason: result.reason || "fatsecret-proxy-error",
+      perIngredient: [],
+      allIngredientHits: []
+    };
+  }
+
+  const perIngredient = [];
+  const allIngredientHits = [];
+
+  for (const row of result.results || []) {
+    const name = row?.ingredient || "";
+    const hits = mapFatSecretFoodAttributesToLexHits(
+      name,
+      row?.food_attributes || {}
+    );
+    perIngredient.push({
+      ingredient: name,
+      ok: true,
+      hits
+    });
+    if (hits && hits.length) {
+      for (const h of hits) allIngredientHits.push(h);
+    }
+  }
 
   return {
     ok: true,
-    mode: "v1_search",
-    data: { hits }
+    perIngredient,
+    allIngredientHits
   };
 }
-async function lexiconAnalyzeViaShards(env, text, lang = "en") {
-  const base = normalizeBase(env.LEXICON_API_URL);
-  const key = env.LEXICON_API_KEY;
-
-  let index = null;
-  for (const url of [`${base}/v1/index`, `${base}/v1/shards`]) {
-    try {
-      const r = await fetch(url, { headers: { "x-api-key": key } });
-      if (!r.ok) continue;
-      index = await r.json();
-      break;
-    } catch {}
-  }
-
-  const names = index
-    ? pickIngredientShardNamesFromIndex(index)
-    : STATIC_INGREDIENT_SHARDS;
-
-  const entries = [];
-  for (const name of names) {
-    try {
-      const url = `${base}/v1/shards/${name}`;
-      const r = await fetch(url, { headers: { "x-api-key": key } });
-      if (!r.ok) continue;
-      const js = await r.json();
-      if (Array.isArray(js?.entries)) {
-        for (const e of js.entries) entries.push(e);
-      }
-    } catch {}
-  }
-
-  const corpus = lc(text || "");
-  const stoplist = new Set(["and", "with", "of", "in", "a", "the", "or"]);
-  const ingredient_hits_raw = [];
-  const seenCanon = new Set();
-
-  for (const entry of entries) {
-    const canonical = lc(entry?.canonical ?? entry?.name ?? entry?.term ?? "");
-    const classes = Array.isArray(entry?.classes) ? entry.classes.map(lc) : [];
-    const tags = Array.isArray(entry?.tags) ? entry.tags.map(lc) : [];
-    const weight = typeof entry?.weight === "number" ? entry.weight : undefined;
-
-    const terms = entryTerms(entry).filter((t) => !stoplist.has(t));
-    let matchedTerm = null;
-    for (const t of terms) {
-      if (t.length < 2) continue;
-      if (termMatches(corpus, t)) {
-        matchedTerm = t;
-        break;
-      }
-    }
-    if (!matchedTerm) continue;
-
-    const canonKey = canonical || matchedTerm;
-    if (seenCanon.has(canonKey)) continue;
-    seenCanon.add(canonKey);
-
-    ingredient_hits_raw.push({
-      term: matchedTerm,
-      canonical: canonical || matchedTerm,
-      classes,
-      tags,
-      weight,
-      allergens: Array.isArray(entry?.allergens) ? entry.allergens : undefined,
-      fodmap: entry?.fodmap ?? entry?.fodmap_level,
-      source: "lexicon_live_shards"
-    });
-  }
-
-  const HITS_LIMIT = 25;
-  const hits = tidyIngredientHits(ingredient_hits_raw, HITS_LIMIT).map((h) => ({
-    term: h.term,
-    canonical: h.canonical,
-    classes: h.classes,
-    tags: h.tags,
-    allergens: h.allergens,
-    fodmap: h.fodmap,
-    source: h.source
-  }));
-
-  return {
-    hits,
-    from: "lexicon_live_shards",
-    shard_count: names.length,
-    entries_scanned: entries.length
-  };
-}
-
 // ---- Response helpers ----
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -14159,14 +13697,14 @@ function normPathname(u) {
 }
 
 export default {
-  async fetch(request, env, ctx) {
+  fetch: async (request, env, ctx) => {
     const response = await handleFetch(request, env, ctx);
     return withTbWhoamiHeaders(response, env);
   },
-  async queue(batch, env, ctx) {
+  queue: async (batch, env, ctx) => {
     return handleQueue(batch, env, ctx);
   },
-  async scheduled(controller, env, ctx) {
+  scheduled: async (controller, env, ctx) => {
     return handleScheduled(controller, env, ctx);
   }
 };

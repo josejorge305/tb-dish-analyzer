@@ -11,18 +11,16 @@ binding = "AI"
 [durable_objects]
 bindings = []
 
-# --- Service bindings (default env) ---
-[[services]]
-binding = "allergen_organs"
-service = "tb-allergen-organs-production"
-
 [[services]]
 binding = "metrics_core"
 service = "tb-metrics-core"
 
 [vars]
-LEXICON_API_URL = "https://tummy-lexicon-api.onrender.com"
-# Used by internal links/debug; safe to keep for dev
+# Base URL for our FatSecret proxy running on Render.
+# The proxy will handle OAuth2 token + calls to foods.search / food.get.v5
+# and expose a simple JSON API for allergens/lactose per ingredient.
+FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
+PROXY_API_KEY = "supersecret123"
 
 
 # --- D1 (default env) ---
@@ -30,11 +28,6 @@ LEXICON_API_URL = "https://tummy-lexicon-api.onrender.com"
 binding = "D1_DB"
 database_name = "tb-database"
 database_id = "055f6987-4353-4752-a4c5-24525e2f5cbb"
-
-# --- KV (default env) ---
-[[kv_namespaces]]
-binding = "LEXICON_CACHE"
-id = "c4323f68f6984853b7ec2b2d77bdc57e"
 
 [[kv_namespaces]]
 binding = "MENUS_CACHE"
@@ -75,11 +68,6 @@ binding = "AI"
 [env.production.durable_objects]
 bindings = []
 
-# ✅ Service bindings for production
-[[env.production.services]]
-binding = "allergen_organs"
-service = "tb-allergen-organs-production"
-
 [[env.production.services]]
 binding = "metrics_core"
 service = "tb-metrics-core"
@@ -111,12 +99,12 @@ ZESTFUL_DAILY_CAP  = "5500"
 USDA_FDC_HOST      = "api.nal.usda.gov"
 
 # === Internal services / URLs ===
-LEXICON_API_URL  = "https://tummy-lexicon-api.onrender.com"
+FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
+PROXY_API_KEY = "supersecret123"
 
 
 # === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===
 #   wrangler secret put RAPIDAPI_KEY
-#   wrangler secret put LEXICON_API_KEY
 #   wrangler secret put OPENAI_API_KEY
 #   wrangler secret put SPOONACULAR_KEY
 #   wrangler secret put ZESTFUL_RAPID_KEY
@@ -128,11 +116,6 @@ LEXICON_API_URL  = "https://tummy-lexicon-api.onrender.com"
 binding = "D1_DB"
 database_name = "tb-database"
 database_id = "055f6987-4353-4752-a4c5-24525e2f5cbb"
-
-# --- KV (production) ---
-[[env.production.kv_namespaces]]
-binding = "LEXICON_CACHE"
-id = "c4323f68f6984853b7ec2b2d77bdc57e"
 
 [[env.production.kv_namespaces]]
 binding = "MENUS_CACHE"

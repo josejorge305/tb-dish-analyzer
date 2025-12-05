@@ -9,12 +9,6 @@ binding = "D1_DB"
 database_name = "tb-database"
 database_id = "055f6987-4353-4752-a4c5-24525e2f5cbb"
 
-# --- KV (default env) ---
-# Binding name must be LEXICON_CACHE (matches code)
-[[kv_namespaces]]
-binding = "LEXICON_CACHE"
-id = "c4323f68f6984853b7ec2b2d77bdc57e"
-
 # --- R2 (default env) ---
 [[r2_buckets]]
 binding = "R2_BUCKET"
@@ -46,11 +40,6 @@ HITS_LIMIT = "25"               # keep only top 25 ingredient hits
 binding = "D1_DB"
 database_name = "tb-database"
 database_id = "055f6987-4353-4752-a4c5-24525e2f5cbb"
-
-# --- KV (production) ---
-[[env.production.kv_namespaces]]
-binding = "LEXICON_CACHE"
-id = "c4323f68f6984853b7ec2b2d77bdc57e"
 
 # --- R2 (production) ---
 [[env.production.r2_buckets]]
