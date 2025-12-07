@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// .wrangler/tmp/bundle-3gSmpG/checked-fetch.js
+// .wrangler/tmp/bundle-DWgQG7/checked-fetch.js
 var urls = /* @__PURE__ */ new Set();
 function checkURL(request, init) {
   const url = request instanceof URL ? request : new URL(
@@ -3091,6 +3091,27 @@ YOUR TASKS:
    - pork, beef, alcohol, spicy
 5. ALWAYS give a short, concrete reason for each allergen, lactose, and FODMAP decision.
 
+ALLERGEN STRICTNESS RULES:
+- You MUST NOT invent ingredients that are not clearly implied by the input.
+- You may only set "present": "yes" for an allergen if there is explicit textual evidence in the dish name, menu description, ingredients, or tags.
+- Examples of explicit evidence:
+  - "egg", "eggs", "egg yolk", "yolk", "huevo" \u2192 egg allergen yes.
+  - "cream", "milk", "cheese", "queso", "butter" \u2192 milk allergen yes.
+  - "shrimp", "prawns", "camar\xF3n", "gambas" \u2192 shellfish allergen yes.
+- Do NOT set "present": "yes" just because a recipe often contains an allergen (e.g., meatballs often contain egg; aioli often contains egg). In such cases, use "present": "maybe" with a reason like "Often contains egg, but egg is not listed here."
+- If the text does not mention an allergen and there is no clear indication, usually set "present": "no" and note it is not listed.
+- Example: "Spaghetti and meatballs in tomato sauce" with no egg mentioned:
+  - "egg": { "present": "maybe", "reason": "Meatballs often use egg as binder, but egg is not listed here." }
+  - NOT allowed: "egg": { "present": "yes", "reason": "Contains egg yolks." } because egg/yolk is never mentioned.
+
+LIFESTYLE RULES:
+- Use dishName + menuDescription + ingredients + tags together.
+- Identify if the dish contains red meat (beef, veal, lamb, goat, meatballs, bolognese/ragu di carne), poultry (chicken, turkey), pork, fish, shellfish.
+- Detect processed meats (bacon, sausage, hot dog, pepperoni, salami, ham, pancetta, chorizo).
+- Detect desserts/high-sugar treats; detect comfort food (pasta, cheesy, fried, heavy sauces).
+- Spaghetti & meatballs / bolognese: treat as red meat even if ingredients list is incomplete; not red-meat-free or vegetarian.
+- Vegetarian: no meat/fish/shellfish. Vegan: also no dairy/eggs. If red meat present \u2192 not red-meat-free/vegetarian.
+
 IMPORTANT RULES \u2013 GLUTEN:
 - If any ingredient includes wheat, flour, bread, bun, brioche, baguette, pasta, noodles (in any language) and is NOT explicitly gluten-free:
   -> gluten.present = "yes".
@@ -3162,6 +3183,13 @@ OUTPUT FORMAT:
     "beef":    { "present": "yes" | "no" | "maybe", "reason": string },
     "alcohol": { "present": "yes" | "no" | "maybe", "reason": string },
     "spicy":   { "present": "yes" | "no" | "maybe", "reason": string }
+  },
+  "lifestyle_tags": string[],
+  "lifestyle_checks": {
+    "contains_red_meat": "yes" | "no" | "maybe",
+    "red_meat_free": "yes" | "no" | "maybe",
+    "vegetarian": "yes" | "no" | "maybe",
+    "vegan": "yes" | "no" | "maybe"
   },
   "meta": {
     "confidence": number,
@@ -3248,6 +3276,73 @@ function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
   return block;
 }
 __name(mapOrgansLLMToOrgansBlock, "mapOrgansLLMToOrgansBlock");
+async function runNutritionMiniLLM(env, input) {
+  if (!env.OPENAI_API_KEY) {
+    throw new Error("missing-openai-api-key");
+  }
+  const model = env.OPENAI_MODEL_NUTRITION || "gpt-4.1-mini";
+  const systemPrompt = `
+You will receive dishName, restaurantName, a nutrition_summary (kcal, grams, mg), and optional tags (badges).
+
+Your tasks:
+- Classify each nutrient as "low" | "medium" | "high" relative to a typical single meal:
+  calories (low <400, medium 400-800, high >800),
+  protein (low <15g, medium 15-30g, high >30g),
+  fat (low <12g, medium 12-25g, high >25g),
+  carbs (low <30g, medium 30-60g, high >60g),
+  sugar (low <10g, medium 10-20g, high >20g),
+  fiber (low <4g, medium 4-8g, high >8g),
+  sodium (low <600mg, medium 600-1200mg, high >1200mg).
+- Produce:
+  summary: 1-2 sentence overall description.
+  highlights: 2-5 concise bullet-style sentences (positive/neutral points).
+  cautions: 1-3 concise sentences on concerns.
+
+Output exactly one JSON object:
+{
+  "summary": string,
+  "highlights": string[],
+  "cautions": string[],
+  "classifications": {
+    "calories": "low"|"medium"|"high",
+    "protein": "low"|"medium"|"high",
+    "carbs": "low"|"medium"|"high",
+    "sugar": "low"|"medium"|"high",
+    "fiber": "low"|"medium"|"high",
+    "fat": "low"|"medium"|"high",
+    "sodium": "low"|"medium"|"high"
+  }
+}
+No extra text.`;
+  const body = {
+    model,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(input) }
+    ]
+  };
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`openai-nutrition-error-${res.status}: ${text}`);
+  }
+  const json2 = await res.json();
+  const content = json2?.choices?.[0]?.message?.content || "";
+  try {
+    return JSON.parse(content);
+  } catch (e) {
+    throw new Error(`openai-nutrition-json-parse-error: ${String(e)}`);
+  }
+}
+__name(runNutritionMiniLLM, "runNutritionMiniLLM");
 async function handleAllergenMini(request, env) {
   const body = await readJsonSafe(request) || {};
   const ingredients = Array.isArray(body.ingredients) && body.ingredients.length ? body.ingredients.map((it) => {
@@ -3334,7 +3429,9 @@ async function handleAllergenMini(request, env) {
       allergens_raw: data,
       allergen_flags,
       fodmap_flags,
-      lactose_flags
+      lactose_flags,
+      lifestyle_tags: Array.isArray(data.lifestyle_tags) ? data.lifestyle_tags : [],
+      lifestyle_checks: data.lifestyle_checks || null
     };
     return okJson(responsePayload, 200);
   } catch (err) {
@@ -9857,6 +9954,78 @@ async function runDishAnalysis(env, ctx, request) {
   let fodmap_flags = null;
   let lactose_flags = null;
   let allergenMiniDebug = null;
+  let allergen_lifestyle_tags = [];
+  let allergen_lifestyle_checks = null;
+  const allergenEvidenceText = [
+    dishName,
+    restaurantName,
+    menuDescription,
+    Array.isArray(body.tags) ? body.tags.join(" ") : "",
+    Array.isArray(body.ingredients) ? JSON.stringify(body.ingredients) : ""
+  ].join(" ").toLowerCase();
+  const hasEvidenceForAllergen = /* @__PURE__ */ __name((kind, text) => {
+    if (!text) return false;
+    const t = text.toLowerCase();
+    const table = {
+      gluten: [
+        "wheat",
+        "flour",
+        "bread",
+        "bun",
+        "brioche",
+        "baguette",
+        "pasta",
+        "noodle",
+        "spaghetti",
+        "fettuccine",
+        "penne",
+        "udon",
+        "ramen"
+      ],
+      milk: [
+        "milk",
+        "cream",
+        "cheese",
+        "butter",
+        "queso",
+        "lactose",
+        "yogurt",
+        "nata",
+        "crema",
+        "leche"
+      ],
+      egg: ["egg", "eggs", "yolk", "huevo", "huevos"],
+      soy: ["soy", "soya", "tofu", "soybean", "edamame"],
+      peanut: ["peanut", "cacahuate", "cacahuetes"],
+      tree_nut: [
+        "almond",
+        "cashew",
+        "walnut",
+        "pecan",
+        "pistachio",
+        "hazelnut",
+        "macadamia",
+        "pine nut"
+      ],
+      fish: ["fish", "salmon", "tuna", "cod", "trout", "tilapia", "anchovy"],
+      shellfish: [
+        "shrimp",
+        "prawn",
+        "crab",
+        "lobster",
+        "clam",
+        "mussel",
+        "oyster",
+        "scallop",
+        "camar\xF3n",
+        "gambas",
+        "mariscos"
+      ],
+      sesame: ["sesame", "tahini", "ajonjoli"]
+    };
+    const terms = table[kind] || [];
+    return terms.some((w) => t.includes(w));
+  }, "hasEvidenceForAllergen");
   const allergenInput = {
     dishName,
     restaurantName,
@@ -9897,10 +10066,17 @@ async function runDishAnalysis(env, ctx, request) {
     for (const key of allergenKeys) {
       const slot = data?.allergens?.[key];
       if (slot && slot.present && slot.present !== "no") {
+        let present = slot.present;
+        let message = slot.reason || "";
+        const hasEvidence = hasEvidenceForAllergen(key, allergenEvidenceText);
+        if (present === "yes" && !hasEvidence) {
+          present = "maybe";
+          message = slot.reason && slot.reason.length ? `${slot.reason} (not explicitly listed; marking as maybe)` : "Often contains this allergen, but it is not explicitly listed.";
+        }
         allergen_flags.push({
           kind: key,
-          present: slot.present,
-          message: slot.reason || "",
+          present,
+          message,
           source: "llm-mini"
         });
       }
@@ -9916,6 +10092,8 @@ async function runDishAnalysis(env, ctx, request) {
       source: "llm-mini"
     } : null;
     allergenMiniDebug = data;
+    allergen_lifestyle_tags = Array.isArray(data.lifestyle_tags) ? data.lifestyle_tags : [];
+    allergen_lifestyle_checks = data.lifestyle_checks || null;
   } else {
     allergenMiniDebug = allergenMiniResult || null;
   }
@@ -10037,7 +10215,7 @@ async function runDishAnalysis(env, ctx, request) {
     providers_order: providerOrder(env),
     attempts: recipeResult?.attempts ?? []
   };
-  const debug = {
+  let debug = {
     ...organs && organs.debug ? organs.debug : {},
     fatsecret_per_ingredient: fatsecretResult?.perIngredient || [],
     fatsecret_hits: fatsecretHits,
@@ -10049,6 +10227,31 @@ async function runDishAnalysis(env, ctx, request) {
     organs_llm_raw: organsLLMDebug || null,
     allergen_llm_raw: allergenMiniDebug || null
   };
+  let nutrition_badges = null;
+  if (finalNutritionSummary) {
+    const n = finalNutritionSummary;
+    nutrition_badges = [
+      typeof n.energyKcal === "number" ? `${Math.round(n.energyKcal)} kcal` : null,
+      typeof n.protein_g === "number" ? `${Math.round(n.protein_g)} g protein` : null,
+      typeof n.fat_g === "number" ? `${Math.round(n.fat_g)} g fat` : null,
+      typeof n.carbs_g === "number" ? `${Math.round(n.carbs_g)} g carbs` : null,
+      typeof n.sodium_mg === "number" ? `${Math.round(n.sodium_mg)} mg sodium` : null
+    ].filter(Boolean);
+  }
+  let nutrition_insights = null;
+  if (finalNutritionSummary) {
+    try {
+      const nutritionInput = {
+        dishName,
+        restaurantName,
+        nutrition_summary: finalNutritionSummary,
+        tags: nutrition_badges || []
+      };
+      nutrition_insights = await runNutritionMiniLLM(env, nutritionInput);
+    } catch (e) {
+      debug.nutrition_llm_error = String(e?.message || e);
+    }
+  }
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -10062,19 +10265,13 @@ async function runDishAnalysis(env, ctx, request) {
     allergen_flags,
     fodmap_flags,
     lactose_flags,
+    lifestyle_tags: allergen_lifestyle_tags,
+    lifestyle_checks: allergen_lifestyle_checks,
     nutrition_summary: finalNutritionSummary || null,
+    nutrition_badges,
+    nutrition_insights,
     debug
   };
-  if (finalNutritionSummary) {
-    const n = finalNutritionSummary;
-    result.nutrition_badges = [
-      typeof n.energyKcal === "number" ? `${Math.round(n.energyKcal)} kcal` : null,
-      typeof n.protein_g === "number" ? `${Math.round(n.protein_g)} g protein` : null,
-      typeof n.fat_g === "number" ? `${Math.round(n.fat_g)} g fat` : null,
-      typeof n.carbs_g === "number" ? `${Math.round(n.carbs_g)} g carbs` : null,
-      typeof n.sodium_mg === "number" ? `${Math.round(n.sodium_mg)} mg sodium` : null
-    ].filter(Boolean);
-  }
   return { status: 200, result };
 }
 __name(runDishAnalysis, "runDishAnalysis");
@@ -10416,7 +10613,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env, _ctx, middlewareCtx)
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-3gSmpG/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-DWgQG7/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -10448,7 +10645,7 @@ function __facade_invoke__(request, env, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-3gSmpG/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-DWgQG7/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

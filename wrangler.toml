@@ -22,6 +22,7 @@ service = "tb-metrics-core"
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
 OPENAI_MODEL_ALLERGEN = "gpt-4.1-mini"
+OPENAI_MODEL_NUTRITION = "gpt-4.1-mini"
 
 
 # --- D1 (default env) ---
@@ -103,6 +104,7 @@ USDA_FDC_HOST      = "api.nal.usda.gov"
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
 OPENAI_MODEL_ALLERGEN = "gpt-4.1-mini"
+OPENAI_MODEL_NUTRITION = "gpt-4.1-mini"
 
 
 # === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===
