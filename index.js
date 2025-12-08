@@ -170,6 +170,39 @@ EVIDENCE & EXPLANATION RULES (VERY IMPORTANT):
   - Good: "Typical meatball recipes use egg as a binder, and the recipe used for this analysis includes egg yolks."
   - Bad: "Contains egg yolks." (this hides where the information came from).
 `;
+
+const DEFAULT_SERVINGS_BY_CATEGORY = {
+  "Pasta & Pizza": 1.3,
+  "Sandwiches & Burgers": 1.2,
+  Salads: 1.1,
+  Mains: 1.2,
+  Kids: 1.0,
+  Desserts: 1.0,
+  Appetizers: 1.0,
+  Other: 1.0
+};
+
+const DIET_TITLE_KEYWORDS = [
+  "lighter",
+  "light ",
+  " light-",
+  "low fat",
+  "low-fat",
+  "low calorie",
+  "low-calorie",
+  "lean ",
+  "healthy ",
+  "healthy-",
+  "skinny",
+  "diet ",
+  "diet-"
+];
+
+function isDietTitle(title) {
+  if (!title || typeof title !== "string") return false;
+  const t = title.toLowerCase();
+  return DIET_TITLE_KEYWORDS.some((kw) => t.includes(kw));
+}
 async function readJson(req) {
   // --- enqueue minimal meal log (safe debug) ---
   try {
@@ -2404,6 +2437,15 @@ function extractMenuItemsFromUber(raw, queryText = "") {
     return m ? `${m[1]} Cal` : null;
   }
 
+  function extractCaloriesFromText(txt) {
+    if (!txt || typeof txt !== "string") return null;
+    const m = txt.match(/([\d,.]+)\s*Cal/i);
+    if (!m) return null;
+    const num = parseInt(m[1].replace(/,/g, ""), 10);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+  }
+
   function normalizeItemFields(it) {
     const clean = (s) =>
       String(s ?? "")
@@ -2431,12 +2473,14 @@ function extractMenuItemsFromUber(raw, queryText = "") {
   function makeItem(mi, sectionName, restaurantName) {
     const { price, price_display } = normalizePriceFields(mi);
     const calories_display = deriveCaloriesDisplay(mi, price_display);
-    let restaurantCalories = null;
-    if (mi?.nutrition && typeof mi.nutrition.calories === "number") {
-      restaurantCalories = mi.nutrition.calories;
-    } else if (typeof mi?.calories === "number") {
-      restaurantCalories = mi.calories;
-    }
+    const restaurantCalories =
+      (mi?.nutrition && typeof mi.nutrition.calories === "number"
+        ? mi.nutrition.calories
+        : null) ??
+      (typeof mi?.calories === "number" ? mi.calories : null) ??
+      extractCaloriesFromText(price_display) ??
+      extractCaloriesFromText(mi?.itemDescription || mi?.description || "") ??
+      null;
     return {
       name: mi.title || mi.name || "",
       description: mi.itemDescription || mi.description || "",
@@ -4430,9 +4474,35 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
 //   ingredientsNormalized?: any[],
 //   existingFlags?: any,
 //   userFlags?: any,
-//   locale?: string
+//   locale?: string,
+//   vision_insights?: {
+//     portion?: {
+//       servings_on_plate?: number,
+//       portionFactor?: number,
+//       confidence?: number,
+//       reason?: string
+//     },
+//     visual_ingredients?: Array<{
+//       guess: string,
+//       category: string,
+//       confidence: number,
+//       evidence: string
+//     }>,
+//     visual_cooking_method?: {
+//       primary: string,
+//       secondary: string[],
+//       confidence: number,
+//       reason: string
+//     },
+//     visual_lifestyle_cues?: {
+//       contains_red_meat?: "yes"|"no"|"maybe",
+//       processed_meat_level?: "none"|"some"|"heavy",
+//       dessert_like?: boolean,
+//       plant_forward?: boolean
+//     }
+//   }
 // }
-//
+// 
 // Returns: { ok: boolean, data?: any, error?: string }
 
 async function runOrgansLLM(env, payload) {
@@ -4452,6 +4522,13 @@ You MUST:
 - Be conservative: when unsure, choose a milder negative level instead of the worst.
 - Always return VALID JSON only, with no extra commentary.
 
+INPUT ALSO INCLUDES (OPTIONAL):
+- vision_insights: object with:
+  - portion: servings_on_plate, portionFactor, confidence, reason.
+  - visual_ingredients: visible items such as "fried egg", "melted cheese", "bacon strips", "shrimp pieces", "nuts on top".
+  - visual_cooking_method: primary cooking method and tags like "deep_fried", "breaded", "cheesy_top".
+  - visual_lifestyle_cues: contains_red_meat, processed_meat_level, dessert_like, plant_forward.
+
 Organs: always exactly these 7 IDs:
 - gut
 - liver
@@ -4464,6 +4541,17 @@ Organs: always exactly these 7 IDs:
 Severity levels:
 - high_negative, moderate_negative, mild_negative, neutral,
   mild_positive, moderate_positive, high_positive
+
+VISION-BASED ORGAN RULES:
+- Treat deep-fried / breaded foods (from visual_cooking_method) as more negative for gut, liver, heart, and metabolic than boiled/baked/grilled.
+- If visual_ingredients shows:
+  - processed meats (bacon, sausage, pepperoni, deli meats): increase negative impact for heart and metabolic.
+  - large melted cheese/cream: increase negative impact for gut (lactose) and heart/liver (saturated fat).
+  - visible red meat portions (steak, meatballs, burger patties): reflect red-meat concerns appropriately.
+- Use portion.servings_on_plate or portionFactor:
+  - Larger portions (>1.0) generally increase negative impact for metabolic and gut.
+  - Very small portions (<0.75) may soften impact slightly.
+- Never ignore nutrition_summary; use vision_insights as an extra evidence layer to refine organ scores and reasons.
 
 FODMAP & lactose:
 - Levels: high, medium, low, unknown.
@@ -4582,6 +4670,32 @@ ${EVIDENCE_GUIDELINES}
  * @property {string} [menuDescription]
  * @property {Array<{name: string, normalized?: string, quantity?: string, language?: string}>} ingredients
  * @property {string[]} [tags]
+ * @property {{
+ *   portion?: {
+ *     servings_on_plate?: number,
+ *     portionFactor?: number,
+ *     confidence?: number,
+ *     reason?: string
+ *   },
+ *   visual_ingredients?: Array<{
+ *     guess: string,
+ *     category: string,
+ *     confidence: number,
+ *     evidence: string
+ *   }>,
+ *   visual_cooking_method?: {
+ *     primary: string,
+ *     secondary: string[],
+ *     confidence: number,
+ *     reason: string
+ *   },
+ *   visual_lifestyle_cues?: {
+ *     contains_red_meat?: "yes"|"no"|"maybe",
+ *     processed_meat_level?: "none"|"some"|"heavy",
+ *     dessert_like?: boolean,
+ *     plant_forward?: boolean
+ *   }
+ * }} [vision_insights]
  */
 
 /**
@@ -4978,7 +5092,7 @@ async function runPortionVisionLLM(env, input) {
       source: "portion_vision_no_image",
       portionFactor: 1,
       confidence: 0,
-      reason: "No image provided; defaulting to factor 1.",
+      reason: "No image provided; defaulting to 1.0 serving.",
       input: {
         dishName: input && input.dishName ? String(input.dishName) : null,
         restaurantName:
@@ -4987,7 +5101,8 @@ async function runPortionVisionLLM(env, input) {
           input && input.menuSection ? String(input.menuSection) : null,
         hasImage: false,
         imageUrl: null
-      }
+      },
+      insights: null
     };
   }
 
@@ -5007,7 +5122,8 @@ async function runPortionVisionLLM(env, input) {
           input && input.menuSection ? String(input.menuSection) : null,
         hasImage: true,
         imageUrl
-      }
+      },
+      insights: null
     };
   }
 
@@ -5018,39 +5134,99 @@ async function runPortionVisionLLM(env, input) {
     "gpt-4.1-mini";
 
   const systemPrompt = `
-You are a portion size estimator for restaurant dishes using images.
+You are a vision assistant for a food-health app.
 
 You will receive:
-- dishName
-- restaurantName
-- menuSection
-- menuDescription (may be empty)
-- An image of a single plated portion of the dish.
+- dishName, restaurantName, menuSection, menuDescription
+- ONE photo of the plated dish.
 
-Your goal:
-- Estimate how many "typical restaurant servings" this pictured plate represents.
-- Respond as a JSON object ONLY (no extra text) with:
-  - "portionFactor": number (0.25 to 3.0) where:
-    - 1.0 = one typical restaurant serving for this dish.
-    - 0.5 = roughly half a typical serving.
-    - 2.0 = roughly double a typical serving.
-  - "confidence": number from 0.0 to 1.0 (1.0 = very confident).
-  - "reason": short sentence explaining the estimate (e.g. "Plate looks quite full with multiple pancakes and sides, about a standard breakfast serving.").
+Your tasks:
 
-Guidelines:
-- Focus on relative size: compare the food to the plate and typical restaurant plating.
-- If the photo is ambiguous or cropped, choose a conservative estimate and lower confidence.
-- If you cannot see enough of the food to judge, use portionFactor=1.0 and confidence<=0.2 with a clear reason.
+1) PORTION / SERVINGS
+- Assume there is a "standard restaurant serving" for this dish.
+- Estimate how many such servings are on the plate (servings_on_plate).
+  - 1.0 = typical single restaurant serving.
+  - 0.5 = light/small serving.
+  - 2.0 = clearly oversized double serving.
+- Also provide a portionFactor field that can be used as a multiplier for calories (usually == servings_on_plate).
+- confidence: 0.0–1.0
+- reason: 1–2 short sentences.
+
+2) VISUAL INGREDIENTS (for allergens/lifestyle)
+- From the image, list visible ingredients that are strong visual signals:
+  - eggs (fried egg, scrambled egg),
+  - cheese / cream / dairy toppings,
+  - shellfish (shrimp, prawns, crab, mussels),
+  - red meat (steak, meatballs, burger patties),
+  - processed meat (bacon strips, sausages, deli slices, pepperoni),
+  - nuts (almond slices, peanuts, walnuts, pistachios),
+  - seeds (sesame on buns or toppings),
+  - obvious sauces (white cream sauce, red tomato sauce, chocolate syrup, etc.).
+- For each, provide:
+  - guess: short human label ("fried egg", "melted cheese on top", "shrimp pieces", "bacon strips").
+  - category: one of:
+    "egg", "dairy", "shellfish", "fish", "red_meat", "poultry",
+    "processed_meat", "nut", "sesame", "sauce", "vegetable", "fruit", "grain", "unknown".
+  - confidence: 0.0–1.0
+  - evidence: short phrase describing the visual cue.
+
+3) VISUAL COOKING METHOD
+- Estimate primary cooking method for the main visible item(s):
+  - primary: "fried" | "deep_fried" | "baked" | "grilled" | "broiled" |
+             "boiled" | "steamed" | "raw" | "roasted" | "sautéed" | "mixed" | "unknown"
+- secondary: list of extra tags, e.g.:
+  - ["breaded", "crispy", "cheesy_top", "saucy", "charred"]
+- confidence: 0.0–1.0
+- reason: short phrase ("golden breaded crust in oil suggests deep-fried", "charred grill marks").
+
+4) VISUAL LIFESTYLE CUES
+Based ONLY on what you SEE (do NOT trust menu tags),
+estimate:
+- contains_red_meat: "yes" | "no" | "maybe"
+- processed_meat_level: "none" | "some" | "heavy"
+- dessert_like: boolean
+- plant_forward: boolean
+
+IMPORTANT:
+- When in doubt, keep confidence lower and use "maybe".
+- Do NOT invent invisible ingredients (e.g. do not assume egg in sauce unless you see egg).
+- Prefer high-confidence visual signals: visible eggs, bacon, cheese, shrimp, etc.
 
 ${EVIDENCE_GUIDELINES}
 
-Output format (MUST be valid JSON, no extra keys):
+OUTPUT:
+Return ONE JSON object with this exact shape:
 
 {
-  "portionFactor": number,
-  "confidence": number,
-  "reason": string
+  "portion": {
+    "servings_on_plate": number,
+    "portionFactor": number,
+    "confidence": number,
+    "reason": string
+  },
+  "visual_ingredients": [
+    {
+      "guess": string,
+      "category": string,
+      "confidence": number,
+      "evidence": string
+    }
+  ],
+  "visual_cooking_method": {
+    "primary": string,
+    "secondary": string[],
+    "confidence": number,
+    "reason": string
+  },
+  "visual_lifestyle_cues": {
+    "contains_red_meat": "yes"|"no"|"maybe",
+    "processed_meat_level": "none"|"some"|"heavy",
+    "dessert_like": boolean,
+    "plant_forward": boolean
+  }
 }
+
+No extra keys, no commentary outside JSON.
 `.trim();
 
   const base = env.OPENAI_API_BASE || "https://api.openai.com";
@@ -5117,7 +5293,8 @@ Output format (MUST be valid JSON, no extra keys):
             input && input.menuSection ? String(input.menuSection) : null,
           hasImage: true,
           imageUrl
-        }
+        },
+        insights: null
       };
     }
 
@@ -5145,22 +5322,66 @@ Output format (MUST be valid JSON, no extra keys):
             input && input.menuSection ? String(input.menuSection) : null,
           hasImage: true,
           imageUrl
-        }
+        },
+        insights: null
       };
     }
 
+    const portion = parsed && parsed.portion ? parsed.portion : {};
     const pf =
-      typeof parsed.portionFactor === "number" && isFinite(parsed.portionFactor)
-        ? parsed.portionFactor
-        : 1;
+      typeof portion.portionFactor === "number" && isFinite(portion.portionFactor)
+        ? portion.portionFactor
+        : typeof portion.servings_on_plate === "number" &&
+            isFinite(portion.servings_on_plate)
+          ? portion.servings_on_plate
+          : 1;
 
     const conf =
-      typeof parsed.confidence === "number" && isFinite(parsed.confidence)
-        ? parsed.confidence
+      typeof portion.confidence === "number" && isFinite(portion.confidence)
+        ? portion.confidence
         : 0;
 
     const reason =
-      typeof parsed.reason === "string" ? parsed.reason : "No reason provided.";
+      typeof portion.reason === "string"
+        ? portion.reason
+        : "No portion reason provided.";
+
+    const insights = {
+      portion: {
+        servings_on_plate:
+          typeof portion.servings_on_plate === "number" &&
+          isFinite(portion.servings_on_plate)
+            ? portion.servings_on_plate
+            : pf,
+        portionFactor: pf,
+        confidence: conf,
+        reason
+      },
+      visual_ingredients:
+        Array.isArray(parsed.visual_ingredients) &&
+        parsed.visual_ingredients.length > 0
+          ? parsed.visual_ingredients
+          : [],
+      visual_cooking_method:
+        parsed.visual_cooking_method && typeof parsed.visual_cooking_method === "object"
+          ? parsed.visual_cooking_method
+          : {
+              primary: "unknown",
+              secondary: [],
+              confidence: 0,
+              reason: ""
+            },
+      visual_lifestyle_cues:
+        parsed.visual_lifestyle_cues &&
+        typeof parsed.visual_lifestyle_cues === "object"
+          ? parsed.visual_lifestyle_cues
+          : {
+              contains_red_meat: "maybe",
+              processed_meat_level: "none",
+              dessert_like: false,
+              plant_forward: false
+            }
+    };
 
     return {
       ok: true,
@@ -5176,7 +5397,8 @@ Output format (MUST be valid JSON, no extra keys):
           input && input.menuSection ? String(input.menuSection) : null,
         hasImage: true,
         imageUrl
-      }
+      },
+      insights
     };
   } catch (err) {
     return {
@@ -5195,7 +5417,8 @@ Output format (MUST be valid JSON, no extra keys):
           input && input.menuSection ? String(input.menuSection) : null,
         hasImage: true,
         imageUrl
-      }
+      },
+      insights: null
     };
   }
 }
@@ -6763,24 +6986,9 @@ async function resolveRecipeWithCache(
   let cacheHit = false;
   let attempts = [];
 
-  const cached = !force ? await recipeCacheRead(env, cacheKey) : null;
-  if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
-    cacheHit = true;
-    pickedSource = cached.from || cached.provider || "cache";
-    recipe = cached.recipe;
-    ingredients = [...cached.ingredients];
-    notes =
-      typeof cached.notes === "object" && cached.notes
-        ? { ...cached.notes }
-        : {};
-    out = {
-      ...cached,
-      cache: true,
-      recipe,
-      ingredients
-    };
-    selectedProvider = pickedSource;
-  } else {
+  async function resolveFromProviders() {
+    let selected = null;
+    let candidateOut = null;
     let lastAttempt = null;
     const providerList = Array.isArray(providersOverride)
       ? providersOverride
@@ -6803,17 +7011,60 @@ async function resolveRecipeWithCache(
         Array.isArray(candidate.ingredients) &&
         candidate.ingredients.length
       ) {
-        out = candidate;
-        selectedProvider = candidate.provider || p;
+        candidateOut = candidate;
+        selected = candidate.provider || p;
         break;
       }
     }
-    if (!out && lastAttempt) {
-      out = lastAttempt;
-      if (!selectedProvider) {
-        selectedProvider = lastAttempt.provider || null;
-      }
+    if (!candidateOut && lastAttempt) {
+      candidateOut = lastAttempt;
+      if (!selected) selected = lastAttempt.provider || null;
     }
+    return { candidateOut, selected };
+  }
+
+  const cached = !force ? await recipeCacheRead(env, cacheKey) : null;
+  if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
+    cacheHit = true;
+    pickedSource = cached.from || cached.provider || "cache";
+    recipe = cached.recipe;
+    ingredients = [...cached.ingredients];
+    notes =
+      typeof cached.notes === "object" && cached.notes
+        ? { ...cached.notes }
+      : {};
+    out = {
+      ...cached,
+      cache: true,
+      recipe,
+      ingredients
+    };
+    selectedProvider = pickedSource;
+  } else {
+    const { candidateOut, selected } = await resolveFromProviders();
+    out = candidateOut;
+    selectedProvider = selected;
+  }
+
+  const cachedTitle =
+    (out && out.recipe && (out.recipe.title || out.recipe.name)) || "";
+  const dishLower = dish.toLowerCase();
+  if (
+    cacheHit &&
+    cachedTitle &&
+    isDietTitle(cachedTitle) &&
+    !isDietTitle(dishLower)
+  ) {
+    cacheHit = false;
+    out = null;
+    recipe = null;
+    ingredients = [];
+    notes = { ...(notes || {}), skipped_cached_diet: cachedTitle };
+    pickedSource = "cache_skip_diet";
+
+    const { candidateOut, selected } = await resolveFromProviders();
+    out = candidateOut;
+    selectedProvider = selected;
   }
 
   if (!cacheHit) {
@@ -9190,6 +9441,15 @@ async function extractMenuGateway(
     };
   }
 
+  function extractCaloriesFromText(txt) {
+    if (!txt || typeof txt !== "string") return null;
+    const m = txt.match(/([\d,.]+)\s*Cal/i);
+    if (!m) return null;
+    const num = parseInt(m[1].replace(/,/g, ""), 10);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+  }
+
   const dishes = (uber.items || []).map((it, idx) => {
     const raw = it.raw || {};
     const imageUrl =
@@ -9197,6 +9457,17 @@ async function extractMenuGateway(
       raw.imageUrl ||
       raw.image_url ||
       raw.image ||
+      null;
+
+    const numericRestaurantCalories =
+      (typeof it.restaurantCalories === "number" ? it.restaurantCalories : null) ??
+      (raw?.nutrition && typeof raw.nutrition.calories === "number"
+        ? raw.nutrition.calories
+        : null) ??
+      (typeof it.calories === "number" ? it.calories : null) ??
+      extractCaloriesFromText(it.price_display) ??
+      extractCaloriesFromText(it.priceText) ??
+      extractCaloriesFromText(it.description || raw.description || "") ??
       null;
 
     return {
@@ -9208,10 +9479,7 @@ async function extractMenuGateway(
       rawPrice: typeof it.price === "number" ? it.price : null,
       priceText: it.price_display || null,
       imageUrl,
-      restaurantCalories:
-        typeof it.restaurantCalories === "number"
-          ? it.restaurantCalories
-          : null
+      restaurantCalories: numericRestaurantCalories
     };
   });
 
@@ -9516,21 +9784,54 @@ const _worker_impl = {
     }
 
     if (pathname === "/pipeline/analyze-dish" && request.method === "POST") {
-      const { status, result } = await runDishAnalysis(env, ctx, request);
-      return okJson(result, status);
+      try {
+        const body = (await readJson(request)) || {};
+
+        const { status, result } = await runDishAnalysis(env, body, ctx);
+        return okJson(result, status);
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            source: "pipeline.analyze-dish",
+            error: "pipeline_analyze_dish_exception",
+            details: err && err.message ? String(err.message) : String(err)
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
     }
     if (pathname === "/pipeline/analyze-dish/card" && request.method === "POST") {
-      const { status, result } = await runDishAnalysis(env, ctx, request);
-      if (status !== 200) return okJson(result, status);
-      const body = (await readJsonSafe(request)) || {};
-      const card = {
-        apiVersion: result.apiVersion || "v1",
-        dishName: result.dishName || body?.dishName || body?.dish || null,
-        restaurantName:
-          result.restaurantName || body?.restaurantName || body?.restaurant || null,
-        summary: result.summary || null
-      };
-      return okJson(card, status);
+      try {
+        const body = (await readJson(request)) || {};
+
+        const { status, result } = await runDishAnalysis(env, body, ctx);
+        if (status !== 200) return okJson(result, status);
+        const card = {
+          apiVersion: result.apiVersion || "v1",
+          dishName: result.dishName || body?.dishName || body?.dish || null,
+          restaurantName:
+            result.restaurantName || body?.restaurantName || body?.restaurant || null,
+          summary: result.summary || null
+        };
+        return okJson(card, status);
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            source: "pipeline.analyze-dish/card",
+            error: "pipeline_analyze_dish_card_exception",
+            details: err && err.message ? String(err.message) : String(err)
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
     }
 
     if (pathname === "/organs/from-dish" && request.method === "GET") {
@@ -13882,9 +14183,10 @@ function filterLexHitsForIngredient(ingredientName, hits) {
   });
 }
 // Shared helper for /pipeline/analyze-dish and /pipeline/analyze-dish/card
-async function runDishAnalysis(env, ctx, request) {
-  const correlationId = _cid(request.headers);
-  const body = (await readJsonSafe(request)) || {};
+async function runDishAnalysis(env, body, ctx) {
+  const correlationId =
+    (body && body.correlationId) || (body && body.cid) || null;
+  let debug = {};
   const lang = body.lang || body.language || "en";
   const restaurantCalories = body.restaurantCalories;
   const portionFactor = body.portionFactor;
@@ -13897,6 +14199,8 @@ async function runDishAnalysis(env, ctx, request) {
       body.description ||
       body.dishDescription ||
       "").trim();
+  const menuSection = body.menuSection || body.section || null;
+  const canonicalCategory = body.canonicalCategory || body.category || null;
 
   if (!dishName) {
     return {
@@ -14173,14 +14477,47 @@ async function runDishAnalysis(env, ctx, request) {
       };
       nutrition_source = nutrition_source || "restaurant_kcal_only";
     } else {
-      finalNutritionSummary = {
-        ...finalNutritionSummary,
-        energyKcal: kcalFromRestaurant
-      };
-      if (nutrition_source && !nutrition_source.startsWith("restaurant_")) {
-        nutrition_source = `${nutrition_source}+restaurant_kcal`;
-      } else if (!nutrition_source) {
-        nutrition_source = "restaurant_kcal";
+      const baseKcal =
+        typeof finalNutritionSummary.energyKcal === "number"
+          ? finalNutritionSummary.energyKcal
+          : 0;
+
+      debug.restaurant_calories = kcalFromRestaurant;
+
+      if (baseKcal > 0) {
+        const ratio = kcalFromRestaurant / baseKcal;
+
+        finalNutritionSummary = {
+          energyKcal: kcalFromRestaurant,
+          protein_g:
+            (finalNutritionSummary.protein_g || 0) * ratio,
+          fat_g: (finalNutritionSummary.fat_g || 0) * ratio,
+          carbs_g: (finalNutritionSummary.carbs_g || 0) * ratio,
+          sugar_g: (finalNutritionSummary.sugar_g || 0) * ratio,
+          fiber_g: (finalNutritionSummary.fiber_g || 0) * ratio,
+          sodium_mg: (finalNutritionSummary.sodium_mg || 0) * ratio
+        };
+
+        debug.nutrition_restaurant_ratio = ratio;
+
+        if (nutrition_source && !nutrition_source.startsWith("restaurant_")) {
+          nutrition_source = `${nutrition_source}+restaurant_kcal_scaled`;
+        } else if (!nutrition_source) {
+          nutrition_source = "restaurant_kcal_scaled";
+        } else {
+          nutrition_source = `${nutrition_source}_scaled`;
+        }
+      } else {
+        // No base kcal; we can only set energy and mark source
+        finalNutritionSummary = {
+          ...finalNutritionSummary,
+          energyKcal: kcalFromRestaurant
+        };
+        if (nutrition_source && !nutrition_source.startsWith("restaurant_")) {
+          nutrition_source = `${nutrition_source}+restaurant_kcal`;
+        } else if (!nutrition_source) {
+          nutrition_source = "restaurant_kcal";
+        }
       }
     }
 
@@ -14361,7 +14698,8 @@ async function runDishAnalysis(env, ctx, request) {
       : [],
     tags: Array.isArray(body.tags)
       ? body.tags.map((t) => String(t || "").trim()).filter(Boolean)
-      : []
+      : [],
+    vision_insights: debug.vision_insights || null
   };
 
   let allergenMiniResult = await runAllergenMiniLLM(env, allergenInput);
@@ -14433,7 +14771,8 @@ async function runDishAnalysis(env, ctx, request) {
     ingredientsNormalized: normalized?.items || ingredients || [],
     existingFlags: {},
     userFlags: user_flags,
-    locale: lang
+    locale: lang,
+    vision_insights: debug.vision_insights || null
   };
 
   const organsLLMResult = await runOrgansLLM(env, llmPayload);
@@ -14590,7 +14929,8 @@ async function runDishAnalysis(env, ctx, request) {
     attempts: recipeResult?.attempts ?? []
   };
 
-  let debug = {
+  debug = {
+    ...debug,
     ...(organs && organs.debug ? organs.debug : {}),
     fatsecret_per_ingredient: fatsecretResult?.perIngredient || [],
     fatsecret_hits: fatsecretHits,
@@ -14624,25 +14964,99 @@ async function runDishAnalysis(env, ctx, request) {
   }
 
   debug.portion_vision = portionVisionDebug;
-
-  const manualPortionFactor =
-    1; // manual portion selection currently disabled; always default to 1
-
-  let aiPortionFactor = 1;
   if (
     portionVisionDebug &&
     portionVisionDebug.ok &&
-    portionVisionDebug.source === "portion_vision_openai" &&
-    typeof portionVisionDebug.portionFactor === "number" &&
-    isFinite(portionVisionDebug.portionFactor) &&
-    portionVisionDebug.portionFactor > 0.25 &&
-    portionVisionDebug.portionFactor < 3 &&
-    typeof portionVisionDebug.confidence === "number" &&
-    portionVisionDebug.confidence >= 0.6 &&
-    dishImageUrl &&
-    !restaurantCalories
+    portionVisionDebug.insights
   ) {
-    aiPortionFactor = portionVisionDebug.portionFactor;
+    debug.vision_insights = portionVisionDebug.insights;
+  }
+
+  // Manual portion factor currently not used (no user selector in UI)
+  const manualPortionFactor = 1;
+
+  let aiPortionFactor = 1;
+  if (
+    dishImageUrl &&
+    !restaurantCalories &&
+    portionVisionDebug &&
+    portionVisionDebug.ok &&
+    portionVisionDebug.source === "portion_vision_openai"
+  ) {
+    const insights = portionVisionDebug.insights || {};
+    const portionInsights = insights.portion || {};
+
+    let pfCandidate = null;
+
+    if (
+      typeof portionInsights.servings_on_plate === "number" &&
+      isFinite(portionInsights.servings_on_plate)
+    ) {
+      pfCandidate = portionInsights.servings_on_plate;
+    } else if (
+      typeof portionInsights.portionFactor === "number" &&
+      isFinite(portionInsights.portionFactor)
+    ) {
+      pfCandidate = portionInsights.portionFactor;
+    } else if (
+      typeof portionVisionDebug.portionFactor === "number" &&
+      isFinite(portionVisionDebug.portionFactor)
+    ) {
+      pfCandidate = portionVisionDebug.portionFactor;
+    }
+
+    const pfConfidence =
+      typeof portionInsights.confidence === "number" &&
+      isFinite(portionInsights.confidence)
+        ? portionInsights.confidence
+        : typeof portionVisionDebug.confidence === "number" &&
+            isFinite(portionVisionDebug.confidence)
+          ? portionVisionDebug.confidence
+          : 0;
+
+    if (
+      typeof pfCandidate === "number" &&
+      isFinite(pfCandidate) &&
+      pfCandidate > 0.25 &&
+      pfCandidate < 3 &&
+      pfConfidence >= 0.6
+    ) {
+      aiPortionFactor = pfCandidate;
+    }
+  } else if (!dishImageUrl && !restaurantCalories) {
+    const catKey = canonicalCategory || menuSection || "Other";
+    let defaultFactor = 1;
+    if (typeof catKey === "string") {
+      if (DEFAULT_SERVINGS_BY_CATEGORY[catKey]) {
+        defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY[catKey];
+      } else {
+        const lower = catKey.toLowerCase();
+        if (lower.includes("pasta") || lower.includes("pizza")) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Pasta & Pizza"];
+        } else if (
+          lower.includes("burger") ||
+          lower.includes("sandwich") ||
+          lower.includes("sandwiches & burgers")
+        ) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Sandwiches & Burgers"];
+        } else if (lower.includes("salad")) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Salads"];
+        } else if (lower.includes("kids")) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Kids"];
+        } else if (lower.includes("dessert")) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Desserts"];
+        } else if (
+          lower.includes("mains") ||
+          lower.includes("dinners") ||
+          lower.includes("skillets")
+        ) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Mains"];
+        } else {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Other"];
+        }
+      }
+    }
+    aiPortionFactor = defaultFactor;
   }
 
   const effectivePortionFactor = manualPortionFactor * aiPortionFactor;
