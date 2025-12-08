@@ -23,6 +23,7 @@ FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
 OPENAI_MODEL_ALLERGEN = "gpt-4.1-mini"
 OPENAI_MODEL_NUTRITION = "gpt-4.1-mini"
+PARALLEL_LLM = "true"
 
 
 # --- D1 (default env) ---
@@ -105,6 +106,7 @@ FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
 OPENAI_MODEL_ALLERGEN = "gpt-4.1-mini"
 OPENAI_MODEL_NUTRITION = "gpt-4.1-mini"
+PARALLEL_LLM = "true"
 
 
 # === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===

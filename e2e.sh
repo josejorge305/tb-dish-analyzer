@@ -105,3 +105,53 @@ echo "Dish:       $DISH_NAME"
 echo "User:       $USER_ID"
 echo "Status:     E2E smoke completed."
 
+############################################################
+# Plate components / vision tests (Brisket Melt style)
+############################################################
+
+GATEWAY_BASE_URL="${GATEWAY_BASE_URL:-https://tb-dish-processor-production.tummybuddy.workers.dev}"
+
+echo ""
+echo "== Test 1: Denny's Spicy Brisket Melt + hash browns =="
+curl -sS -X POST \
+  "$GATEWAY_BASE_URL/pipeline/analyze-dish/card" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dishName": "Spicy Brisket Melt",
+    "restaurantName": "Denny'\''s",
+    "menuDescription": "Slow-smoked brisket burnt ends, white Cheddar and American cheeses, caramelized onions, scrambled eggs, chipotle aioli on artisan bread. Served with crispy hash browns.",
+    "menuSection": "Summer of Sandwiches",
+    "restaurantCalories": 1590,
+    "imageUrl": "REPLACE_WITH_SPICY_BRISKET_MELT_IMAGE_URL",
+    "lang": "en"
+  }' | jq '{dishName, plate_components, nutrition_summary, nutrition_breakdown, allergen_breakdown, debug: {vision_insights, nutrition_breakdown: .debug.nutrition_breakdown}}'
+
+echo ""
+echo "== Test 2: Bacon burger + fries (burger main, fries side) =="
+curl -sS -X POST \
+  "$GATEWAY_BASE_URL/pipeline/analyze-dish/card" \
+  -H "Content-Type: "application/json" \
+  -d '{
+    "dishName": "Bacon Obsession Burger",
+    "restaurantName": "Denny'\''s",
+    "menuDescription": "Bacon cheeseburger on brioche bun with lettuce, tomato, onion, pickles. Served with wavy-cut fries.",
+    "menuSection": "Summer of Sandwiches",
+    "restaurantCalories": 1330,
+    "imageUrl": "REPLACE_WITH_BURGER_AND_FRIES_IMAGE_URL",
+    "lang": "en"
+  }' | jq '{dishName, plate_components, nutrition_summary, nutrition_breakdown, allergen_breakdown, debug: {vision_insights, nutrition_breakdown: .debug.nutrition_breakdown}}'
+
+echo ""
+echo "== Test 3: Protein + side salad (salmon + salad) =="
+curl -sS -X POST \
+  "$GATEWAY_BASE_URL/pipeline/analyze-dish/card" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dishName": "Grilled Salmon with Side Salad",
+    "restaurantName": "Test Bistro",
+    "menuDescription": "Grilled salmon fillet served with a small green salad and vinaigrette.",
+    "menuSection": "Mains",
+    "restaurantCalories": 780,
+    "imageUrl": "REPLACE_WITH_SALMON_SALAD_IMAGE_URL",
+    "lang": "en"
+  }' | jq '{dishName, plate_components, nutrition_summary, nutrition_breakdown, allergen_breakdown, debug: {vision_insights, nutrition_breakdown: .debug.nutrition_breakdown}}'
