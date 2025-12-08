@@ -150,6 +150,26 @@ function pickFloat(query, name, def) {
   const n = Number(v);
   return Number.isFinite(n) ? n : def;
 }
+
+const EVIDENCE_GUIDELINES = `
+EVIDENCE & EXPLANATION RULES (VERY IMPORTANT):
+
+- Every reason or explanation you output must briefly say WHAT you are claiming and WHY you think it.
+- Always mention WHERE your evidence comes from when relevant:
+  - "menu description mentions ..." if you relied on the dish name or menuDescription.
+  - "the recipe used for this analysis includes ..." if you relied on the resolved ingredient list (ingredients from recipe / providers).
+  - "the nutrition summary for this dish shows ..." if you used the numeric nutrition_summary (kcal, grams, mg).
+  - "typical recipes for this dish usually include ..." only when you are using common recipe patterns.
+  - "based on general nutritional / medical knowledge" for organ impact explanations.
+- Do NOT just say "contains X" without context. Always mention whether the evidence is from:
+  - menu text,
+  - recipe ingredients,
+  - nutrition databases,
+  - or typical recipes and general knowledge.
+- Example for meatballs:
+  - Good: "Typical meatball recipes use egg as a binder, and the recipe used for this analysis includes egg yolks."
+  - Bad: "Contains egg yolks." (this hides where the information came from).
+`;
 async function readJson(req) {
   // --- enqueue minimal meal log (safe debug) ---
   try {
@@ -2411,6 +2431,12 @@ function extractMenuItemsFromUber(raw, queryText = "") {
   function makeItem(mi, sectionName, restaurantName) {
     const { price, price_display } = normalizePriceFields(mi);
     const calories_display = deriveCaloriesDisplay(mi, price_display);
+    let restaurantCalories = null;
+    if (mi?.nutrition && typeof mi.nutrition.calories === "number") {
+      restaurantCalories = mi.nutrition.calories;
+    } else if (typeof mi?.calories === "number") {
+      restaurantCalories = mi.calories;
+    }
     return {
       name: mi.title || mi.name || "",
       description: mi.itemDescription || mi.description || "",
@@ -2418,6 +2444,7 @@ function extractMenuItemsFromUber(raw, queryText = "") {
       price_display,
       section: sectionName || "",
       calories_display,
+      restaurantCalories,
       restaurant_name: restaurantName || "",
       source: "uber_eats"
     };
@@ -4415,7 +4442,7 @@ async function runOrgansLLM(env, payload) {
 
   const model = "gpt-4o-mini";
 
-  const systemPrompt = `
+const systemPrompt = `
 You are a diet and organ comfort analysis assistant for an IBS / gut-sensitivity app.
 You work at a wellness / educational level (not medical advice).
 
@@ -4487,6 +4514,8 @@ You MUST return JSON with this shape:
     "organs_overview": string
   }
 }
+
+${EVIDENCE_GUIDELINES}
 `;
 
   const body = {
@@ -4585,7 +4614,7 @@ async function runAllergenMiniLLM(env, input) {
 
   const model = env.OPENAI_MODEL_ALLERGEN || "gpt-4.1-mini";
 
-  const systemPrompt = `
+const systemPrompt = `
 You are an expert allergen, FODMAP, and lactose analyst for restaurant dishes.
 
 INPUT:
@@ -4627,6 +4656,24 @@ LIFESTYLE RULES:
 - Detect desserts/high-sugar treats; detect comfort food (pasta, cheesy, fried, heavy sauces).
 - Spaghetti & meatballs / bolognese: treat as red meat even if ingredients list is incomplete; not red-meat-free or vegetarian.
 - Vegetarian: no meat/fish/shellfish. Vegan: also no dairy/eggs. If red meat present → not red-meat-free/vegetarian.
+
+LIFESTYLE TAGS:
+- Emit lifestyle_tags as concise codes based on BOTH the recipe/ingredient list AND the dish name/description.
+- Common tags to use:
+  - "contains_red_meat" (beef, lamb, veal, goat, meatballs, bolognese/ragu di carne, carne)
+  - "processed_meat" (bacon, sausage, pancetta, salami, pepperoni, hot dogs, ham)
+  - "contains_poultry" (chicken, turkey)
+  - "contains_pork" (pork, pancetta, bacon)
+  - "contains_fish" (fish, salmon, tuna, cod, etc.)
+  - "contains_shellfish" (shrimp, prawns, crab, lobster, clams, mussels, oysters, scallops)
+  - "comfort_food" (fried/cheesy/creamy/heavy pasta, casseroles, burgers)
+  - "high_sugar_dessert" (cakes, pies, ice cream, milkshakes, very sweet desserts)
+  - "plant_forward" (mostly vegetables/legumes/whole grains with little or no meat)
+- Example: "Spaghetti and meatballs" with beef/pork and pancetta:
+  - lifestyle_checks.contains_red_meat = "yes"
+  - lifestyle_tags should include at least "contains_red_meat" and "processed_meat", and optionally "comfort_food".
+
+${EVIDENCE_GUIDELINES}
 
 IMPORTANT RULES – GLUTEN:
 - If any ingredient includes wheat, flour, bread, bun, brioche, baguette, pasta, noodles (in any language) and is NOT explicitly gluten-free:
@@ -4848,23 +4895,31 @@ async function runNutritionMiniLLM(env, input) {
   const model = env.OPENAI_MODEL_NUTRITION || "gpt-4.1-mini";
 
   const systemPrompt = `
-You will receive dishName, restaurantName, a nutrition_summary (kcal, grams, mg), and optional tags (badges).
+You are a nutrition coach analyzing a single restaurant dish.
 
-Your tasks:
-- Classify each nutrient as "low" | "medium" | "high" relative to a typical single meal:
-  calories (low <400, medium 400-800, high >800),
-  protein (low <15g, medium 15-30g, high >30g),
-  fat (low <12g, medium 12-25g, high >25g),
-  carbs (low <30g, medium 30-60g, high >60g),
-  sugar (low <10g, medium 10-20g, high >20g),
-  fiber (low <4g, medium 4-8g, high >8g),
-  sodium (low <600mg, medium 600-1200mg, high >1200mg).
-- Produce:
-  summary: 1-2 sentence overall description.
-  highlights: 2-5 concise bullet-style sentences (positive/neutral points).
-  cautions: 1-3 concise sentences on concerns.
+You will receive:
+- dishName, restaurantName
+- a nutrition_summary per serving:
+  - energyKcal (kcal)
+  - protein_g, fat_g, carbs_g, sugar_g, fiber_g (grams)
+  - sodium_mg (milligrams)
+- optional tags from existing heuristics.
 
-Output exactly one JSON object:
+Tasks:
+1. Classify each of these as "low", "medium", or "high" for ONE MEAL:
+   - calories, protein, carbs, sugar, fiber, fat, sodium.
+   (Use reasonable ranges; you do not need to output the thresholds.)
+
+2. Produce:
+   - summary: 1–2 sentences that describe the overall nutrition profile in plain language.
+   - highlights: 2–5 short positive or neutral points (e.g. "Good protein", "Low sugar").
+   - cautions: 1–3 short points about things to watch (e.g. "High sodium", "Very high calories").
+
+${EVIDENCE_GUIDELINES}
+
+OUTPUT FORMAT:
+Return exactly one JSON object with shape:
+
 {
   "summary": string,
   "highlights": string[],
@@ -4879,7 +4934,8 @@ Output exactly one JSON object:
     "sodium": "low"|"medium"|"high"
   }
 }
-No extra text.`;
+
+Do not include any extra text outside the JSON.`;
 
   const body = {
     model,
@@ -4910,6 +4966,237 @@ No extra text.`;
     return JSON.parse(content);
   } catch (e) {
     throw new Error(`openai-nutrition-json-parse-error: ${String(e)}`);
+  }
+}
+
+async function runPortionVisionLLM(env, input) {
+  const imageUrl = input && input.imageUrl ? String(input.imageUrl) : null;
+
+  if (!imageUrl) {
+    return {
+      ok: true,
+      source: "portion_vision_no_image",
+      portionFactor: 1,
+      confidence: 0,
+      reason: "No image provided; defaulting to factor 1.",
+      input: {
+        dishName: input && input.dishName ? String(input.dishName) : null,
+        restaurantName:
+          input && input.restaurantName ? String(input.restaurantName) : null,
+        menuSection:
+          input && input.menuSection ? String(input.menuSection) : null,
+        hasImage: false,
+        imageUrl: null
+      }
+    };
+  }
+
+  if (!env.OPENAI_API_KEY) {
+    return {
+      ok: false,
+      source: "portion_vision_openai",
+      error: "missing-openai-api-key",
+      portionFactor: 1,
+      confidence: 0,
+      reason: "Missing OPENAI_API_KEY; cannot call vision model.",
+      input: {
+        dishName: input && input.dishName ? String(input.dishName) : null,
+        restaurantName:
+          input && input.restaurantName ? String(input.restaurantName) : null,
+        menuSection:
+          input && input.menuSection ? String(input.menuSection) : null,
+        hasImage: true,
+        imageUrl
+      }
+    };
+  }
+
+  const model =
+    env.OPENAI_MODEL_PORTION ||
+    env.OPENAI_MODEL_ALLERGEN ||
+    env.OPENAI_MODEL_NUTRITION ||
+    "gpt-4.1-mini";
+
+  const systemPrompt = `
+You are a portion size estimator for restaurant dishes using images.
+
+You will receive:
+- dishName
+- restaurantName
+- menuSection
+- menuDescription (may be empty)
+- An image of a single plated portion of the dish.
+
+Your goal:
+- Estimate how many "typical restaurant servings" this pictured plate represents.
+- Respond as a JSON object ONLY (no extra text) with:
+  - "portionFactor": number (0.25 to 3.0) where:
+    - 1.0 = one typical restaurant serving for this dish.
+    - 0.5 = roughly half a typical serving.
+    - 2.0 = roughly double a typical serving.
+  - "confidence": number from 0.0 to 1.0 (1.0 = very confident).
+  - "reason": short sentence explaining the estimate (e.g. "Plate looks quite full with multiple pancakes and sides, about a standard breakfast serving.").
+
+Guidelines:
+- Focus on relative size: compare the food to the plate and typical restaurant plating.
+- If the photo is ambiguous or cropped, choose a conservative estimate and lower confidence.
+- If you cannot see enough of the food to judge, use portionFactor=1.0 and confidence<=0.2 with a clear reason.
+
+${EVIDENCE_GUIDELINES}
+
+Output format (MUST be valid JSON, no extra keys):
+
+{
+  "portionFactor": number,
+  "confidence": number,
+  "reason": string
+}
+`.trim();
+
+  const base = env.OPENAI_API_BASE || "https://api.openai.com";
+
+  const userContent = [
+    {
+      type: "text",
+      text: JSON.stringify(
+        {
+          dishName: input && input.dishName ? String(input.dishName) : null,
+          restaurantName:
+            input && input.restaurantName ? String(input.restaurantName) : null,
+          menuSection:
+            input && input.menuSection ? String(input.menuSection) : null,
+          menuDescription:
+            input && input.menuDescription ? String(input.menuDescription) : null
+        },
+        null,
+        2
+      )
+    },
+    {
+      type: "image_url",
+      image_url: {
+        url: imageUrl
+      }
+    }
+  ];
+
+  const body = {
+    model,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userContent }
+    ]
+  };
+
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return {
+        ok: false,
+        source: "portion_vision_openai",
+        error: `openai-portion-error-${res.status}`,
+        details: text,
+        portionFactor: 1,
+        confidence: 0,
+        reason: "Vision call failed; defaulting to factor 1.",
+        input: {
+          dishName: input && input.dishName ? String(input.dishName) : null,
+          restaurantName:
+            input && input.restaurantName ? String(input.restaurantName) : null,
+          menuSection:
+            input && input.menuSection ? String(input.menuSection) : null,
+          hasImage: true,
+          imageUrl
+        }
+      };
+    }
+
+    const json = await res.json();
+    const content = json?.choices?.[0]?.message?.content || "";
+
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      return {
+        ok: false,
+        source: "portion_vision_openai",
+        error: "openai-portion-json-parse-error",
+        details: String(e),
+        raw: content,
+        portionFactor: 1,
+        confidence: 0,
+        reason: "JSON parse error from vision model; defaulting to factor 1.",
+        input: {
+          dishName: input && input.dishName ? String(input.dishName) : null,
+          restaurantName:
+            input && input.restaurantName ? String(input.restaurantName) : null,
+          menuSection:
+            input && input.menuSection ? String(input.menuSection) : null,
+          hasImage: true,
+          imageUrl
+        }
+      };
+    }
+
+    const pf =
+      typeof parsed.portionFactor === "number" && isFinite(parsed.portionFactor)
+        ? parsed.portionFactor
+        : 1;
+
+    const conf =
+      typeof parsed.confidence === "number" && isFinite(parsed.confidence)
+        ? parsed.confidence
+        : 0;
+
+    const reason =
+      typeof parsed.reason === "string" ? parsed.reason : "No reason provided.";
+
+    return {
+      ok: true,
+      source: "portion_vision_openai",
+      portionFactor: pf,
+      confidence: conf,
+      reason,
+      input: {
+        dishName: input && input.dishName ? String(input.dishName) : null,
+        restaurantName:
+          input && input.restaurantName ? String(input.restaurantName) : null,
+        menuSection:
+          input && input.menuSection ? String(input.menuSection) : null,
+        hasImage: true,
+        imageUrl
+      }
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      source: "portion_vision_openai",
+      error: "openai-portion-exception",
+      details: String(err),
+      portionFactor: 1,
+      confidence: 0,
+      reason: "Exception during vision call; defaulting to factor 1.",
+      input: {
+        dishName: input && input.dishName ? String(input.dishName) : null,
+        restaurantName:
+          input && input.restaurantName ? String(input.restaurantName) : null,
+        menuSection:
+          input && input.menuSection ? String(input.menuSection) : null,
+        hasImage: true,
+        imageUrl
+      }
+    };
   }
 }
 
@@ -8920,7 +9207,11 @@ async function extractMenuGateway(
       source: "uber",
       rawPrice: typeof it.price === "number" ? it.price : null,
       priceText: it.price_display || null,
-      imageUrl
+      imageUrl,
+      restaurantCalories:
+        typeof it.restaurantCalories === "number"
+          ? it.restaurantCalories
+          : null
     };
   });
 
@@ -13595,6 +13886,9 @@ async function runDishAnalysis(env, ctx, request) {
   const correlationId = _cid(request.headers);
   const body = (await readJsonSafe(request)) || {};
   const lang = body.lang || body.language || "en";
+  const restaurantCalories = body.restaurantCalories;
+  const portionFactor = body.portionFactor;
+  const dishImageUrl = body.imageUrl ?? null;
 
   const dishName = (body.dishName || body.dish || "").trim();
   const restaurantName = (body.restaurantName || body.restaurant || "").trim();
@@ -13641,6 +13935,13 @@ async function runDishAnalysis(env, ctx, request) {
     recipeResult.nutrition_summary ||
     null;
   let finalNutritionSummary = nutritionSummaryFromRecipe || null;
+  let nutrition_source = null;
+
+  if (recipeResult?.out?.nutrition_summary) {
+    nutrition_source = "recipe_out";
+  } else if (recipeResult?.nutrition_summary) {
+    nutrition_source = "recipe_legacy";
+  }
 
   if (
     !finalNutritionSummary &&
@@ -13655,6 +13956,7 @@ async function runDishAnalysis(env, ctx, request) {
       );
       if (ns) {
         finalNutritionSummary = ns;
+        nutrition_source = "edamam_totalNutrients";
         if (recipeResult.out) {
           recipeResult.out.nutrition_summary = ns;
         }
@@ -13690,6 +13992,7 @@ async function runDishAnalysis(env, ctx, request) {
         fiber_g: typeof fiber === "number" ? fiber : null,
         sodium_mg: typeof sodium === "number" ? sodium : null
       };
+      nutrition_source = nutrition_source || "edamam_manual";
 
       if (recipeResult.out) {
         recipeResult.out.nutrition_summary = finalNutritionSummary;
@@ -13731,21 +14034,9 @@ async function runDishAnalysis(env, ctx, request) {
       if (Array.isArray(ingredientsParsed) && ingredientsParsed.length) {
         await enrichWithNutrition(env, ingredientsParsed);
         finalNutritionSummary = sumNutrition(ingredientsParsed);
-      }
-
-      // Tier 3 fallback: use normalized items if no summary yet
-      if (
-        !finalNutritionSummary &&
-        normalized &&
-        Array.isArray(normalized.items) &&
-        normalized.items.length
-      ) {
-        await enrichWithNutrition(env, normalized.items);
-        finalNutritionSummary = sumNutrition(normalized.items);
-      }
-
-      if (finalNutritionSummary && recipeResult?.out) {
-        recipeResult.out.nutrition_summary = finalNutritionSummary;
+        if (finalNutritionSummary) {
+          nutrition_source = "enriched_ingredients_parsed";
+        }
       }
     } catch (e) {
       // non-fatal; leave nutrition summary null
@@ -13767,12 +14058,28 @@ async function runDishAnalysis(env, ctx, request) {
       );
       if (usdaSummary) {
         finalNutritionSummary = usdaSummary;
+        nutrition_source = "usda";
         if (recipeResult.out) {
           recipeResult.out.nutrition_summary = finalNutritionSummary;
         }
       }
     } catch (e) {
       // non-fatal; leave nutrition summary null
+    }
+  }
+
+  let servingsUsed = 1;
+  function getServingsFromRecipe(recipeResult) {
+    try {
+      const recipe = recipeResult && recipeResult.out && recipeResult.out.recipe;
+      if (!recipe) return 1;
+      const yieldValue =
+        recipe.yield ?? recipe.servings ?? recipe.serving ?? recipe.portions;
+      const n = Number(yieldValue);
+      if (Number.isFinite(n) && n > 0) return n;
+      return 1;
+    } catch {
+      return 1;
     }
   }
 
@@ -13790,6 +14097,96 @@ async function runDishAnalysis(env, ctx, request) {
       recipeResult?.parsed ||
       null
   };
+
+  if (
+    !finalNutritionSummary &&
+    normalized &&
+    Array.isArray(normalized.items) &&
+    normalized.items.length
+  ) {
+    try {
+      await enrichWithNutrition(env, normalized.items);
+      finalNutritionSummary = sumNutrition(normalized.items);
+      if (finalNutritionSummary) {
+        nutrition_source = "enriched_normalized_items";
+      }
+      if (recipeResult?.out) {
+        recipeResult.out.nutrition_summary = finalNutritionSummary;
+      }
+    } catch (e) {
+      if (!debug) debug = {};
+      debug.nutrition_fallback_error = String(e?.message || e);
+    }
+  }
+
+  if (finalNutritionSummary) {
+    servingsUsed = getServingsFromRecipe(recipeResult);
+    if (servingsUsed && servingsUsed > 0 && servingsUsed !== 1) {
+      finalNutritionSummary = {
+        energyKcal:
+          finalNutritionSummary.energyKcal != null
+            ? finalNutritionSummary.energyKcal / servingsUsed
+            : null,
+        protein_g:
+          finalNutritionSummary.protein_g != null
+            ? finalNutritionSummary.protein_g / servingsUsed
+            : null,
+        fat_g:
+          finalNutritionSummary.fat_g != null
+            ? finalNutritionSummary.fat_g / servingsUsed
+            : null,
+        carbs_g:
+          finalNutritionSummary.carbs_g != null
+            ? finalNutritionSummary.carbs_g / servingsUsed
+            : null,
+        sugar_g:
+          finalNutritionSummary.sugar_g != null
+            ? finalNutritionSummary.sugar_g / servingsUsed
+            : null,
+        fiber_g:
+          finalNutritionSummary.fiber_g != null
+            ? finalNutritionSummary.fiber_g / servingsUsed
+            : null,
+        sodium_mg:
+          finalNutritionSummary.sodium_mg != null
+            ? finalNutritionSummary.sodium_mg / servingsUsed
+            : null
+      };
+      if (recipeResult?.out) {
+        recipeResult.out.nutrition_summary = finalNutritionSummary;
+      }
+    }
+  }
+
+  if (restaurantCalories != null && !Number.isNaN(Number(restaurantCalories))) {
+    const kcalFromRestaurant = Number(restaurantCalories);
+
+    if (!finalNutritionSummary) {
+      finalNutritionSummary = {
+        energyKcal: kcalFromRestaurant,
+        protein_g: null,
+        fat_g: null,
+        carbs_g: null,
+        sugar_g: null,
+        fiber_g: null,
+        sodium_mg: null
+      };
+      nutrition_source = nutrition_source || "restaurant_kcal_only";
+    } else {
+      finalNutritionSummary = {
+        ...finalNutritionSummary,
+        energyKcal: kcalFromRestaurant
+      };
+      if (nutrition_source && !nutrition_source.startsWith("restaurant_")) {
+        nutrition_source = `${nutrition_source}+restaurant_kcal`;
+      } else if (!nutrition_source) {
+        nutrition_source = "restaurant_kcal";
+      }
+    }
+
+    if (!debug) debug = {};
+    debug.restaurant_calories = kcalFromRestaurant;
+  }
 
   const ingredientsForLex = (() => {
     // Prefer parsed/enriched rows first
@@ -13967,13 +14364,7 @@ async function runDishAnalysis(env, ctx, request) {
       : []
   };
 
-  let allergenMiniResult;
-  try {
-    allergenMiniResult = await runAllergenMiniLLM(env, allergenInput);
-  } catch (e) {
-    allergenMiniResult = { ok: false, error: String(e?.message || e) };
-  }
-
+  let allergenMiniResult = await runAllergenMiniLLM(env, allergenInput);
   if (allergenMiniResult && allergenMiniResult.ok && allergenMiniResult.data) {
     const data = allergenMiniResult.data || {};
     const allergenKeys = [
@@ -14209,8 +14600,95 @@ async function runDishAnalysis(env, ctx, request) {
     fodmap_edamam: edamamFodmap || null,
     edamam_healthLabels: edamamHealthLabels,
     organs_llm_raw: organsLLMDebug || null,
-    allergen_llm_raw: allergenMiniDebug || null
+    allergen_llm_raw: allergenMiniDebug || null,
+    dish_image_url: dishImageUrl
   };
+
+  let portionVisionDebug = null;
+  try {
+    if (dishImageUrl) {
+      portionVisionDebug = await runPortionVisionLLM(env, {
+        dishName,
+        restaurantName,
+        menuDescription,
+        menuSection,
+        imageUrl: dishImageUrl
+      });
+    }
+  } catch (err) {
+    portionVisionDebug = {
+      ok: false,
+      source: "portion_vision_stub",
+      error: err && err.message ? String(err.message) : String(err)
+    };
+  }
+
+  debug.portion_vision = portionVisionDebug;
+
+  const manualPortionFactor =
+    1; // manual portion selection currently disabled; always default to 1
+
+  let aiPortionFactor = 1;
+  if (
+    portionVisionDebug &&
+    portionVisionDebug.ok &&
+    portionVisionDebug.source === "portion_vision_openai" &&
+    typeof portionVisionDebug.portionFactor === "number" &&
+    isFinite(portionVisionDebug.portionFactor) &&
+    portionVisionDebug.portionFactor > 0.25 &&
+    portionVisionDebug.portionFactor < 3 &&
+    typeof portionVisionDebug.confidence === "number" &&
+    portionVisionDebug.confidence >= 0.6 &&
+    dishImageUrl &&
+    !restaurantCalories
+  ) {
+    aiPortionFactor = portionVisionDebug.portionFactor;
+  }
+
+  const effectivePortionFactor = manualPortionFactor * aiPortionFactor;
+
+  debug.portion_manual_factor = manualPortionFactor;
+  debug.portion_ai_factor = aiPortionFactor;
+  debug.portion_effective_factor = effectivePortionFactor;
+
+  if (
+    finalNutritionSummary &&
+    typeof effectivePortionFactor === "number" &&
+    isFinite(effectivePortionFactor) &&
+    effectivePortionFactor !== 1
+  ) {
+    finalNutritionSummary = {
+      energyKcal:
+        finalNutritionSummary.energyKcal != null
+          ? finalNutritionSummary.energyKcal * effectivePortionFactor
+          : null,
+      protein_g:
+        finalNutritionSummary.protein_g != null
+          ? finalNutritionSummary.protein_g * effectivePortionFactor
+          : null,
+      fat_g:
+        finalNutritionSummary.fat_g != null
+          ? finalNutritionSummary.fat_g * effectivePortionFactor
+          : null,
+      carbs_g:
+        finalNutritionSummary.carbs_g != null
+          ? finalNutritionSummary.carbs_g * effectivePortionFactor
+          : null,
+      sugar_g:
+        finalNutritionSummary.sugar_g != null
+          ? finalNutritionSummary.sugar_g * effectivePortionFactor
+          : null,
+      fiber_g:
+        finalNutritionSummary.fiber_g != null
+          ? finalNutritionSummary.fiber_g * effectivePortionFactor
+          : null,
+      sodium_mg:
+        finalNutritionSummary.sodium_mg != null
+          ? finalNutritionSummary.sodium_mg * effectivePortionFactor
+          : null
+    };
+    debug.nutrition_portion_factor_used = effectivePortionFactor;
+  }
 
   let nutrition_badges = null;
   if (finalNutritionSummary) {
@@ -14247,12 +14725,22 @@ async function runDishAnalysis(env, ctx, request) {
     }
   }
 
+  debug.nutrition_servings_used = servingsUsed;
+  debug.nutrition_source = nutrition_source;
+
+  const portion = {
+    manual_factor: manualPortionFactor,
+    ai_factor: aiPortionFactor,
+    effective_factor: effectivePortionFactor
+  };
+
   const result = {
     ok: true,
     apiVersion: "v1",
     source: "pipeline.analyze-dish",
     dishName,
     restaurantName,
+    imageUrl: dishImageUrl,
     summary,
     recipe: recipeResult,
     normalized,
@@ -14262,9 +14750,11 @@ async function runDishAnalysis(env, ctx, request) {
     lactose_flags,
     lifestyle_tags: allergen_lifestyle_tags,
     lifestyle_checks: allergen_lifestyle_checks,
+    portion,
     nutrition_summary: finalNutritionSummary || null,
     nutrition_badges,
     nutrition_insights,
+    nutrition_source,
     debug
   };
 
