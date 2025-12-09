@@ -202,6 +202,37 @@ EVIDENCE & EXPLANATION RULES (VERY IMPORTANT):
  * @property {any} [organs]
  */
 
+/** @type {string|null} */
+let fatSecretCachedToken = null;
+/** @type {number|null} */
+let fatSecretTokenExpiresAt = null;
+
+/**
+ * Fetches an image from a URL and returns a base64-encoded string.
+ *
+ * @param {string} imageUrl
+ * @returns {Promise<string|null>}
+ */
+async function fetchImageAsBase64(imageUrl) {
+  if (typeof imageUrl !== "string" || !imageUrl) {
+    return null;
+  }
+
+  const resp = await fetch(imageUrl);
+  if (!resp.ok) {
+    return null;
+  }
+
+  const arrayBuffer = await resp.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(arrayBuffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 const DEFAULT_SERVINGS_BY_CATEGORY = {
   "Pasta & Pizza": 1.3,
   "Sandwiches & Burgers": 1.2,
@@ -249,6 +280,147 @@ async function readJsonSafe(request) {
     return null;
   }
 }
+
+/**
+ * Fetches (and caches) a FatSecret OAuth2 access token using client_credentials.
+ *
+ * @param {any} env
+ * @returns {Promise<string|null>} access token or null if unavailable
+ */
+async function getFatSecretAccessToken(env) {
+  const clientId = env.FATSECRET_CLIENT_ID;
+  const clientSecret = env.FATSECRET_CLIENT_SECRET;
+  const scope = env.FATSECRET_SCOPES || "premier nlp image-recognition";
+
+  if (!clientId || !clientSecret) {
+    // No credentials configured; do not throw, just return null.
+    return null;
+  }
+
+  const now = Date.now();
+
+  // Return cached token if still valid (with small safety margin)
+  if (
+    fatSecretCachedToken &&
+    fatSecretTokenExpiresAt &&
+    now < fatSecretTokenExpiresAt - 60_000
+  ) {
+    return fatSecretCachedToken;
+  }
+
+  const credentials = btoa(`${clientId}:${clientSecret}`);
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "client_credentials");
+  body.set("scope", scope);
+
+  let resp;
+  try {
+    resp = await fetch("https://oauth.fatsecret.com/connect/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body
+    });
+  } catch (e) {
+    return null;
+  }
+
+  if (!resp.ok) {
+    return null;
+  }
+
+  /** @type {{ access_token?: string, expires_in?: number }} */
+  let data = {};
+  try {
+    data = await resp.json();
+  } catch {
+    data = {};
+  }
+
+  if (!data.access_token) {
+    return null;
+  }
+
+  const expiresInSec =
+    typeof data.expires_in === "number" ? data.expires_in : 86400;
+  fatSecretCachedToken = data.access_token;
+  fatSecretTokenExpiresAt = Date.now() + expiresInSec * 1000;
+
+  return fatSecretCachedToken;
+}
+
+/**
+ * Calls FatSecret Image Recognition v2 for a given image URL.
+ *
+ * @param {any} env
+ * @param {string} imageUrl
+ * @returns {Promise<{ ok: boolean, raw?: any, error?: string }>}
+ */
+async function callFatSecretImageRecognition(env, imageUrl) {
+  if (typeof imageUrl !== "string" || !imageUrl) {
+    return { ok: false, error: "invalid_image_url" };
+  }
+
+  const token = await getFatSecretAccessToken(env);
+  if (!token) {
+    return { ok: false, error: "fatsecret_token_unavailable" };
+  }
+
+  const imageB64 = await fetchImageAsBase64(imageUrl);
+  if (!imageB64) {
+    return { ok: false, error: "image_fetch_failed" };
+  }
+
+  const region = env.FATSECRET_REGION || "US";
+  const language = env.FATSECRET_LANGUAGE || "en";
+
+  const body = {
+    image_b64: imageB64,
+    include_food_data: true,
+    region,
+    language
+  };
+
+  let resp;
+  try {
+    resp = await fetch(
+      "https://platform.fatsecret.com/rest/image-recognition/v2",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      }
+    );
+  } catch (e) {
+    return {
+      ok: false,
+      error: "fatsecret_fetch_error:" + String(e && e.message ? e.message : e)
+    };
+  }
+
+  if (!resp.ok) {
+    return { ok: false, error: "fatsecret_http_" + resp.status };
+  }
+
+  let data;
+  try {
+    data = await resp.json();
+  } catch (e) {
+    return {
+      ok: false,
+      error: "fatsecret_json_error:" + String(e && e.message ? e.message : e)
+    };
+  }
+
+  return { ok: true, raw: data };
+}
+
 async function parseResSafe(res) {
   const ct =
     (res.headers && res.headers.get && res.headers.get("content-type")) || "";
@@ -14458,9 +14630,16 @@ async function runDishAnalysis(env, body, ctx) {
   let debug = {};
   const useParallel = env && env.PARALLEL_LLM === "true";
   const lang = body.lang || body.language || "en";
+  let devFlag =
+    body.dev === true || body.dev === 1 || body.dev === "1" || false;
   const restaurantCalories = body.restaurantCalories;
   const portionFactor = body.portionFactor;
   const dishImageUrl = body.imageUrl ?? null;
+  const selectionComponentIdsInput = Array.isArray(
+    body.selection_component_ids
+  )
+    ? body.selection_component_ids
+    : null;
 
   const dishName = (body.dishName || body.dish || "").trim();
   const restaurantName = (body.restaurantName || body.restaurant || "").trim();
@@ -14510,8 +14689,11 @@ async function runDishAnalysis(env, body, ctx) {
       : null,
     parse: true,
     userId: body.user_id || body.userId || "",
-    devFlag: body.dev === true || body.dev === 1 || body.dev === "1"
+    devFlag
   });
+
+  devFlag =
+    devFlag || recipeResult?.devFlag || recipeResult?.out?.devFlag || false;
 
   const nutritionSummaryFromRecipe =
     (recipeResult && recipeResult.out && recipeResult.out.nutrition_summary) ||
@@ -15516,6 +15698,32 @@ async function runDishAnalysis(env, body, ctx) {
     dish_image_url: dishImageUrl
   };
 
+  // FatSecret image recognition (dev-only) for debug purposes
+  if (devFlag && dishImageUrl) {
+    try {
+      const fsImageResult = await callFatSecretImageRecognition(
+        env,
+        dishImageUrl
+      );
+      if (fsImageResult && fsImageResult.ok && fsImageResult.raw) {
+        debug.fatsecret_image_raw = fsImageResult.raw;
+        try {
+          const normalized = normalizeFatSecretImageResult(fsImageResult.raw);
+          debug.fatsecret_image_normalized = normalized;
+        } catch (e) {
+          debug.fatsecret_image_normalized_error = String(
+            e && e.message ? e.message : e
+          );
+        }
+      } else if (fsImageResult && !fsImageResult.ok) {
+        debug.fatsecret_image_error = fsImageResult.error || "unknown_error";
+      }
+    } catch (e) {
+      debug.fatsecret_image_error =
+        "exception:" + String(e && e.message ? e.message : e);
+    }
+  }
+
   let portionVisionDebug = null;
   try {
     if (dishImageUrl) {
@@ -15796,6 +16004,8 @@ async function runDishAnalysis(env, body, ctx) {
 
   // --- selection_default: whole-dish selection using all component_ids ---
   let selection_default = null;
+  let selection_components = null;
+  let selection_custom = null;
   try {
     const pcs = Array.isArray(plateComponents) ? plateComponents : [];
     const selectedIds = pcs
@@ -15818,10 +16028,67 @@ async function runDishAnalysis(env, body, ctx) {
         selectionInput,
         selectedIds
       );
+
+      // Build per-component selection map
+      const map = {};
+      for (const comp of pcs) {
+        const compId = comp && comp.component_id;
+        if (typeof compId !== "string" || !compId) continue;
+        try {
+          const sel = buildSelectionAnalysisResult(selectionInput, [compId]);
+          map[compId] = sel;
+        } catch (e) {
+          if (debug) {
+            const key = "selection_components_error_" + compId;
+            debug[key] = String(e && e.message ? e.message : e);
+          }
+        }
+      }
+      if (Object.keys(map).length > 0) {
+        selection_components = map;
+      }
     }
   } catch (e) {
     if (debug) {
       debug.selection_default_error = String(e && e.message ? e.message : e);
+    }
+  }
+
+  // selection_custom: optional selection based on request.selection_component_ids
+  try {
+    if (selectionComponentIdsInput && Array.isArray(selectionComponentIdsInput)) {
+      const pcs = Array.isArray(plateComponents) ? plateComponents : [];
+      const validIdsSet = new Set(
+        pcs
+          .map((comp) => comp && comp.component_id)
+          .filter((id) => typeof id === "string")
+      );
+
+      const filteredIds = selectionComponentIdsInput.filter(
+        (id) => typeof id === "string" && validIdsSet.has(id)
+      );
+
+      if (filteredIds.length > 0) {
+        const selectionInput = {
+          plate_components: plateComponents,
+          allergen_breakdown,
+          organs,
+          nutrition_summary: finalNutritionSummary,
+          nutrition_breakdown: nutritionBreakdown,
+          allergen_flags,
+          fodmap_flags,
+          lactose_flags
+        };
+
+        selection_custom = buildSelectionAnalysisResult(
+          selectionInput,
+          filteredIds
+        );
+      }
+    }
+  } catch (e) {
+    if (debug) {
+      debug.selection_custom_error = String(e && e.message ? e.message : e);
     }
   }
 
@@ -15850,6 +16117,8 @@ async function runDishAnalysis(env, body, ctx) {
     nutrition_source,
     nutrition_breakdown: nutritionBreakdown,
     selection_default,
+    selection_components,
+    selection_custom: selection_custom || undefined,
     debug
   };
 
@@ -16324,6 +16593,106 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
   // FODMAP / lactose / lifestyle / organs aggregation will be added in later steps.
 
   return result;
+}
+
+/**
+ * Normalize a FatSecret image recognition v2 response into internal
+ * plate_components and nutrition_breakdown arrays.
+ *
+ * @param {any} fsRaw
+ * @returns {{ plate_components: any[], nutrition_breakdown: any[] }}
+ */
+function normalizeFatSecretImageResult(fsRaw) {
+  const plate_components = [];
+  const nutrition_breakdown = [];
+
+  if (!fsRaw || typeof fsRaw !== "object") {
+    return { plate_components, nutrition_breakdown };
+  }
+
+  const foodResponse = Array.isArray(fsRaw.food_response)
+    ? fsRaw.food_response
+    : [];
+
+  if (foodResponse.length === 0) {
+    return { plate_components, nutrition_breakdown };
+  }
+
+  const totalCalories = foodResponse.reduce((sum, entry) => {
+    const eaten = entry && entry.eaten;
+    const tnc = (eaten && eaten.total_nutritional_content) || {};
+    const cal = Number(tnc.calories);
+    return sum + (isNaN(cal) ? 0 : cal);
+  }, 0);
+
+  foodResponse.forEach((entry, idx) => {
+    if (!entry || typeof entry !== "object") {
+      return;
+    }
+
+    const eaten = entry.eaten || {};
+    const tnc = eaten.total_nutritional_content || {};
+    const food = entry.food || {};
+
+    const foodId = entry.food_id || food.food_id || idx;
+    const component_id = `fs_c${idx}`;
+
+    const label = entry.food_entry_name || food.food_name || "Unknown item";
+
+    const rawCategory = food.food_type || "Generic";
+    const category =
+      rawCategory === "Brand"
+        ? "fs_brand"
+        : rawCategory === "Generic"
+          ? "fs_generic"
+          : "fs_food";
+
+    const calories = Number(tnc.calories);
+    const carbs = Number(tnc.carbohydrate);
+    const protein = Number(tnc.protein);
+    const fat = Number(tnc.fat);
+    const sugar = Number(tnc.sugar);
+    const fiber = Number(tnc.fiber);
+    const sodium = Number(tnc.sodium);
+
+    const energyKcal = isNaN(calories) ? 0 : calories;
+    const carbs_g = isNaN(carbs) ? 0 : carbs;
+    const protein_g = isNaN(protein) ? 0 : protein;
+    const fat_g = isNaN(fat) ? 0 : fat;
+    const sugar_g = isNaN(sugar) ? 0 : sugar;
+    const fiber_g = isNaN(fiber) ? 0 : fiber;
+    const sodium_mg = isNaN(sodium) ? 0 : sodium;
+
+    const share_ratio =
+      totalCalories > 0 ? energyKcal / totalCalories : 1 / foodResponse.length;
+
+    plate_components.push({
+      component_id,
+      role: idx === 0 ? "main" : "side",
+      category,
+      label,
+      confidence: 1,
+      area_ratio: share_ratio,
+      fs_food_id: foodId
+    });
+
+    nutrition_breakdown.push({
+      component_id,
+      component: label,
+      role: idx === 0 ? "main" : "side",
+      category,
+      share_ratio,
+      energyKcal,
+      protein_g,
+      fat_g,
+      carbs_g,
+      sugar_g,
+      fiber_g,
+      sodium_mg
+    });
+  });
+
+  return { plate_components, nutrition_breakdown };
 }
 
 function corsJson(data, status = 200) {
