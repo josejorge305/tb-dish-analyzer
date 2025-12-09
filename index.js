@@ -15777,6 +15777,131 @@ async function runDishAnalysis(env, body, ctx) {
       }))
     : [];
 
+  // If recipe came from OpenAI and has no explicit servings/yield, assume 4 servings per recipe
+  try {
+    let openaiServingsDivisor = 1;
+    const recipeProvider =
+      recipeResult?.out?.provider ??
+      recipeResult?.source ??
+      recipeResult?.responseSource ??
+      null;
+    const recipeOut = recipeResult?.out;
+    const hasYield =
+      recipeOut &&
+      typeof recipeOut.yield === "number" &&
+      recipeOut.yield > 0;
+    const hasServings =
+      recipeOut &&
+      typeof recipeOut.servings === "number" &&
+      recipeOut.servings > 0;
+
+    if (recipeProvider === "openai" && !hasYield && !hasServings) {
+      openaiServingsDivisor = 4;
+    }
+
+    if (
+      openaiServingsDivisor > 1 &&
+      finalNutritionSummary &&
+      typeof finalNutritionSummary === "object"
+    ) {
+      finalNutritionSummary = {
+        energyKcal:
+          typeof finalNutritionSummary.energyKcal === "number"
+            ? finalNutritionSummary.energyKcal / openaiServingsDivisor
+            : finalNutritionSummary.energyKcal,
+        protein_g:
+          typeof finalNutritionSummary.protein_g === "number"
+            ? finalNutritionSummary.protein_g / openaiServingsDivisor
+            : finalNutritionSummary.protein_g,
+        fat_g:
+          typeof finalNutritionSummary.fat_g === "number"
+            ? finalNutritionSummary.fat_g / openaiServingsDivisor
+            : finalNutritionSummary.fat_g,
+        carbs_g:
+          typeof finalNutritionSummary.carbs_g === "number"
+            ? finalNutritionSummary.carbs_g / openaiServingsDivisor
+            : finalNutritionSummary.carbs_g,
+        sugar_g:
+          typeof finalNutritionSummary.sugar_g === "number"
+            ? finalNutritionSummary.sugar_g / openaiServingsDivisor
+            : finalNutritionSummary.sugar_g,
+        fiber_g:
+          typeof finalNutritionSummary.fiber_g === "number"
+            ? finalNutritionSummary.fiber_g / openaiServingsDivisor
+            : finalNutritionSummary.fiber_g,
+        sodium_mg:
+          typeof finalNutritionSummary.sodium_mg === "number"
+            ? finalNutritionSummary.sodium_mg / openaiServingsDivisor
+            : finalNutritionSummary.sodium_mg
+      };
+
+      debug.openai_servings_divisor = openaiServingsDivisor;
+    }
+  } catch {
+    // non-fatal; keep existing summary
+  }
+
+  // Heuristic multi-serving divisor for oversized base recipes (when no restaurantCalories)
+  try {
+    let nutritionMultiServingsDivisor = 1;
+    const baseKcal =
+      finalNutritionSummary &&
+      typeof finalNutritionSummary.energyKcal === "number"
+        ? finalNutritionSummary.energyKcal
+        : null;
+    const hasRestaurantCalories =
+      typeof restaurantCalories === "number" && restaurantCalories > 0;
+
+    if (!hasRestaurantCalories && baseKcal != null && baseKcal > 2000) {
+      nutritionMultiServingsDivisor = 4;
+    }
+
+    if (
+      nutritionMultiServingsDivisor > 1 &&
+      finalNutritionSummary &&
+      typeof finalNutritionSummary === "object"
+    ) {
+      const d = nutritionMultiServingsDivisor;
+      finalNutritionSummary = {
+        energyKcal:
+          typeof finalNutritionSummary.energyKcal === "number"
+            ? finalNutritionSummary.energyKcal / d
+            : finalNutritionSummary.energyKcal,
+        protein_g:
+          typeof finalNutritionSummary.protein_g === "number"
+            ? finalNutritionSummary.protein_g / d
+            : finalNutritionSummary.protein_g,
+        fat_g:
+          typeof finalNutritionSummary.fat_g === "number"
+            ? finalNutritionSummary.fat_g / d
+            : finalNutritionSummary.fat_g,
+        carbs_g:
+          typeof finalNutritionSummary.carbs_g === "number"
+            ? finalNutritionSummary.carbs_g / d
+            : finalNutritionSummary.carbs_g,
+        sugar_g:
+          typeof finalNutritionSummary.sugar_g === "number"
+            ? finalNutritionSummary.sugar_g / d
+            : finalNutritionSummary.sugar_g,
+        fiber_g:
+          typeof finalNutritionSummary.fiber_g === "number"
+            ? finalNutritionSummary.fiber_g / d
+            : finalNutritionSummary.fiber_g,
+        sodium_mg:
+          typeof finalNutritionSummary.sodium_mg === "number"
+            ? finalNutritionSummary.sodium_mg / d
+            : finalNutritionSummary.sodium_mg
+      };
+
+      if (debug) {
+        debug.nutrition_multi_servings_divisor = nutritionMultiServingsDivisor;
+        debug.nutrition_multi_servings_base_kcal = baseKcal;
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+
   // Manual portion factor currently not used (no user selector in UI)
   const manualPortionFactor = 1;
 
@@ -16577,16 +16702,116 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
     result.combined_nutrition = combined;
   }
 
-  // Mirror global health flags into the selection result for now.
-  if (Array.isArray(input.allergen_flags) && input.allergen_flags.length > 0) {
+  // Helpers for deduping and picking worst levels
+  const dedupeAllergenFlags = (flags) => {
+    if (!Array.isArray(flags)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const f of flags) {
+      if (!f || typeof f !== "object") continue;
+      const kind = f.kind || f.type || null;
+      const present = f.present || null;
+      const key = kind + "|" + present;
+      if (kind && !seen.has(key)) {
+        seen.add(key);
+        out.push(f);
+      }
+    }
+    return out;
+  };
+
+  const FODMAP_LEVEL_RANK = { none: 0, low: 1, medium: 2, high: 3 };
+  const pickWorstFodmapFlag = (flagsArray) => {
+    let best = null;
+    let bestRank = -1;
+    for (const f of flagsArray) {
+      if (!f || typeof f !== "object") continue;
+      const lvl = typeof f.level === "string" ? f.level : null;
+      const rank =
+        lvl && FODMAP_LEVEL_RANK[lvl] != null
+          ? FODMAP_LEVEL_RANK[lvl]
+          : -1;
+      if (rank > bestRank) {
+        bestRank = rank;
+        best = f;
+      }
+    }
+    return best;
+  };
+
+  const LACTOSE_LEVEL_RANK = { none: 0, low: 1, medium: 2, high: 3 };
+  const pickWorstLactoseFlag = (flagsArray) => {
+    let best = null;
+    let bestRank = -1;
+    for (const f of flagsArray) {
+      if (!f || typeof f !== "object") continue;
+      const lvl = typeof f.level === "string" ? f.level : null;
+      const rank =
+        lvl && LACTOSE_LEVEL_RANK[lvl] != null
+          ? LACTOSE_LEVEL_RANK[lvl]
+          : -1;
+      if (rank > bestRank) {
+        bestRank = rank;
+        best = f;
+      }
+    }
+    return best;
+  };
+
+  // Prefer per-component breakdown when available
+  if (Array.isArray(selectedAllergens) && selectedAllergens.length > 0) {
+    const componentAllergenFlags = [];
+    const fodmapCandidates = [];
+    const lactoseCandidates = [];
+
+    for (const entry of selectedAllergens) {
+      if (!entry || typeof entry !== "object") continue;
+
+      if (Array.isArray(entry.allergen_flags)) {
+        for (const f of entry.allergen_flags) {
+          componentAllergenFlags.push(f);
+        }
+      }
+
+      if (entry.fodmap_flags) {
+        fodmapCandidates.push(entry.fodmap_flags);
+      }
+
+      if (entry.lactose_flags) {
+        lactoseCandidates.push(entry.lactose_flags);
+      }
+    }
+
+    const dedupedAllergens = dedupeAllergenFlags(componentAllergenFlags);
+    if (dedupedAllergens.length > 0) {
+      result.combined_allergens = dedupedAllergens;
+    }
+
+    const worstFodmap = pickWorstFodmapFlag(fodmapCandidates);
+    if (worstFodmap) {
+      result.combined_fodmap = worstFodmap;
+    }
+
+    const worstLactose = pickWorstLactoseFlag(lactoseCandidates);
+    if (worstLactose) {
+      result.combined_lactose = worstLactose;
+    }
+  }
+
+  // Fallback to global flags only when no per-component data was available
+  if (
+    !result.combined_allergens &&
+    Array.isArray(input.allergen_flags) &&
+    input.allergen_flags.length > 0
+  ) {
     result.combined_allergens = input.allergen_flags;
   }
 
-  if (input.fodmap_flags) {
+  if (!result.combined_fodmap && input.fodmap_flags) {
     result.combined_fodmap = input.fodmap_flags;
   }
 
-  if (input.lactose_flags) {
+  if (!result.combined_lactose && input.lactose_flags) {
     result.combined_lactose = input.lactose_flags;
   }
 
