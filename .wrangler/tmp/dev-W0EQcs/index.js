@@ -1784,8 +1784,7 @@ function groupItemsIntoSections(items) {
 }
 __name(groupItemsIntoSections, "groupItemsIntoSections");
 function computeDistanceMeters(lat1, lon1, lat2, lon2) {
-  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null)
-    return null;
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
   const R = 6371e3;
   const toRad = /* @__PURE__ */ __name((d) => d * Math.PI / 180, "toRad");
   const dLat = toRad(lat2 - lat1);
@@ -2549,9 +2548,7 @@ function arrangeCookbookIngredients(rawList = []) {
   ];
   const bullets = ordered.map((c) => `- ${c.name}`);
   if (optional.length) {
-    bullets.push(
-      `- Optional: ${optional.map((c) => c.name).join(", ")}`
-    );
+    bullets.push(`- Optional: ${optional.map((c) => c.name).join(", ")}`);
   }
   return bullets.length ? bullets : ["- Ingredients not available"];
 }
@@ -2566,9 +2563,19 @@ function naturalList(arr = [], fallback = "the ingredients") {
 __name(naturalList, "naturalList");
 function inferCookbookDescription(dishName, bullets = []) {
   const name = (dishName || "").trim();
-  const proteins = bullets.filter((b) => b.startsWith("- ") && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const bases = bullets.filter((b) => b.startsWith("- ") && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const accents = bullets.filter((b) => b.startsWith("- ") && /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const proteins = bullets.filter(
+    (b) => b.startsWith("- ") && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const bases = bullets.filter(
+    (b) => b.startsWith("- ") && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(
+      b
+    )
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const accents = bullets.filter(
+    (b) => b.startsWith("- ") && /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(
+      b
+    )
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const subject = name || "This dish";
   if (proteins.length && bases.length) {
     return `*${subject} brings ${naturalList(proteins)} together with ${naturalList(bases)} and warm pantry flavors.*`;
@@ -2596,10 +2603,20 @@ function cleanCookbookStep(text) {
 __name(cleanCookbookStep, "cleanCookbookStep");
 function inferCookbookSteps(rawSteps = [], ingredientBullets = []) {
   const cleanedRaw = Array.isArray(rawSteps) ? rawSteps.map((s) => cleanCookbookStep(s)).filter(Boolean) : [];
-  const proteins = ingredientBullets.filter((b) => /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const bases = ingredientBullets.filter((b) => /^- /.test(b) && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const aromatics = ingredientBullets.filter((b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
-  const liquids = ingredientBullets.filter((b) => /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b)).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const proteins = ingredientBullets.filter(
+    (b) => /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const bases = ingredientBullets.filter(
+    (b) => /^- /.test(b) && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(
+      b
+    )
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const aromatics = ingredientBullets.filter(
+    (b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b)
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
+  const liquids = ingredientBullets.filter(
+    (b) => /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b)
+  ).map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const inferred = [];
   if (aromatics.length || bases.length) {
     inferred.push(
@@ -2660,7 +2677,9 @@ function formatLikelyRecipeMarkdown({
   if (servingInfo && (servingInfo.servings || servingInfo.grams)) {
     const bits = [];
     if (servingInfo.servings)
-      bits.push(`${servingInfo.servings} serving${servingInfo.servings > 1 ? "s" : ""}`);
+      bits.push(
+        `${servingInfo.servings} serving${servingInfo.servings > 1 ? "s" : ""}`
+      );
     if (servingInfo.grams) bits.push(`${servingInfo.grams} g`);
     const joined = bits.length === 2 ? `${bits[0]} (${bits[1]})` : bits.join("");
     if (joined) lines.push("", `**Estimated serving size:** about ${joined}`);
@@ -6234,7 +6253,10 @@ function extractGooglePhotoUrl(place, apiKey) {
 }
 __name(extractGooglePhotoUrl, "extractGooglePhotoUrl");
 async function fetchGooglePlaceDetailsGateway(env, placeId) {
-  console.log("DEBUG: fetchGooglePlaceDetailsGateway called with placeId:", placeId);
+  console.log(
+    "DEBUG: fetchGooglePlaceDetailsGateway called with placeId:",
+    placeId
+  );
   const apiKey = env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) {
     return { ok: false, error: "Missing GOOGLE_MAPS_API_KEY" };
@@ -6459,10 +6481,18 @@ async function callUberMenuGateway(env, googleContext, opts = {}) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const key = env.RAPIDAPI_KEY || env.RAPID_API_KEY;
   if (!key) {
-    return { ok: false, source: "uber_gateway_menu", error: "Missing RAPIDAPI_KEY" };
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "Missing RAPIDAPI_KEY"
+    };
   }
   if (!host) {
-    return { ok: false, source: "uber_gateway_menu", error: "Missing UBER_RAPID_HOST" };
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "Missing UBER_RAPID_HOST"
+    };
   }
   const query = googleContext.name || "";
   const address = googleContext.address || "";
@@ -6601,7 +6631,13 @@ async function extractMenuGateway(env, { placeId, url, restaurantName, address, 
   const filteredDishes = filterMenuForDisplay(dishes);
   const classified = filteredDishes.map((d) => {
     const category = canonicalCategoryFromSectionAndName(d.section, d.name);
-    return { ...d, canonicalCategory: classifyCanonicalCategory({ ...d, canonicalCategory: category }) };
+    return {
+      ...d,
+      canonicalCategory: classifyCanonicalCategory({
+        ...d,
+        canonicalCategory: category
+      })
+    };
   });
   const withWingOverride = classified.map((it) => {
     const override = classifyWingPlatter(it);
@@ -6634,9 +6670,7 @@ async function extractMenuGateway(env, { placeId, url, restaurantName, address, 
   const withLLM = env.MENU_CLASSIFIER_CACHE && env.AI ? await applyLLMClassification(env, withSectionRemap) : withSectionRemap;
   const hardFilteredLLM = normalizeWrapsAndSaladBowls(
     applyLLMOverrides(withLLM)
-  ).filter(
-    (it) => !hardBlockItem(it.name, it.description)
-  );
+  ).filter((it) => !hardBlockItem(it.name, it.description));
   const hardFiltered = hardFilteredLLM;
   const normalizedFinal = finalNormalizeCategories(hardFiltered);
   const sections = groupItemsIntoSections(normalizedFinal);
@@ -9895,9 +9929,7 @@ function getEdamamFodmapOverrideFromRecipe(recipeResult) {
   if (!Array.isArray(labels) || !labels.length) {
     return null;
   }
-  const normalized = labels.map(
-    (l) => (l || "").toString().toLowerCase().replace(/[_-]/g, " ").trim()
-  ).filter(Boolean);
+  const normalized = labels.map((l) => (l || "").toString().toLowerCase().replace(/[_-]/g, " ").trim()).filter(Boolean);
   const hasFodmapFree = normalized.some(
     (l) => l.includes("fodmap") && l.includes("free")
   );
@@ -10956,6 +10988,7 @@ async function runDishAnalysis(env, body, ctx) {
             }
           }
           return {
+            component_id: pc && pc.component_id || pc && pc.id || `c${idx}`,
             component: label,
             role,
             category,
@@ -11181,6 +11214,10 @@ async function runDishAnalysis(env, body, ctx) {
       err && (err.stack || err.message) || err
     );
   }
+  plateComponents = Array.isArray(plateComponents) ? plateComponents.map((comp, idx) => ({
+    component_id: comp && comp.component_id || comp && comp.id || `c${idx}`,
+    ...comp
+  })) : [];
   const manualPortionFactor = 1;
   let aiPortionFactor = 1;
   if (dishImageUrl && !restaurantCalories && portionVisionDebug && portionVisionDebug.ok && portionVisionDebug.source === "portion_vision_openai") {
@@ -11285,6 +11322,7 @@ async function runDishAnalysis(env, body, ctx) {
         const safeWeight = Number.isFinite(weight) && weight > 0 ? weight : 0;
         const componentLabel = comp && comp.label || comp && comp.role || `component_${idx + 1}`;
         return {
+          component_id: comp && comp.component_id || comp && comp.id || `c${idx}`,
           component: componentLabel,
           role: comp && comp.role ? comp.role : "unknown",
           category: comp && comp.category ? comp.category : "other",
@@ -11307,6 +11345,31 @@ async function runDishAnalysis(env, body, ctx) {
   }
   if (nutritionBreakdown) {
     debug.nutrition_breakdown = nutritionBreakdown;
+  }
+  let selection_default = null;
+  try {
+    const pcs = Array.isArray(plateComponents) ? plateComponents : [];
+    const selectedIds = pcs.map((comp) => comp && comp.component_id).filter((id) => typeof id === "string");
+    if (selectedIds.length > 0) {
+      const selectionInput = {
+        plate_components: plateComponents,
+        allergen_breakdown,
+        organs,
+        nutrition_summary: finalNutritionSummary,
+        nutrition_breakdown: nutritionBreakdown,
+        allergen_flags,
+        fodmap_flags,
+        lactose_flags
+      };
+      selection_default = buildSelectionAnalysisResult(
+        selectionInput,
+        selectedIds
+      );
+    }
+  } catch (e) {
+    if (debug) {
+      debug.selection_default_error = String(e && e.message ? e.message : e);
+    }
   }
   const result = {
     ok: true,
@@ -11332,6 +11395,7 @@ async function runDishAnalysis(env, body, ctx) {
     nutrition_insights,
     nutrition_source,
     nutrition_breakdown: nutritionBreakdown,
+    selection_default,
     debug
   };
   return { status: 200, result };
@@ -11603,6 +11667,73 @@ function notFoundCandidates(ctxOrEnv, rid, trace, { query, address }) {
   );
 }
 __name(notFoundCandidates, "notFoundCandidates");
+function buildSelectionAnalysisResult(input, selectedComponentIds) {
+  const ids = Array.isArray(selectedComponentIds) ? selectedComponentIds.filter(Boolean) : [];
+  const result = {
+    componentIds: ids
+  };
+  const hasNoSelection = ids.length === 0;
+  if (hasNoSelection) {
+    return result;
+  }
+  const plateComponents = Array.isArray(input.plate_components) ? input.plate_components : [];
+  const allergenBreakdown = Array.isArray(input.allergen_breakdown) ? input.allergen_breakdown : [];
+  const nutritionBreakdown = Array.isArray(input.nutrition_breakdown) ? input.nutrition_breakdown : [];
+  const idSet = new Set(ids);
+  const selectedComponents = plateComponents.filter((comp) => {
+    const compId = comp && comp.component_id;
+    return typeof compId === "string" && idSet.has(compId);
+  });
+  const selectedAllergens = allergenBreakdown.filter((entry) => {
+    const compId = entry && entry.component_id;
+    return typeof compId === "string" && idSet.has(compId);
+  });
+  const selectedNutrition = nutritionBreakdown.filter((entry) => {
+    const compId = entry && entry.component_id;
+    return typeof compId === "string" && idSet.has(compId);
+  });
+  if (selectedComponents.length > 0) {
+    result.components = selectedComponents;
+  }
+  if (selectedAllergens.length > 0) {
+    result.allergens = selectedAllergens;
+  }
+  if (selectedNutrition.length > 0) {
+    result.nutrition = selectedNutrition;
+    const combined = {
+      energyKcal: 0,
+      protein_g: 0,
+      fat_g: 0,
+      carbs_g: 0,
+      sugar_g: 0,
+      fiber_g: 0,
+      sodium_mg: 0
+    };
+    for (const entry of selectedNutrition) {
+      if (!entry || typeof entry !== "object") continue;
+      const n = entry;
+      if (typeof n.energyKcal === "number") combined.energyKcal += n.energyKcal;
+      if (typeof n.protein_g === "number") combined.protein_g += n.protein_g;
+      if (typeof n.fat_g === "number") combined.fat_g += n.fat_g;
+      if (typeof n.carbs_g === "number") combined.carbs_g += n.carbs_g;
+      if (typeof n.sugar_g === "number") combined.sugar_g += n.sugar_g;
+      if (typeof n.fiber_g === "number") combined.fiber_g += n.fiber_g;
+      if (typeof n.sodium_mg === "number") combined.sodium_mg += n.sodium_mg;
+    }
+    result.combined_nutrition = combined;
+  }
+  if (Array.isArray(input.allergen_flags) && input.allergen_flags.length > 0) {
+    result.combined_allergens = input.allergen_flags;
+  }
+  if (input.fodmap_flags) {
+    result.combined_fodmap = input.fodmap_flags;
+  }
+  if (input.lactose_flags) {
+    result.combined_lactose = input.lactose_flags;
+  }
+  return result;
+}
+__name(buildSelectionAnalysisResult, "buildSelectionAnalysisResult");
 function handleFetch(request, env, ctx) {
   return _worker_impl.fetch(request, env, ctx);
 }

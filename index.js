@@ -1,4 +1,3 @@
-
 /* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
 
 // tb-dish-processor — Cloudflare Worker (Modules) — Uber Eats + Lexicon + Queue + Debug
@@ -170,6 +169,38 @@ EVIDENCE & EXPLANATION RULES (VERY IMPORTANT):
   - Good: "Typical meatball recipes use egg as a binder, and the recipe used for this analysis includes egg yolks."
   - Bad: "Contains egg yolks." (this hides where the information came from).
 `;
+
+/**
+ * @typedef {string} TbComponentId
+ */
+
+/**
+ * @typedef {Object} TbSelectionAnalysisInput
+ * @property {Array<any>|null|undefined} plate_components
+ * @property {Array<any>|null|undefined} allergen_breakdown
+ * @property {any|null|undefined} organs
+ * @property {any|null|undefined} nutrition_summary
+ * @property {any|null|undefined} nutrition_breakdown
+ * @property {Array<any>|null|undefined} [allergen_flags]
+ * @property {any|null|undefined} [fodmap_flags]
+ * @property {any|null|undefined} [lactose_flags]
+ */
+
+/**
+ * @typedef {Object} TbSelectionAnalysisResult
+ * @property {TbComponentId[]} componentIds
+ * @property {Array<any>} [components]
+ * @property {Array<any>} [allergens]
+ * @property {Array<any>} [nutrition]
+ * @property {any} [combined_nutrition]
+ * @property {Array<any>} [combined_allergens]
+ * @property {any} [combined_fodmap]
+ * @property {any} [combined_lactose]
+ * @property {any} [fodmap]
+ * @property {any} [lactose]
+ * @property {any} [lifestyle]
+ * @property {any} [organs]
+ */
 
 const DEFAULT_SERVINGS_BY_CATEGORY = {
   "Pasta & Pizza": 1.3,
@@ -760,9 +791,7 @@ async function handleOrgansFromDish(url, env, request) {
     const combinedHits = [
       ...fatsecretHits,
       ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
-      ...(Array.isArray(inferredIngredientHits)
-        ? inferredIngredientHits
-        : [])
+      ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
     ];
 
     organ = await assessOrgansLocally(env, {
@@ -1970,7 +1999,10 @@ function normalizeWrapsAndSaladBowls(items) {
       cat = "Sandwiches & Burgers";
     }
 
-    if (name.includes("salad bowl") || (name.includes("salad") && section.includes("bowl"))) {
+    if (
+      name.includes("salad bowl") ||
+      (name.includes("salad") && section.includes("bowl"))
+    ) {
       cat = "Salads";
     }
 
@@ -2306,8 +2338,7 @@ function groupItemsIntoSections(items) {
 }
 // haversine distance in meters
 function computeDistanceMeters(lat1, lon1, lat2, lon2) {
-  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null)
-    return null;
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
 
   const R = 6371000;
   const toRad = (d) => (d * Math.PI) / 180;
@@ -2514,14 +2545,17 @@ function extractMenuItemsFromUber(raw, queryText = "") {
     const newDesc = normalizedItem.description || "";
     const existingHasCalories = !!existing.calories_display;
     const newHasCalories = !!normalizedItem.calories_display;
-    const existingHasPrice =
-      existing.price != null || !!existing.price_display;
+    const existingHasPrice = existing.price != null || !!existing.price_display;
     const newHasPrice =
       normalizedItem.price != null || !!normalizedItem.price_display;
 
     let replace = false;
     if (!existingHasPrice && newHasPrice) replace = true;
-    else if (existingHasPrice === newHasPrice && !existingHasCalories && newHasCalories)
+    else if (
+      existingHasPrice === newHasPrice &&
+      !existingHasCalories &&
+      newHasCalories
+    )
       replace = true;
     else if (
       existingHasPrice === newHasPrice &&
@@ -3655,9 +3689,7 @@ function arrangeCookbookIngredients(rawList = []) {
 
   const bullets = ordered.map((c) => `- ${c.name}`);
   if (optional.length) {
-    bullets.push(
-      `- Optional: ${optional.map((c) => c.name).join(", ")}`
-    );
+    bullets.push(`- Optional: ${optional.map((c) => c.name).join(", ")}`);
   }
   return bullets.length ? bullets : ["- Ingredients not available"];
 }
@@ -3673,13 +3705,29 @@ function naturalList(arr = [], fallback = "the ingredients") {
 function inferCookbookDescription(dishName, bullets = []) {
   const name = (dishName || "").trim();
   const proteins = bullets
-    .filter((b) => b.startsWith("- ") && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b))
+    .filter(
+      (b) =>
+        b.startsWith("- ") &&
+        /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const bases = bullets
-    .filter((b) => b.startsWith("- ") && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b))
+    .filter(
+      (b) =>
+        b.startsWith("- ") &&
+        /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(
+          b
+        )
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const accents = bullets
-    .filter((b) => b.startsWith("- ") && /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(b))
+    .filter(
+      (b) =>
+        b.startsWith("- ") &&
+        /garlic|onion|herb|oregano|basil|parsley|sauce|broth|oil|vinegar/i.test(
+          b
+        )
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
 
   const subject = name || "This dish";
@@ -3701,7 +3749,10 @@ function cleanCookbookStep(text) {
   s = s.replace(/^\s*(step\s*\d+[:\.\)]?\s*)/i, "");
   s = s.replace(/^\s*\d+[\.\)]\s*/, "");
   s = s.replace(/\s+/g, " ").trim();
-  s = s.replace(/\byou\b/gi, "").replace(/\byour\b/gi, "").trim();
+  s = s
+    .replace(/\byou\b/gi, "")
+    .replace(/\byour\b/gi, "")
+    .trim();
   if (!s) return null;
   const capped = s.charAt(0).toUpperCase() + s.slice(1);
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
@@ -3713,16 +3764,30 @@ function inferCookbookSteps(rawSteps = [], ingredientBullets = []) {
     : [];
 
   const proteins = ingredientBullets
-    .filter((b) => /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b))
+    .filter(
+      (b) =>
+        /^- /.test(b) && /chicken|beef|pork|salmon|shrimp|tofu|egg/i.test(b)
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const bases = ingredientBullets
-    .filter((b) => /^- /.test(b) && /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(b))
+    .filter(
+      (b) =>
+        /^- /.test(b) &&
+        /rice|pasta|noodle|potato|quinoa|couscous|tortilla|greens|spinach|kale/i.test(
+          b
+        )
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const aromatics = ingredientBullets
-    .filter((b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b))
+    .filter(
+      (b) => /^- /.test(b) && /garlic|onion|shallot|ginger|herb|pepper/i.test(b)
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
   const liquids = ingredientBullets
-    .filter((b) => /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b))
+    .filter(
+      (b) =>
+        /^- /.test(b) && /oil|vinegar|broth|stock|sauce|milk|cream/i.test(b)
+    )
     .map((b) => b.replace(/^- /, "").replace(/^Optional: /i, ""));
 
   const inferred = [];
@@ -3775,7 +3840,9 @@ function formatLikelyRecipeMarkdown({
   rawSteps = [],
   servingInfo = null
 }) {
-  const title = dishName ? `### Likely recipe: ${dishName}` : "### Likely recipe";
+  const title = dishName
+    ? `### Likely recipe: ${dishName}`
+    : "### Likely recipe";
   const ingredients = arrangeCookbookIngredients(rawIngredients);
   const description = inferCookbookDescription(dishName, ingredients);
   const steps = inferCookbookSteps(rawSteps, ingredients);
@@ -3794,7 +3861,9 @@ function formatLikelyRecipeMarkdown({
   if (servingInfo && (servingInfo.servings || servingInfo.grams)) {
     const bits = [];
     if (servingInfo.servings)
-      bits.push(`${servingInfo.servings} serving${servingInfo.servings > 1 ? "s" : ""}`);
+      bits.push(
+        `${servingInfo.servings} serving${servingInfo.servings > 1 ? "s" : ""}`
+      );
     if (servingInfo.grams) bits.push(`${servingInfo.grams} g`);
     const joined =
       bits.length === 2 ? `${bits[0]} (${bits[1]})` : bits.join("");
@@ -4463,7 +4532,6 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
   }
 }
 
-
 // --- LLM organ engine: GPT-4o-mini ---
 //
 // payload must include:
@@ -4509,7 +4577,7 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
 //     area_ratio?: number
 //   }>
 // }
-// 
+//
 // Returns: { ok: boolean, data?: any, error?: string }
 
 async function runOrgansLLM(env, payload) {
@@ -4519,7 +4587,7 @@ async function runOrgansLLM(env, payload) {
 
   const model = "gpt-4o-mini";
 
-const systemPrompt = `
+  const systemPrompt = `
 You are a diet and organ comfort analysis assistant for an IBS / gut-sensitivity app.
 You work at a wellness / educational level (not medical advice).
 
@@ -4753,7 +4821,7 @@ async function runAllergenMiniLLM(env, input) {
 
   const model = env.OPENAI_MODEL_ALLERGEN || "gpt-4.1-mini";
 
-const systemPrompt = `
+  const systemPrompt = `
 You are an expert allergen, FODMAP, and lactose analyst for restaurant dishes.
 
 INPUT:
@@ -5024,8 +5092,7 @@ function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
 
   const block = {
     ok: true,
-    tummy_barometer:
-      tummy ||
+    tummy_barometer: tummy ||
       (existingOrgansBlock && existingOrgansBlock.tummy_barometer) || {
         score: 0,
         label: "Unknown comfort"
@@ -5341,7 +5408,9 @@ No extra keys, no commentary outside JSON.
           menuSection:
             input && input.menuSection ? String(input.menuSection) : null,
           menuDescription:
-            input && input.menuDescription ? String(input.menuDescription) : null
+            input && input.menuDescription
+              ? String(input.menuDescription)
+              : null
         },
         null,
         2
@@ -5431,7 +5500,8 @@ No extra keys, no commentary outside JSON.
       ? parsed.plate_components
       : [];
     const pf =
-      typeof portion.portionFactor === "number" && isFinite(portion.portionFactor)
+      typeof portion.portionFactor === "number" &&
+      isFinite(portion.portionFactor)
         ? portion.portionFactor
         : typeof portion.servings_on_plate === "number" &&
             isFinite(portion.servings_on_plate)
@@ -5456,8 +5526,7 @@ No extra keys, no commentary outside JSON.
         return conf >= 0.35;
       })
       .map((c) => {
-        const role =
-          typeof c.role === "string" && c.role ? c.role : "unknown";
+        const role = typeof c.role === "string" && c.role ? c.role : "unknown";
         const category =
           typeof c.category === "string" && c.category ? c.category : "other";
         const label =
@@ -5465,8 +5534,7 @@ No extra keys, no commentary outside JSON.
           (typeof c.component === "string" && c.component) ||
           (typeof c.name === "string" && c.name) ||
           "Component";
-        const confidence =
-          typeof c.confidence === "number" ? c.confidence : 0;
+        const confidence = typeof c.confidence === "number" ? c.confidence : 0;
         const area_ratio =
           typeof c.area_ratio === "number" && c.area_ratio > 0
             ? c.area_ratio
@@ -7218,7 +7286,7 @@ async function resolveRecipeWithCache(
     notes =
       typeof cached.notes === "object" && cached.notes
         ? { ...cached.notes }
-      : {};
+        : {};
     out = {
       ...cached,
       cache: true,
@@ -9143,7 +9211,10 @@ function extractGooglePhotoUrl(place, apiKey) {
 }
 
 async function fetchGooglePlaceDetailsGateway(env, placeId) {
-  console.log("DEBUG: fetchGooglePlaceDetailsGateway called with placeId:", placeId);
+  console.log(
+    "DEBUG: fetchGooglePlaceDetailsGateway called with placeId:",
+    placeId
+  );
 
   const apiKey = env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) {
@@ -9192,9 +9263,7 @@ async function fetchGooglePlaceDetailsGateway(env, placeId) {
       name: result.name || "",
       address:
         result.formatted_address ||
-        [result.vicinity, result.formatted_address]
-          .filter(Boolean)
-          .join(", "),
+        [result.vicinity, result.formatted_address].filter(Boolean).join(", "),
       lat: loc.lat ?? null,
       lng: loc.lng ?? null,
       raw: data
@@ -9480,10 +9549,18 @@ async function callUberMenuGateway(env, googleContext, opts = {}) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
   const key = env.RAPIDAPI_KEY || env.RAPID_API_KEY;
   if (!key) {
-    return { ok: false, source: "uber_gateway_menu", error: "Missing RAPIDAPI_KEY" };
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "Missing RAPIDAPI_KEY"
+    };
   }
   if (!host) {
-    return { ok: false, source: "uber_gateway_menu", error: "Missing UBER_RAPID_HOST" };
+    return {
+      ok: false,
+      source: "uber_gateway_menu",
+      error: "Missing UBER_RAPID_HOST"
+    };
   }
 
   const query = googleContext.name || "";
@@ -9639,14 +9716,12 @@ async function extractMenuGateway(
   const dishes = (uber.items || []).map((it, idx) => {
     const raw = it.raw || {};
     const imageUrl =
-      it.imageUrl ||
-      raw.imageUrl ||
-      raw.image_url ||
-      raw.image ||
-      null;
+      it.imageUrl || raw.imageUrl || raw.image_url || raw.image || null;
 
     const numericRestaurantCalories =
-      (typeof it.restaurantCalories === "number" ? it.restaurantCalories : null) ??
+      (typeof it.restaurantCalories === "number"
+        ? it.restaurantCalories
+        : null) ??
       (raw?.nutrition && typeof raw.nutrition.calories === "number"
         ? raw.nutrition.calories
         : null) ??
@@ -9675,7 +9750,13 @@ async function extractMenuGateway(
   // 2) Assign canonicalCategory to each dish
   const classified = filteredDishes.map((d) => {
     const category = canonicalCategoryFromSectionAndName(d.section, d.name);
-    return { ...d, canonicalCategory: classifyCanonicalCategory({ ...d, canonicalCategory: category }) };
+    return {
+      ...d,
+      canonicalCategory: classifyCanonicalCategory({
+        ...d,
+        canonicalCategory: category
+      })
+    };
   });
 
   // Wing-specific override
@@ -9721,9 +9802,7 @@ async function extractMenuGateway(
       : withSectionRemap;
   const hardFilteredLLM = normalizeWrapsAndSaladBowls(
     applyLLMOverrides(withLLM)
-  ).filter(
-    (it) => !hardBlockItem(it.name, it.description)
-  );
+  ).filter((it) => !hardBlockItem(it.name, it.description));
 
   // Final hard blocklist (no exceptions)
   const hardFiltered = hardFilteredLLM;
@@ -9836,7 +9915,12 @@ function pickBestRestaurant({ rows, query, googleContext }) {
 
   // 2) Legacy scoring fallback (keeps system working if no googleContext)
   function scoreRow(row) {
-    const name = (row.title || row.sanitizedTitle || row.name || "").toLowerCase();
+    const name = (
+      row.title ||
+      row.sanitizedTitle ||
+      row.name ||
+      ""
+    ).toLowerCase();
     const q = (query || "").toLowerCase();
     if (!name || !q) return 0;
 
@@ -9918,7 +10002,7 @@ function explainRestaurantChoices({ rows, query, limit = 10 }) {
 }
 
 const _worker_impl = {
-// ---- HTTP routes (health + debug + enqueue + results + uber-test) ----
+  // ---- HTTP routes (health + debug + enqueue + results + uber-test) ----
   fetch: async (request, env, ctx) => {
     const url = new URL(request.url);
     // async fire-and-forget metrics logging
@@ -9990,7 +10074,10 @@ const _worker_impl = {
         );
       }
     }
-    if (pathname === "/pipeline/analyze-dish/card" && request.method === "POST") {
+    if (
+      pathname === "/pipeline/analyze-dish/card" &&
+      request.method === "POST"
+    ) {
       try {
         const body = (await readJson(request)) || {};
 
@@ -10000,7 +10087,10 @@ const _worker_impl = {
           apiVersion: result.apiVersion || "v1",
           dishName: result.dishName || body?.dishName || body?.dish || null,
           restaurantName:
-            result.restaurantName || body?.restaurantName || body?.restaurant || null,
+            result.restaurantName ||
+            body?.restaurantName ||
+            body?.restaurant ||
+            null,
           summary: result.summary || null
         };
         return okJson(card, status);
@@ -10049,8 +10139,7 @@ const _worker_impl = {
         env.metrics_core?.fetch?.bind(env.metrics_core) || null;
 
       const metricsUrl =
-        env.METRICS_CORE_URL ||
-        "https://tb-metrics-core.internal/debug/whoami";
+        env.METRICS_CORE_URL || "https://tb-metrics-core.internal/debug/whoami";
 
       // Legacy recipe core worker has been demoted; main gateway now owns recipe resolution.
       results.recipeCoreLegacy = {
@@ -10071,8 +10160,7 @@ const _worker_impl = {
         error: String(e)
       }));
 
-      const overallOk =
-        results.gateway.ok && results.metrics_core.ok;
+      const overallOk = results.gateway.ok && results.metrics_core.ok;
 
       return new Response(
         JSON.stringify(
@@ -13526,7 +13614,6 @@ async function incZestfulCount(env, linesCount = 0) {
   return next;
 }
 
-
 // === Risk scoring (allergens + FODMAP -> flags + tummy_barometer) ===
 const RISK = {
   allergenWeights: {
@@ -13584,15 +13671,17 @@ function getEdamamHealthLabelsFromRecipe(recipeResult) {
   const raw = recipeResult.out.raw || {};
   let labels = raw.healthLabels;
 
-  if (!Array.isArray(labels) && raw.recipe && Array.isArray(raw.recipe.healthLabels)) {
+  if (
+    !Array.isArray(labels) &&
+    raw.recipe &&
+    Array.isArray(raw.recipe.healthLabels)
+  ) {
     labels = raw.recipe.healthLabels;
   }
 
   if (!Array.isArray(labels)) return [];
 
-  return labels
-    .map((l) => (l || "").toString().trim())
-    .filter(Boolean);
+  return labels.map((l) => (l || "").toString().trim()).filter(Boolean);
 }
 function getEdamamFodmapOverrideFromRecipe(recipeResult) {
   if (!recipeResult || !recipeResult.out) return null;
@@ -13600,7 +13689,11 @@ function getEdamamFodmapOverrideFromRecipe(recipeResult) {
   const raw = recipeResult.out.raw || {};
   let labels = raw.healthLabels;
 
-  if (!Array.isArray(labels) && raw.recipe && Array.isArray(raw.recipe.healthLabels)) {
+  if (
+    !Array.isArray(labels) &&
+    raw.recipe &&
+    Array.isArray(raw.recipe.healthLabels)
+  ) {
     labels = raw.recipe.healthLabels;
   }
 
@@ -13609,13 +13702,7 @@ function getEdamamFodmapOverrideFromRecipe(recipeResult) {
   }
 
   const normalized = labels
-    .map((l) =>
-      (l || "")
-        .toString()
-        .toLowerCase()
-        .replace(/[_-]/g, " ")
-        .trim()
-    )
+    .map((l) => (l || "").toString().toLowerCase().replace(/[_-]/g, " ").trim())
     .filter(Boolean);
 
   const hasFodmapFree = normalized.some(
@@ -13705,11 +13792,7 @@ function extractLactoseFromHits(hits) {
 
     if (!bestLevel || rank[lvl] > rank[bestLevel]) bestLevel = lvl;
 
-    const name =
-      h.canonical ||
-      h.term ||
-      (fod && fod.note) ||
-      "";
+    const name = h.canonical || h.term || (fod && fod.note) || "";
     if (name) examples.add(name);
   }
 
@@ -14381,11 +14464,12 @@ async function runDishAnalysis(env, body, ctx) {
 
   const dishName = (body.dishName || body.dish || "").trim();
   const restaurantName = (body.restaurantName || body.restaurant || "").trim();
-  const menuDescription =
-    (body.menuDescription ||
-      body.description ||
-      body.dishDescription ||
-      "").trim();
+  const menuDescription = (
+    body.menuDescription ||
+    body.description ||
+    body.dishDescription ||
+    ""
+  ).trim();
   const menuSection = body.menuSection || body.section || null;
   const canonicalCategory = body.canonicalCategory || body.category || null;
 
@@ -14430,9 +14514,7 @@ async function runDishAnalysis(env, body, ctx) {
   });
 
   const nutritionSummaryFromRecipe =
-    (recipeResult &&
-      recipeResult.out &&
-      recipeResult.out.nutrition_summary) ||
+    (recipeResult && recipeResult.out && recipeResult.out.nutrition_summary) ||
     recipeResult.nutrition_summary ||
     null;
   let finalNutritionSummary = nutritionSummaryFromRecipe || null;
@@ -14504,17 +14586,20 @@ async function runDishAnalysis(env, body, ctx) {
   }
 
   const ingredientsParsed =
-    (recipeResult?.out && Array.isArray(recipeResult.out.ingredients_parsed)
+    recipeResult?.out && Array.isArray(recipeResult.out.ingredients_parsed)
       ? recipeResult.out.ingredients_parsed
       : Array.isArray(recipeResult?.parsed)
         ? recipeResult.parsed
-        : null);
+        : null;
 
   // Rebuild ingredients from parsed rows if present
   let ingredients = Array.isArray(recipeResult?.ingredients)
     ? recipeResult.ingredients
     : [];
-  if ((!ingredients || !ingredients.length) && Array.isArray(ingredientsParsed)) {
+  if (
+    (!ingredients || !ingredients.length) &&
+    Array.isArray(ingredientsParsed)
+  ) {
     ingredients = ingredientsParsed.map((row) => ({
       name: row.name || row.original || "",
       qty:
@@ -14524,8 +14609,7 @@ async function runDishAnalysis(env, body, ctx) {
             ? Number(row.qty) || null
             : null,
       unit: row.unit || null,
-      comment:
-        row.comment || row.preparation || row.preparationNotes || null
+      comment: row.comment || row.preparation || row.preparationNotes || null
     }));
   }
 
@@ -14572,7 +14656,8 @@ async function runDishAnalysis(env, body, ctx) {
   let servingsUsed = 1;
   function getServingsFromRecipe(recipeResult) {
     try {
-      const recipe = recipeResult && recipeResult.out && recipeResult.out.recipe;
+      const recipe =
+        recipeResult && recipeResult.out && recipeResult.out.recipe;
       if (!recipe) return 1;
       const yieldValue =
         recipe.yield ?? recipe.servings ?? recipe.serving ?? recipe.portions;
@@ -14594,9 +14679,7 @@ async function runDishAnalysis(env, body, ctx) {
       recipeResult?.ingLines ||
       [],
     ingredients_parsed:
-      recipeResult?.out?.ingredients_parsed ||
-      recipeResult?.parsed ||
-      null
+      recipeResult?.out?.ingredients_parsed || recipeResult?.parsed || null
   };
 
   if (
@@ -14686,8 +14769,7 @@ async function runDishAnalysis(env, body, ctx) {
 
         finalNutritionSummary = {
           energyKcal: kcalFromRestaurant,
-          protein_g:
-            (finalNutritionSummary.protein_g || 0) * ratio,
+          protein_g: (finalNutritionSummary.protein_g || 0) * ratio,
           fat_g: (finalNutritionSummary.fat_g || 0) * ratio,
           carbs_g: (finalNutritionSummary.carbs_g || 0) * ratio,
           sugar_g: (finalNutritionSummary.sugar_g || 0) * ratio,
@@ -14769,9 +14851,7 @@ async function runDishAnalysis(env, body, ctx) {
   const combinedHits = [
     ...fatsecretHits,
     ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
-    ...(Array.isArray(inferredIngredientHits)
-      ? inferredIngredientHits
-      : [])
+    ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
   ];
 
   const user_flags = body.user_flags || body.userFlags || {};
@@ -14783,19 +14863,15 @@ async function runDishAnalysis(env, body, ctx) {
   let allergen_lifestyle_tags = [];
   let allergen_lifestyle_checks = null;
 
-  const allergenEvidenceText = (
-    [
-      dishName,
-      restaurantName,
-      menuDescription,
-      Array.isArray(body.tags) ? body.tags.join(" ") : "",
-      Array.isArray(body.ingredients)
-        ? JSON.stringify(body.ingredients)
-        : ""
-    ]
-      .join(" ")
-      .toLowerCase()
-  );
+  const allergenEvidenceText = [
+    dishName,
+    restaurantName,
+    menuDescription,
+    Array.isArray(body.tags) ? body.tags.join(" ") : "",
+    Array.isArray(body.ingredients) ? JSON.stringify(body.ingredients) : ""
+  ]
+    .join(" ")
+    .toLowerCase();
 
   const hasEvidenceForAllergen = (kind, text) => {
     if (!text) return false;
@@ -14964,8 +15040,7 @@ async function runDishAnalysis(env, body, ctx) {
   const llmPayload = {
     dishName,
     restaurantName,
-    ingredientLines:
-      normalized?.ingredients_lines || normalized?.lines || [],
+    ingredientLines: normalized?.ingredients_lines || normalized?.lines || [],
     ingredientsNormalized: normalized?.items || ingredients || [],
     existingFlags: {},
     userFlags: user_flags,
@@ -15157,6 +15232,7 @@ async function runDishAnalysis(env, body, ctx) {
           }
 
           return {
+            component_id: (pc && pc.component_id) || (pc && pc.id) || `c${idx}`,
             component: label,
             role,
             category,
@@ -15174,9 +15250,7 @@ async function runDishAnalysis(env, body, ctx) {
       );
     }
 
-    lifestyle_tags = Array.isArray(a.lifestyle_tags)
-      ? a.lifestyle_tags
-      : [];
+    lifestyle_tags = Array.isArray(a.lifestyle_tags) ? a.lifestyle_tags : [];
     lifestyle_checks =
       a.lifestyle_checks && typeof a.lifestyle_checks === "object"
         ? a.lifestyle_checks
@@ -15230,8 +15304,7 @@ async function runDishAnalysis(env, body, ctx) {
       (fodmapReason && fodmapReason.level) ||
       null;
 
-    const onionGarlic =
-      !!flags.onion || !!flags.garlic || !!flags.onion_garlic;
+    const onionGarlic = !!flags.onion || !!flags.garlic || !!flags.onion_garlic;
 
     summary = {
       tummyBarometer: {
@@ -15321,7 +15394,7 @@ async function runDishAnalysis(env, body, ctx) {
     }
   }
 
-summary = (() => {
+  summary = (() => {
     if (!organs || !organs.ok) {
       return null;
     }
@@ -15352,8 +15425,7 @@ summary = (() => {
       (fodmapReason && fodmapReason.level) ||
       null;
 
-    const onionGarlic =
-      !!flags.onion || !!flags.garlic || !!flags.onion_garlic;
+    const onionGarlic = !!flags.onion || !!flags.garlic || !!flags.onion_garlic;
 
     return {
       tummyBarometer: {
@@ -15488,6 +15560,14 @@ summary = (() => {
       (err && (err.stack || err.message)) || err
     );
   }
+  // Attach stable component_ids for downstream mapping
+  plateComponents = Array.isArray(plateComponents)
+    ? plateComponents.map((comp, idx) => ({
+        component_id:
+          (comp && comp.component_id) || (comp && comp.id) || `c${idx}`,
+        ...comp
+      }))
+    : [];
 
   // Manual portion factor currently not used (no user selector in UI)
   const manualPortionFactor = 1;
@@ -15631,9 +15711,7 @@ summary = (() => {
         ? `${Math.round(n.protein_g)} g protein`
         : null,
       typeof n.fat_g === "number" ? `${Math.round(n.fat_g)} g fat` : null,
-      typeof n.carbs_g === "number"
-        ? `${Math.round(n.carbs_g)} g carbs`
-        : null,
+      typeof n.carbs_g === "number" ? `${Math.round(n.carbs_g)} g carbs` : null,
       typeof n.sodium_mg === "number"
         ? `${Math.round(n.sodium_mg)} mg sodium`
         : null
@@ -15652,7 +15730,11 @@ summary = (() => {
   // --- nutrition_breakdown by plate_components ---
   let nutritionBreakdown = null;
   try {
-    if (finalNutritionSummary && plateComponents && plateComponents.length > 0) {
+    if (
+      finalNutritionSummary &&
+      plateComponents &&
+      plateComponents.length > 0
+    ) {
       const macros = {
         energyKcal: finalNutritionSummary.energyKcal || 0,
         protein_g: finalNutritionSummary.protein_g || 0,
@@ -15682,11 +15764,11 @@ summary = (() => {
         const weight = rawAreas[idx] / sumAreas;
         const safeWeight = Number.isFinite(weight) && weight > 0 ? weight : 0;
         const componentLabel =
-          (comp && comp.label) ||
-          (comp && comp.role) ||
-          `component_${idx + 1}`;
+          (comp && comp.label) || (comp && comp.role) || `component_${idx + 1}`;
 
         return {
+          component_id:
+            (comp && comp.component_id) || (comp && comp.id) || `c${idx}`,
           component: componentLabel,
           role: comp && comp.role ? comp.role : "unknown",
           category: comp && comp.category ? comp.category : "other",
@@ -15710,6 +15792,37 @@ summary = (() => {
 
   if (nutritionBreakdown) {
     debug.nutrition_breakdown = nutritionBreakdown;
+  }
+
+  // --- selection_default: whole-dish selection using all component_ids ---
+  let selection_default = null;
+  try {
+    const pcs = Array.isArray(plateComponents) ? plateComponents : [];
+    const selectedIds = pcs
+      .map((comp) => comp && comp.component_id)
+      .filter((id) => typeof id === "string");
+
+    if (selectedIds.length > 0) {
+      const selectionInput = {
+        plate_components: plateComponents,
+        allergen_breakdown,
+        organs,
+        nutrition_summary: finalNutritionSummary,
+        nutrition_breakdown: nutritionBreakdown,
+        allergen_flags,
+        fodmap_flags,
+        lactose_flags
+      };
+
+      selection_default = buildSelectionAnalysisResult(
+        selectionInput,
+        selectedIds
+      );
+    }
+  } catch (e) {
+    if (debug) {
+      debug.selection_default_error = String(e && e.message ? e.message : e);
+    }
   }
 
   const result = {
@@ -15736,6 +15849,7 @@ summary = (() => {
     nutrition_insights,
     nutrition_source,
     nutrition_breakdown: nutritionBreakdown,
+    selection_default,
     debug
   };
 
@@ -15761,11 +15875,7 @@ async function callRapid(env, query, address) {
 
 // Per-ingredient Lexicon classification (phase 1 visibility)
 // ---- FatSecret integration (proxy → lex-style hits) -----------------------
-async function fetchFatSecretAllergensViaProxy(
-  env,
-  ingredients,
-  lang = "en"
-) {
+async function fetchFatSecretAllergensViaProxy(env, ingredients, lang = "en") {
   if (!env?.FATSECRET_PROXY_URL) {
     return {
       ok: false,
@@ -16097,6 +16207,125 @@ function notFoundCandidates(ctxOrEnv, rid, trace, { query, address }) {
     rid
   );
 }
+
+/**
+ * INTERNAL helper to compute a selection-level analysis result
+ * for a set of plate component IDs.
+ *
+ * NOTE:
+ * - This helper is NOT wired into any routes yet.
+ * - It MUST NOT throw; always return a safe, minimal object.
+ * - Aggregation logic (allergens/FODMAP/lactose/organs/nutrition) will be
+ *   added in later steps.
+ *
+ * @param {TbSelectionAnalysisInput} input
+ * @param {TbComponentId[]} selectedComponentIds
+ * @returns {TbSelectionAnalysisResult}
+ */
+function buildSelectionAnalysisResult(input, selectedComponentIds) {
+  const ids = Array.isArray(selectedComponentIds)
+    ? selectedComponentIds.filter(Boolean)
+    : [];
+
+  /** @type {TbSelectionAnalysisResult} */
+  const result = {
+    componentIds: ids
+  };
+
+  const hasNoSelection = ids.length === 0;
+
+  if (hasNoSelection) {
+    // Whole dish view:
+    // In future steps we may pass through whole-dish allergen/organs/nutrition here.
+    return result;
+  }
+
+  // Normalize input arrays
+  const plateComponents = Array.isArray(input.plate_components)
+    ? input.plate_components
+    : [];
+
+  const allergenBreakdown = Array.isArray(input.allergen_breakdown)
+    ? input.allergen_breakdown
+    : [];
+
+  const nutritionBreakdown = Array.isArray(input.nutrition_breakdown)
+    ? input.nutrition_breakdown
+    : [];
+
+  // Fast lookup set for IDs
+  const idSet = new Set(ids);
+
+  const selectedComponents = plateComponents.filter((comp) => {
+    const compId = comp && comp.component_id;
+    return typeof compId === "string" && idSet.has(compId);
+  });
+
+  const selectedAllergens = allergenBreakdown.filter((entry) => {
+    const compId = entry && entry.component_id;
+    return typeof compId === "string" && idSet.has(compId);
+  });
+
+  const selectedNutrition = nutritionBreakdown.filter((entry) => {
+    const compId = entry && entry.component_id;
+    return typeof compId === "string" && idSet.has(compId);
+  });
+
+  if (selectedComponents.length > 0) {
+    result.components = selectedComponents;
+  }
+
+  if (selectedAllergens.length > 0) {
+    result.allergens = selectedAllergens;
+  }
+
+  if (selectedNutrition.length > 0) {
+    result.nutrition = selectedNutrition;
+
+    // Aggregate numeric nutrition fields across the selection
+    const combined = {
+      energyKcal: 0,
+      protein_g: 0,
+      fat_g: 0,
+      carbs_g: 0,
+      sugar_g: 0,
+      fiber_g: 0,
+      sodium_mg: 0
+    };
+
+    for (const entry of selectedNutrition) {
+      if (!entry || typeof entry !== "object") continue;
+      const n = entry;
+      if (typeof n.energyKcal === "number") combined.energyKcal += n.energyKcal;
+      if (typeof n.protein_g === "number") combined.protein_g += n.protein_g;
+      if (typeof n.fat_g === "number") combined.fat_g += n.fat_g;
+      if (typeof n.carbs_g === "number") combined.carbs_g += n.carbs_g;
+      if (typeof n.sugar_g === "number") combined.sugar_g += n.sugar_g;
+      if (typeof n.fiber_g === "number") combined.fiber_g += n.fiber_g;
+      if (typeof n.sodium_mg === "number") combined.sodium_mg += n.sodium_mg;
+    }
+
+    result.combined_nutrition = combined;
+  }
+
+  // Mirror global health flags into the selection result for now.
+  if (Array.isArray(input.allergen_flags) && input.allergen_flags.length > 0) {
+    result.combined_allergens = input.allergen_flags;
+  }
+
+  if (input.fodmap_flags) {
+    result.combined_fodmap = input.fodmap_flags;
+  }
+
+  if (input.lactose_flags) {
+    result.combined_lactose = input.lactose_flags;
+  }
+
+  // FODMAP / lactose / lifestyle / organs aggregation will be added in later steps.
+
+  return result;
+}
+
 function corsJson(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
