@@ -15853,7 +15853,7 @@ async function runDishAnalysis(env, body, ctx) {
 
   let portionVisionDebug = null;
   try {
-    if (dishImageUrl) {
+    if (dishImageUrl && !restaurantCalories) {
       portionVisionDebug = await runPortionVisionLLM(env, {
         dishName,
         restaurantName,
