@@ -14687,6 +14687,7 @@ async function runDishAnalysis(env, body, ctx) {
   let fatsecretImageResult = null;
   let fatsecretNormalized = null;
   let fatsecretNutritionBreakdown = null;
+  let fsComponentAllergens = null;
 
   if (!dishName) {
     return {
@@ -15901,6 +15902,11 @@ async function runDishAnalysis(env, body, ctx) {
         ) {
           fatsecretNutritionBreakdown = normalized.nutrition_breakdown;
         }
+
+        if (normalized && normalized.component_allergens) {
+          debug.fatsecret_component_allergens = normalized.component_allergens;
+          fsComponentAllergens = normalized.component_allergens;
+        }
       }
     }
   } catch (err) {
@@ -15926,7 +15932,9 @@ async function runDishAnalysis(env, body, ctx) {
     );
   }
 
-  // If FatSecret vision produced components, prefer those over vision/text components
+  // If FatSecret vision produced components, keep them for debug/backend use only.
+  // Do NOT override the UI plate_components from OpenAI vision; we want high-level
+  // meal parts (e.g., "burger", "fries") rather than individual ingredients.
   try {
     if (
       fatsecretNormalized &&
@@ -15934,13 +15942,7 @@ async function runDishAnalysis(env, body, ctx) {
       fatsecretNormalized.plate_components.length > 0
     ) {
       debug.plate_components_source = "fatsecret_image";
-      debug.plate_components_previous = Array.isArray(plateComponents)
-        ? plateComponents
-        : plateComponents === null
-          ? "null"
-          : typeof plateComponents;
-
-      plateComponents = fatsecretNormalized.plate_components;
+      debug.fs_plate_components = fatsecretNormalized.plate_components;
     }
   } catch (err) {
     debug.plate_components_fatsecret_error = String(
@@ -16327,6 +16329,7 @@ async function runDishAnalysis(env, body, ctx) {
       const selectionInput = {
         plate_components: plateComponents,
         allergen_breakdown,
+        fs_component_allergens: fsComponentAllergens,
         organs,
         nutrition_summary: finalNutritionSummary,
         nutrition_breakdown: nutritionBreakdown,
@@ -16383,6 +16386,7 @@ async function runDishAnalysis(env, body, ctx) {
         const selectionInput = {
           plate_components: plateComponents,
           allergen_breakdown,
+          fs_component_allergens: fsComponentAllergens,
           organs,
           nutrition_summary: finalNutritionSummary,
           nutrition_breakdown: nutritionBreakdown,
@@ -16870,6 +16874,9 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
     ? input.nutrition_breakdown
     : [];
 
+  const fsComponentAllergens =
+    input && input.fs_component_allergens ? input.fs_component_allergens : null;
+
   // Fast lookup set for IDs
   const idSet = new Set(ids);
 
@@ -16882,6 +16889,12 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
     const compId = entry && entry.component_id;
     return typeof compId === "string" && idSet.has(compId);
   });
+
+  const totalComponentsCount = Array.isArray(plateComponents)
+    ? plateComponents.length
+    : 0;
+  const isSubSelection =
+    ids.length > 0 && totalComponentsCount > 0 && ids.length < totalComponentsCount;
 
   const selectedNutrition = nutritionBreakdown.filter((entry) => {
     const compId = entry && entry.component_id;
@@ -17021,21 +17034,50 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
     }
   }
 
+  // Prefer FatSecret per-component allergens when a single component is selected
+  if (
+    !result.combined_allergens &&
+    fsComponentAllergens &&
+    Array.isArray(selectedIds) &&
+    selectedIds.length === 1
+  ) {
+    const compId = selectedIds[0];
+    const fsEntry = fsComponentAllergens[compId];
+    if (
+      fsEntry &&
+      Array.isArray(fsEntry.allergen_flags) &&
+      fsEntry.allergen_flags.length > 0
+    ) {
+      result.combined_allergens = fsEntry.allergen_flags;
+    } else {
+      result.combined_allergens = [];
+    }
+  }
+
   // Fallback to global flags only when no per-component data was available
   if (
     !result.combined_allergens &&
     Array.isArray(input.allergen_flags) &&
     input.allergen_flags.length > 0
   ) {
-    result.combined_allergens = input.allergen_flags;
+    // If this is a sub-selection, avoid leaking whole-plate allergens; otherwise fall back to global
+    if (!isSubSelection) {
+      result.combined_allergens = input.allergen_flags;
+    } else {
+      result.combined_allergens = [];
+    }
   }
 
   if (!result.combined_fodmap && input.fodmap_flags) {
-    result.combined_fodmap = input.fodmap_flags;
+    if (!isSubSelection) {
+      result.combined_fodmap = input.fodmap_flags;
+    }
   }
 
   if (!result.combined_lactose && input.lactose_flags) {
-    result.combined_lactose = input.lactose_flags;
+    if (!isSubSelection) {
+      result.combined_lactose = input.lactose_flags;
+    }
   }
 
   // FODMAP / lactose / lifestyle / organs aggregation will be added in later steps.
@@ -17053,9 +17095,10 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
 function normalizeFatSecretImageResult(fsRaw) {
   const plate_components = [];
   const nutrition_breakdown = [];
+  const component_allergens = {};
 
   if (!fsRaw || typeof fsRaw !== "object") {
-    return { plate_components, nutrition_breakdown };
+    return { plate_components, nutrition_breakdown, component_allergens };
   }
 
   const foodResponse = Array.isArray(fsRaw.food_response)
@@ -17063,7 +17106,7 @@ function normalizeFatSecretImageResult(fsRaw) {
     : [];
 
   if (foodResponse.length === 0) {
-    return { plate_components, nutrition_breakdown };
+    return { plate_components, nutrition_breakdown, component_allergens };
   }
 
   const totalCalories = foodResponse.reduce((sum, entry) => {
@@ -17138,6 +17181,57 @@ function normalizeFatSecretImageResult(fsRaw) {
       fiber_g,
       sodium_mg
     });
+
+    // per-component allergen flags from FatSecret (food_attributes.allergens)
+    try {
+      const allergensRoot =
+        food &&
+        food.food_attributes &&
+        food.food_attributes.allergens &&
+        food.food_attributes.allergens.allergen;
+
+      const allergenFlags = [];
+
+      if (Array.isArray(allergensRoot)) {
+        for (const al of allergensRoot) {
+          if (!al || typeof al !== "object") continue;
+          const rawName = String(al.name || "").toLowerCase();
+          const value = al.value;
+
+          // only take positives
+          if (!(value === 1 || value === "1" || value === true)) continue;
+
+          let kind = null;
+          if (rawName.includes("gluten")) kind = "gluten";
+          else if (rawName.includes("lactose") || rawName === "milk")
+            kind = "milk";
+          else if (rawName.includes("egg")) kind = "egg";
+          else if (rawName.includes("fish")) kind = "fish";
+          else if (rawName.includes("shellfish")) kind = "shellfish";
+          else if (rawName.includes("peanut")) kind = "peanut";
+          else if (rawName.includes("sesame")) kind = "sesame";
+          else if (rawName.includes("soy")) kind = "soy";
+          else if (rawName.includes("nut")) kind = "tree_nut";
+
+          if (!kind) continue;
+
+          allergenFlags.push({
+            kind,
+            present: "yes",
+            message: `Contains ${rawName} based on FatSecret image data.`,
+            source: "fatsecret-image"
+          });
+        }
+      }
+
+      if (allergenFlags.length) {
+        component_allergens[component_id] = {
+          allergen_flags: allergenFlags
+        };
+      }
+    } catch (e) {
+      // ignore FS allergen parsing issues
+    }
   });
 
   // Ensure exactly one main component: the one with the largest energyKcal
@@ -17167,7 +17261,7 @@ function normalizeFatSecretImageResult(fsRaw) {
     }
   }
 
-  return { plate_components, nutrition_breakdown };
+  return { plate_components, nutrition_breakdown, component_allergens };
 }
 
 function corsJson(data, status = 200) {
