@@ -290,7 +290,7 @@ async function readJsonSafe(request) {
 async function getFatSecretAccessToken(env) {
   const clientId = env.FATSECRET_CLIENT_ID;
   const clientSecret = env.FATSECRET_CLIENT_SECRET;
-  const scope = env.FATSECRET_SCOPES || "premier nlp image-recognition";
+  const scope = "image-recognition";
 
   if (!clientId || !clientSecret) {
     // No credentials configured; do not throw, just return null.
@@ -14652,6 +14652,27 @@ async function runDishAnalysis(env, body, ctx) {
   const menuSection = body.menuSection || body.section || null;
   const canonicalCategory = body.canonicalCategory || body.category || null;
 
+  // cache keys for tracing
+  debug.request_tags = {
+    dishName,
+    restaurantName,
+    menuSection,
+    canonicalCategory,
+    cid: correlationId
+  };
+
+  // FatSecret env snapshot (no secrets, just presence + settings)
+  const fatsecretScopeEffective = "image-recognition";
+
+  debug.fatsecret_env = {
+    hasClientId: !!env.FATSECRET_CLIENT_ID,
+    hasClientSecret: !!env.FATSECRET_CLIENT_SECRET,
+    scopesEnv: env.FATSECRET_SCOPES || null,
+    scopeEffective: fatsecretScopeEffective,
+    region: env.FATSECRET_REGION || null,
+    language: env.FATSECRET_LANGUAGE || null
+  };
+
   var summary = null;
   var organs = null;
   var allergen_flags = [];
@@ -14661,6 +14682,11 @@ async function runDishAnalysis(env, body, ctx) {
   var lifestyle_checks = null;
   var nutrition_badges = null;
   let plateComponents = [];
+
+  // FatSecret vision state
+  let fatsecretImageResult = null;
+  let fatsecretNormalized = null;
+  let fatsecretNutritionBreakdown = null;
 
   if (!dishName) {
     return {
@@ -15432,6 +15458,107 @@ async function runDishAnalysis(env, body, ctx) {
       );
     }
 
+    // Fallback: if component_allergens missing, run per-component allergen LLMs
+    if (
+      !allergen_breakdown &&
+      Array.isArray(plateComponents) &&
+      plateComponents.length > 0
+    ) {
+      debug.allergen_component_block_entered = true;
+
+      if (allergenInput) {
+        const componentPromises = plateComponents.map((pc, idx) => {
+          const compInput = buildComponentAllergenInput(allergenInput, pc, idx);
+          return runAllergenMiniLLM(env, compInput);
+        });
+
+        const settled = await Promise.allSettled(componentPromises);
+        debug.allergen_component_settled_statuses = settled.map((r, idx) => ({
+          component_id:
+            plateComponents[idx] &&
+            (plateComponents[idx].component_id ||
+              plateComponents[idx].id ||
+              `c${idx}`),
+          status: r.status
+        }));
+
+        const breakdown = [];
+
+        settled.forEach((r, idx) => {
+          if (r.status !== "fulfilled") return;
+          const value = r.value;
+          if (!value || !value.ok || !value.data || typeof value.data !== "object") {
+            return;
+          }
+          const aComp = value.data;
+          const pc = plateComponents[idx] || {};
+          const label =
+            pc.label || pc.component || pc.name || `Component ${idx + 1}`;
+          const role = pc.role || "unknown";
+          const category = pc.category || "other";
+
+          const componentFlags = [];
+          if (aComp.allergens && typeof aComp.allergens === "object") {
+            for (const [kind, info] of Object.entries(aComp.allergens)) {
+              if (!info || typeof info !== "object") continue;
+              const present = info.present || "no";
+              const reason = info.reason || "";
+              if (present === "yes" || present === "maybe") {
+                componentFlags.push({
+                  kind,
+                  present,
+                  message: reason,
+                  source: "llm-mini-component"
+                });
+              }
+            }
+          }
+
+          let componentFodmapFlags = null;
+          if (aComp.fodmap && typeof aComp.fodmap === "object") {
+            const level = aComp.fodmap.level || null;
+            const reason = aComp.fodmap.reason || "";
+            if (level) {
+              componentFodmapFlags = {
+                level,
+                reason,
+                source: "llm-mini-component"
+              };
+            }
+          }
+
+          let componentLactoseFlags = null;
+          if (aComp.lactose && typeof aComp.lactose === "object") {
+            const level = aComp.lactose.level || null;
+            const reason = aComp.lactose.reason || "";
+            if (level) {
+              componentLactoseFlags = {
+                level,
+                reason,
+                source: "llm-mini-component"
+              };
+            }
+          }
+
+          breakdown.push({
+            component_id: pc.component_id || pc.id || `c${idx}`,
+            component: label,
+            role,
+            category,
+            allergen_flags: componentFlags,
+            fodmap_flags: componentFodmapFlags,
+            lactose_flags: componentLactoseFlags
+          });
+        });
+
+        if (breakdown.length > 0) {
+          allergen_breakdown = breakdown;
+          debug.allergen_components_seen = breakdown.map((b) => b.component_id);
+          debug.allergen_component_raw = breakdown;
+        }
+      }
+    }
+
     lifestyle_tags = Array.isArray(a.lifestyle_tags) ? a.lifestyle_tags : [];
     lifestyle_checks =
       a.lifestyle_checks && typeof a.lifestyle_checks === "object"
@@ -15752,6 +15879,36 @@ async function runDishAnalysis(env, body, ctx) {
     debug.vision_insights = portionVisionDebug.insights;
   }
 
+  // FatSecret image recognition (vision) for components + nutrition
+  try {
+    if (dishImageUrl) {
+      const fsImageResult = await callFatSecretImageRecognition(
+        env,
+        dishImageUrl
+      );
+      fatsecretImageResult = fsImageResult;
+      debug.fatsecret_image_result = fsImageResult;
+
+      if (fsImageResult && fsImageResult.ok && fsImageResult.raw) {
+        const normalized = normalizeFatSecretImageResult(fsImageResult.raw);
+        fatsecretNormalized = normalized;
+        debug.fatsecret_image_normalized = normalized;
+
+        if (
+          normalized &&
+          Array.isArray(normalized.nutrition_breakdown) &&
+          normalized.nutrition_breakdown.length > 0
+        ) {
+          fatsecretNutritionBreakdown = normalized.nutrition_breakdown;
+        }
+      }
+    }
+  } catch (err) {
+    debug.fatsecret_image_error = String(
+      (err && (err.stack || err.message)) || err
+    );
+  }
+
   try {
     if (
       portionVisionDebug &&
@@ -15768,6 +15925,29 @@ async function runDishAnalysis(env, body, ctx) {
       (err && (err.stack || err.message)) || err
     );
   }
+
+  // If FatSecret vision produced components, prefer those over vision/text components
+  try {
+    if (
+      fatsecretNormalized &&
+      Array.isArray(fatsecretNormalized.plate_components) &&
+      fatsecretNormalized.plate_components.length > 0
+    ) {
+      debug.plate_components_source = "fatsecret_image";
+      debug.plate_components_previous = Array.isArray(plateComponents)
+        ? plateComponents
+        : plateComponents === null
+          ? "null"
+          : typeof plateComponents;
+
+      plateComponents = fatsecretNormalized.plate_components;
+    }
+  } catch (err) {
+    debug.plate_components_fatsecret_error = String(
+      (err && (err.stack || err.message)) || err
+    );
+  }
+
   // Attach stable component_ids for downstream mapping
   plateComponents = Array.isArray(plateComponents)
     ? plateComponents.map((comp, idx) => ({
@@ -16064,6 +16244,12 @@ async function runDishAnalysis(env, body, ctx) {
   let nutritionBreakdown = null;
   try {
     if (
+      Array.isArray(fatsecretNutritionBreakdown) &&
+      fatsecretNutritionBreakdown.length > 0
+    ) {
+      // Prefer FatSecret per-component nutrition when available
+      nutritionBreakdown = fatsecretNutritionBreakdown;
+    } else if (
       finalNutritionSummary &&
       plateComponents &&
       plateComponents.length > 0
@@ -16603,6 +16789,43 @@ function notFoundCandidates(ctxOrEnv, rid, trace, { query, address }) {
 }
 
 /**
+ * Build a component-focused allergen input for runAllergenMiniLLM.
+ * Reuses the base input (dishName, ingredients, tags, vision_insights, etc.)
+ * but makes it explicit that we only care about one plate component.
+ *
+ * @param {AllergenLLMInput} baseInput
+ * @param {object} plateComponent
+ * @param {number} idx
+ * @returns {AllergenLLMInput}
+ */
+function buildComponentAllergenInput(baseInput, plateComponent, idx) {
+  if (!baseInput || typeof baseInput !== "object") return baseInput;
+
+  const label =
+    (plateComponent &&
+      (plateComponent.label ||
+        plateComponent.component ||
+        plateComponent.name)) ||
+    `Component ${idx + 1}`;
+
+  const dishName = baseInput.dishName || "";
+  const baseDesc = baseInput.menuDescription || "";
+
+  const note =
+    `\n\nNOTE: For this analysis, consider ONLY the component "${label}"` +
+    (dishName
+      ? ` from the dish "${dishName}". Ignore other components on the plate.`
+      : `. Ignore other components on the plate.`);
+
+  return {
+    ...baseInput,
+    dishName: dishName ? `${dishName} – component: ${label}` : label,
+    menuDescription: baseDesc + note
+    // We intentionally keep ingredients, tags, vision_insights, etc. the same
+  };
+}
+
+/**
  * INTERNAL helper to compute a selection-level analysis result
  * for a set of plate component IDs.
  *
@@ -16893,7 +17116,7 @@ function normalizeFatSecretImageResult(fsRaw) {
 
     plate_components.push({
       component_id,
-      role: idx === 0 ? "main" : "side",
+      role: "side", // placeholder; will assign main after loop
       category,
       label,
       confidence: 1,
@@ -16904,7 +17127,7 @@ function normalizeFatSecretImageResult(fsRaw) {
     nutrition_breakdown.push({
       component_id,
       component: label,
-      role: idx === 0 ? "main" : "side",
+      role: "side", // placeholder; will assign main after loop
       category,
       share_ratio,
       energyKcal,
@@ -16916,6 +17139,33 @@ function normalizeFatSecretImageResult(fsRaw) {
       sodium_mg
     });
   });
+
+  // Ensure exactly one main component: the one with the largest energyKcal
+  if (
+    nutrition_breakdown.length > 0 &&
+    plate_components.length === nutrition_breakdown.length
+  ) {
+    let mainIdx = 0;
+    let maxEnergy = -Infinity;
+
+    for (let i = 0; i < nutrition_breakdown.length; i++) {
+      const n = nutrition_breakdown[i];
+      const kcal =
+        n && typeof n.energyKcal === "number" && isFinite(n.energyKcal)
+          ? n.energyKcal
+          : 0;
+      if (kcal > maxEnergy) {
+        maxEnergy = kcal;
+        mainIdx = i;
+      }
+    }
+
+    for (let i = 0; i < plate_components.length; i++) {
+      const role = i === mainIdx ? "main" : "side";
+      plate_components[i].role = role;
+      nutrition_breakdown[i].role = role;
+    }
+  }
 
   return { plate_components, nutrition_breakdown };
 }
