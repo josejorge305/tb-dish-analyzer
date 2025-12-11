@@ -15854,7 +15854,7 @@ async function runDishAnalysis(env, body, ctx) {
 
   let portionVisionDebug = null;
   try {
-    if (dishImageUrl && !restaurantCalories) {
+    if (dishImageUrl) {
       portionVisionDebug = await runPortionVisionLLM(env, {
         dishName,
         restaurantName,
@@ -17038,10 +17038,10 @@ function buildSelectionAnalysisResult(input, selectedComponentIds) {
   if (
     !result.combined_allergens &&
     fsComponentAllergens &&
-    Array.isArray(selectedIds) &&
-    selectedIds.length === 1
+    Array.isArray(ids) &&
+    ids.length === 1
   ) {
-    const compId = selectedIds[0];
+    const compId = ids[0];
     const fsEntry = fsComponentAllergens[compId];
     if (
       fsEntry &&
