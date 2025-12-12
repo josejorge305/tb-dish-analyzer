@@ -45,6 +45,10 @@ preview_id = "000694bd5dfb422180cb026d4de957dd"
 binding = "MENU_CLASSIFIER_CACHE"
 id = "923f217b4b474a6b82b4b1063da97ea5"
 
+[[kv_namespaces]]
+binding = "DISH_ANALYSIS_CACHE"
+id = "e7dc29dabe404495af66b04897527607"
+
 # --- R2 (default env) ---
 [[r2_buckets]]
 binding = "R2_BUCKET"
@@ -135,6 +139,10 @@ id = "cff5be596e5048059c4b60fe78c49578"
 [[env.production.kv_namespaces]]
 binding = "MENU_CLASSIFIER_CACHE"
 id = "923f217b4b474a6b82b4b1063da97ea5"
+
+[[env.production.kv_namespaces]]
+binding = "DISH_ANALYSIS_CACHE"
+id = "e7dc29dabe404495af66b04897527607"
 
 # --- R2 (production) ---
 [[env.production.r2_buckets]]

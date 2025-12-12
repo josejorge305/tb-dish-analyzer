@@ -81,6 +81,62 @@ function providerOrder(env) {
     .filter(Boolean);
 }
 
+// ---- Pipeline versioning & cache helpers ----
+const PIPELINE_VERSION = "analysis-v0.1"; // bump this when prompts/logic change
+
+function hashShort(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) | 0;
+  }
+  return h.toString(16);
+}
+
+function normalizeForKey(str) {
+  return (str || "").trim().toLowerCase();
+}
+
+function buildDishCacheKey(body) {
+  const dishName = normalizeForKey(body.dishName || body.dish);
+  const restaurantName = normalizeForKey(body.restaurantName || body.restaurant);
+  const section = normalizeForKey(body.menuSection || body.section);
+  const category = normalizeForKey(body.canonicalCategory || body.category);
+  const menuDescription = (body.menuDescription || body.description || "").trim();
+  const userFlags = body.user_flags || body.userFlags || [];
+  const userFlagsSignature = userFlags.length ? JSON.stringify(userFlags) : "";
+
+  const signature = menuDescription + "|" + userFlagsSignature;
+  const sigHash = hashShort(signature);
+
+  return [
+    "dish-analysis",
+    PIPELINE_VERSION,
+    dishName || "no-dish",
+    restaurantName || "no-restaurant",
+    section || "no-section",
+    category || "no-category",
+    sigHash
+  ].join("|");
+}
+
+// ---- fetch with timeout helper ----
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(`fetch-timeout-${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 // --- Simple Premium Gate (KV-backed) ---
 // Usage: add ?user_id=alice  AND set KV key: tier/user:alice -> "premium"
 // Dev override: ?dev=1 bypasses the check for quick testing.
@@ -4760,63 +4816,43 @@ async function runOrgansLLM(env, payload) {
   const model = "gpt-4o-mini";
 
   const systemPrompt = `
-You are a diet and organ comfort analysis assistant for an IBS / gut-sensitivity app.
-You work at a wellness / educational level (not medical advice).
+You are an organ comfort analysis assistant for an IBS / gut-sensitivity app.
+You give wellness / educational guidance only (not medical advice).
+You analyze ONE dish at a time using ONLY the provided input (no external knowledge).
+Return VALID JSON ONLY, no extra text.
 
-You MUST:
-- Analyze ONLY the dish provided (no external knowledge).
-- Score organ comfort, not exact clinical risk.
-- Be conservative: when unsure, choose a milder negative level instead of the worst.
-- Always return VALID JSON only, with no extra commentary.
+INPUT:
+- nutrition_summary per serving (energyKcal, protein_g, fat_g, carbs_g, sugar_g, fiber_g, sodium_mg).
+- ingredient data and tags (may include FODMAP triggers and allergens).
+- vision_insights (optional): portion info, visible ingredients, cooking method, lifestyle cues.
+- plate_components (optional): list of items on the plate with role ("main"/"side"), label, category, confidence, area_ratio.
 
-INPUT ALSO INCLUDES (OPTIONAL):
-- vision_insights: object with:
-  - portion: servings_on_plate, portionFactor, confidence, reason.
-  - visual_ingredients: visible items such as "fried egg", "melted cheese", "bacon strips", "shrimp pieces", "nuts on top".
-  - visual_cooking_method: primary cooking method and tags like "deep_fried", "breaded", "cheesy_top".
-  - visual_lifestyle_cues: contains_red_meat, processed_meat_level, dessert_like, plant_forward.
-- plate_components: optional list describing what is on the plate:
-  - Each component has:
-    - role: "main" | "side" | "unknown"
-    - label: short name (e.g., "Brisket Melt", "Hash Browns", "Side salad")
-    - category: "sandwich" | "burger" | "pasta" | "fried_potatoes" | "salad" | "other"
-    - confidence: 0–1
-    - area_ratio: fraction of visible plate area (0–1) this component takes.
-  - Use this to understand mains vs sides and their relative size on the plate.
+Goals:
+- Score organ COMFORT (not clinical risk).
+- Be conservative: when uncertain, prefer mild_negative over high_negative.
+- Use nutrition_summary as the primary signal; vision_insights and plate_components refine the scores.
 
-Organs: always exactly these 7 IDs:
-- gut
-- liver
-- heart
-- metabolic
-- immune
-- brain
-- kidney
+Organs (always exactly these 7 IDs):
+- gut, liver, heart, metabolic, immune, brain, kidney
 
 Severity levels:
 - high_negative, moderate_negative, mild_negative, neutral,
   mild_positive, moderate_positive, high_positive
 
-VISION-BASED ORGAN RULES:
-- Treat deep-fried / breaded foods (from visual_cooking_method) as more negative for gut, liver, heart, and metabolic than boiled/baked/grilled.
-- If visual_ingredients shows:
-  - processed meats (bacon, sausage, pepperoni, deli meats): increase negative impact for heart and metabolic.
-  - large melted cheese/cream: increase negative impact for gut (lactose) and heart/liver (saturated fat).
-  - visible red meat portions (steak, meatballs, burger patties): reflect red-meat concerns appropriately.
-- Use portion.servings_on_plate or portionFactor:
-  - Larger portions (>1.0) generally increase negative impact for metabolic and gut.
-  - Very small portions (<0.75) may soften impact slightly.
-- Never ignore nutrition_summary; use vision_insights as an extra evidence layer to refine organ scores and reasons.
-- If plate_components show a large fried side (e.g., fries/hash browns "fried_potatoes" with high area_ratio), bump gut/metabolic (and heart) negatives accordingly. If a side salad/veggies is present, you may slightly soften gut/heart/metabolic but do not overrule unhealthy mains.
-- When writing reasons, mention if a side contributes (e.g., "Fried potatoes plus a rich burger increases metabolic load").
+GUIDELINES (high level):
+- Deep-fried / breaded and very fatty dishes: more negative for gut, liver, heart, metabolic.
+- Large portions (portionFactor or servings_on_plate > 1.0): increase negative impact, especially metabolic and gut.
+- Very small portions (< 0.75): slightly soften negative impact.
+- Processed meats (bacon, sausage, deli meats): negative for heart and metabolic.
+- Red meats: moderate negatives for heart/metabolic; harsher if portions are large or combined with fried sides.
+- Large visible cheese/cream: negative for gut (lactose-sensitive users) and for heart/liver (saturated fat).
+- If a plate_component is a large fried side (e.g. fries/hash browns with high area_ratio): add extra negatives to gut, metabolic (and heart).
+- A side salad / mostly vegetables can mildly soften negatives but should NOT fully cancel an unhealthy main.
+- When writing reasons, mention important contributors (e.g. fried potatoes, rich sauces, heavy cheese).
 
-FODMAP & lactose:
-- Levels: high, medium, low, unknown.
-- Treat onion, garlic, wheat/gluten, many beans, some dairy, honey, high-fructose fruits,
-  and inulin-type fibers as potential FODMAP triggers.
-
-Allergens kinds:
-- milk, egg, fish, shellfish, peanut, tree_nut, soy, wheat, gluten, sesame, sulfites, other.
+FODMAP & lactose flags:
+- FODMAP level should reflect common triggers like wheat/gluten, onion, garlic, honey, high-FODMAP fruits, many beans.
+- Lactose: consider dairy intensity and type (cream/milk vs aged cheese) when summarizing lactose-related impact.
 
 You MUST return JSON with this shape:
 
@@ -4828,8 +4864,7 @@ You MUST return JSON with this shape:
       "score": number,
       "level": "high_negative" | "moderate_negative" | "mild_negative" | "neutral" | "mild_positive" | "moderate_positive" | "high_positive",
       "reasons": string[]
-    },
-    ... 6 more organs ...
+    }
   ],
   "flags": {
     "allergens": [
@@ -4866,11 +4901,13 @@ ${EVIDENCE_GUIDELINES}
   const body = {
     model,
     response_format: { type: "json_object" },
+    max_completion_tokens: 700,
     messages: [
       { role: "system", content: systemPrompt.trim() },
       {
         role: "user",
-        content: JSON.stringify(payload, null, 2)
+        // send minified JSON to reduce tokens
+        content: JSON.stringify(payload)
       }
     ]
   };
@@ -4995,134 +5032,74 @@ async function runAllergenMiniLLM(env, input) {
 
   const systemPrompt = `
 You are an expert allergen, FODMAP, and lactose analyst for restaurant dishes.
+You analyze ONE dish at a time using ONLY the provided input (no external knowledge).
+Return exactly ONE JSON object in the required shape, with no extra text.
 
 INPUT:
-- dishName
-- restaurantName
-- menuSection
-- menuDescription
-- ingredients: structured list of parsed ingredients (may contain multiple languages)
-- tags: optional labels such as "gluten-free", "vegan", "vegetarian", "lactose-free", "sin gluten", etc.
-- plate_components: optional list describing what is on the plate:
-  - Each component has:
-    - role: "main" | "side" | "unknown"
-    - label: short human name (e.g., "Brisket Melt", "Hash Browns", "Side salad")
-    - category: coarse bucket ("sandwich", "burger", "pasta", "fried_potatoes", "salad", "other")
-    - confidence: 0–1
-    - area_ratio: fraction of visible plate area (0–1) this component takes.
-  - Use this to understand mains vs sides; if an allergen risk comes from a side (e.g., fries with bun), mention that in reasons.
-- plate_components: optional list describing what is on the plate:
-  - Each component has:
-    - role: "main" | "side" | "unknown"
-    - label: short human name (e.g., "Brisket Melt", "Hash Browns", "Side salad")
-    - category: coarse bucket ("sandwich", "burger", "pasta", "fried_potatoes", "salad", "other")
-    - confidence: 0–1
-    - area_ratio: fraction of visible plate area (0–1) this component takes.
-  - Use this to understand mains vs sides; if an allergen risk comes from a side (e.g., fries with bun), mention that in reasons.
+- dishName, restaurantName, menuSection, menuDescription.
+- ingredients: structured list of parsed ingredients (multi-language possible).
+- tags: labels like "gluten-free", "vegan", "vegetarian", "lactose-free", "sin gluten", etc.
+- plate_components (optional):
+  - Each component: role ("main" | "side" | "unknown"), label, category ("sandwich", "burger", "pasta", "fried_potatoes", "salad", "other"),
+    confidence (0–1), area_ratio (0–1).
+  - Use this to understand mains vs sides, and mention when risk comes from a side vs the main.
 
 YOUR TASKS:
-1. Determine presence of these allergens:
-   - gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame
+1. Decide presence of allergens:
+   - gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame.
+   For each: "present": "yes" | "no" | "maybe" + short concrete reason.
 2. Estimate lactose level:
-   - "none" | "trace" | "low" | "medium" | "high"
+   - "none" | "trace" | "low" | "medium" | "high" with a short reason.
 3. Estimate overall FODMAP level for the dish:
-   - "low" | "medium" | "high"
+   - "low" | "medium" | "high" with a short reason.
 4. Set extra flags:
-   - pork, beef, alcohol, spicy
-5. ALWAYS give a short, concrete reason for each allergen, lactose, and FODMAP decision.
-PLATE COMPONENT REASONING:
-- If plate_components suggests recognizable sides (fries, hash browns, salad, veggies), incorporate that when judging allergens/FODMAP/lactose and writing reasons.
-- Mention if a risk comes from a side vs the main (e.g., "gluten from the bun, fried potatoes on the side").
+   - pork, beef, alcohol, spicy (each: "yes" | "no" | "maybe" with reason).
+5. Emit lifestyle_tags and lifestyle_checks for red meat, vegetarian/vegan.
+6. Emit component_allergens describing key components on the plate using the SAME allergen/lactose/FODMAP structure as the global ones.
 
-ALLERGEN STRICTNESS RULES:
-- You MUST NOT invent ingredients that are not clearly implied by the input.
-- You may only set "present": "yes" for an allergen if there is explicit textual evidence in the dish name, menu description, ingredients, or tags.
-- Examples of explicit evidence:
-  - "egg", "eggs", "egg yolk", "yolk", "huevo" → egg allergen yes.
-  - "cream", "milk", "cheese", "queso", "butter" → milk allergen yes.
-  - "shrimp", "prawns", "camarón", "gambas" → shellfish allergen yes.
-- Do NOT set "present": "yes" just because a recipe often contains an allergen (e.g., meatballs often contain egg; aioli often contains egg). In such cases, use "present": "maybe" with a reason like "Often contains egg, but egg is not listed here."
-- If the text does not mention an allergen and there is no clear indication, usually set "present": "no" and note it is not listed.
-- Example: "Spaghetti and meatballs in tomato sauce" with no egg mentioned:
-  - "egg": { "present": "maybe", "reason": "Meatballs often use egg as binder, but egg is not listed here." }
-  - NOT allowed: "egg": { "present": "yes", "reason": "Contains egg yolks." } because egg/yolk is never mentioned.
-
-LIFESTYLE RULES:
-- Use dishName + menuDescription + ingredients + tags together.
-- Identify if the dish contains red meat (beef, veal, lamb, goat, meatballs, bolognese/ragu di carne), poultry (chicken, turkey), pork, fish, shellfish.
-- Detect processed meats (bacon, sausage, hot dog, pepperoni, salami, ham, pancetta, chorizo).
-- Detect desserts/high-sugar treats; detect comfort food (pasta, cheesy, fried, heavy sauces).
-- Spaghetti & meatballs / bolognese: treat as red meat even if ingredients list is incomplete; not red-meat-free or vegetarian.
-- Vegetarian: no meat/fish/shellfish. Vegan: also no dairy/eggs. If red meat present → not red-meat-free/vegetarian.
-
-LIFESTYLE TAGS:
-- Emit lifestyle_tags as concise codes based on BOTH the recipe/ingredient list AND the dish name/description.
-- Common tags to use:
-  - "contains_red_meat" (beef, lamb, veal, goat, meatballs, bolognese/ragu di carne, carne)
-  - "processed_meat" (bacon, sausage, pancetta, salami, pepperoni, hot dogs, ham)
-  - "contains_poultry" (chicken, turkey)
-  - "contains_pork" (pork, pancetta, bacon)
-  - "contains_fish" (fish, salmon, tuna, cod, etc.)
-  - "contains_shellfish" (shrimp, prawns, crab, lobster, clams, mussels, oysters, scallops)
-  - "comfort_food" (fried/cheesy/creamy/heavy pasta, casseroles, burgers)
-  - "high_sugar_dessert" (cakes, pies, ice cream, milkshakes, very sweet desserts)
-  - "plant_forward" (mostly vegetables/legumes/whole grains with little or no meat)
-- Example: "Spaghetti and meatballs" with beef/pork and pancetta:
-  - lifestyle_checks.contains_red_meat = "yes"
-  - lifestyle_tags should include at least "contains_red_meat" and "processed_meat", and optionally "comfort_food".
-- Use plate_components (role, label, category, area_ratio) to fill component_allergens:
-  - For each recognized component, produce a component entry.
-  - component_label should be the most useful short name (e.g., "Brisket Melt", "Hash Browns", "Side salad").
-  - The per-component allergens/lactose/fodmap fields use the SAME structure as global ones, but describe risk mainly from that component.
-  - The GLOBAL allergens/lactose/fodmap must still describe the ENTIRE plate overall.
-
-${EVIDENCE_GUIDELINES}
-
-IMPORTANT RULES – GLUTEN:
-- If any ingredient includes wheat, flour, bread, bun, brioche, baguette, pasta, noodles (in any language) and is NOT explicitly gluten-free:
-  -> gluten.present = "yes".
-- "pan" (Spanish/Italian for bread), "pain" (French), "panino", etc., usually indicate gluten unless explicitly "sin gluten"/"senza glutine"/"gluten-free".
-- If ingredients include rice bun, rice bread, corn tortilla, arepa, polenta, yuca bread, cassava bread and do NOT mention wheat/flour:
-  -> gluten.present = "no".
-- If dish or tags are labeled gluten-free / "GF" / "sin gluten" / "senza glutine":
-  -> By default, gluten.present = "no" unless an explicit wheat/flour ingredient is listed (in which case explain the conflict).
-- If a component is ambiguous like just "bun" or "bread" with no further info and no gluten-free tags:
-  -> gluten.present = "maybe" with a reason like "Bun usually contains wheat; menu does not clarify."
-
-IMPORTANT RULES – MILK & LACTOSE:
-- Treat dairy ingredients (milk, cream, butter, cheese, queso, nata, crema, yogurt, leche, etc.) as milk = "yes".
-- Lactose level:
-  - High: fresh milk, cream, fresh cheeses, ice cream, condensed milk, sweetened dairy sauces.
-  - Medium: butter, soft cheeses, yogurt (unless explicitly lactose-free).
-  - Low/Trace: aged hard cheeses (parmesan, gruyère, aged cheddar, manchego curado).
-  - None: plant milks (soy, almond, oat, coconut) or items labeled lactose-free.
-- If tags or description explicitly say "lactose-free" / "sin lactosa":
-  -> lactose.level = "none" even if dairy words appear, unless clearly contradictory.
-
-IMPORTANT RULES – FODMAP:
-- Consider these common high-FODMAP ingredients:
-  - Wheat-based bread/pasta, garlic, onions, honey, agave, apples, pears, mango, stone fruits, many beans, certain sweeteners.
-- FODMAP level guidelines:
-  - "high": multiple strong high-FODMAP ingredients (e.g., garlic + onion + wheat bun).
-  - "medium": some high-FODMAP components but in a mixed dish that also has low-FODMAP ingredients.
-  - "low": primarily low-FODMAP items (meat, fish, eggs, rice, potatoes, carrots, zucchini, tomatoes, oil) with minimal or no obvious high-FODMAP triggers.
-
-IMPORTANT RULES – EXTRA FLAGS:
-- pork: set present = "yes" if there is pork, bacon, jamón, pancetta, chorizo, or similar.
-- beef: set present = "yes" if beef, carne de res, steak, hamburger patty, etc.
-- alcohol: set present = "yes" if wine, beer, sake, liquor, rum, vodka, tequila, etc. are ingredients.
-- spicy: set present = "yes" if ingredients indicate chilies, jalapeño, habanero, "picante", spicy sauce, etc.
+STRICTNESS RULES (IMPORTANT):
+- DO NOT invent ingredients that are not clearly implied or typical by name/description.
+- Only set "present": "yes" when:
+  - An allergen is explicitly mentioned in dishName, menuDescription, ingredients, or tags,
+  - OR when it is overwhelmingly implied (e.g. "shrimp tacos" → shellfish).
+- When a recipe often contains an allergen but the text does not mention it:
+  - Use "present": "maybe" with a clear explanation (e.g. "Meatballs often use egg as a binder, but egg is not listed here.").
+- If the text gives no indication for an allergen and no tags imply it:
+  - Prefer "present": "no" and mention that it is not listed or implied.
 
 MULTI-LANGUAGE AWARENESS:
 - Recognize common food words in Spanish, Italian, French, Portuguese, etc.
-- Examples:
-  - "queso", "nata", "crema", "leche" -> dairy.
-  - "pan", "brioche", "baguette", "pasta" -> likely gluten.
-  - "mariscos", "gambas", "camarón", "langostino" -> shellfish.
-- Use tags like "vegan", "vegetarian", "gluten-free", "lactose-free", "sin gluten", "sin lactosa" to refine decisions.
+  - "queso", "nata", "crema", "leche" → dairy (milk).
+  - "pan", "brioche", "baguette", "pasta" → usually gluten unless clearly gluten-free.
+  - "mariscos", "gambas", "camarón", "langostino" → shellfish.
+- Use tags such as "vegan", "vegetarian", "gluten-free", "lactose-free", "sin gluten", "sin lactosa" to refine decisions.
+  - Vegan: no meat, fish, shellfish, dairy, eggs.
+  - Vegetarian: no meat/fish/shellfish but dairy/eggs allowed.
+
+GLUTEN RULES (SUMMARY):
+- If ingredients include wheat, flour, bread, bun, brioche, baguette, pasta, noodles (any language) and not explicitly gluten-free:
+  → gluten.present = "yes".
+- If dish or tags include clear gluten-free indicators and NO explicit wheat/flour:
+  → gluten.present = "no" with explanation.
+- If a component is ambiguous (e.g. just "bun") and there is no gluten-free tag:
+  → gluten.present = "maybe" with a reason like "Bun usually contains wheat; menu does not clarify."
+
+MILK & LACTOSE RULES (SUMMARY):
+- Dairy words (milk, cream, butter, cheese, queso, yogurt, nata, crema, leche, etc.) imply milk allergen = "yes".
+- Lactose level:
+  - High: fresh milk, cream, fresh cheeses, ice cream, sweetened dairy sauces.
+  - Medium: butter, soft cheeses, yogurt (unless explicitly lactose-free).
+  - Low/Trace: aged hard cheeses.
+  - None: plant milks or explicit lactose-free products.
+
+FODMAP RULES (SUMMARY):
+- Common high-FODMAP: wheat bread/pasta, garlic, onions, honey, some fruits (apples, pears, mango), many beans, certain sweeteners.
+- "high": multiple strong high-FODMAP ingredients (e.g. garlic + onion + wheat bun).
+- "medium": some high-FODMAP components but balanced with low-FODMAP ingredients.
+- "low": mostly low-FODMAP foods (meat, fish, eggs, rice, potatoes, many vegetables) with no obvious strong triggers.
 
 OUTPUT FORMAT:
-- You MUST return exactly ONE JSON object with this shape:
+Return exactly ONE JSON object with this shape:
 
 {
   "allergens": {
@@ -5189,16 +5166,20 @@ OUTPUT FORMAT:
   }
 }
 
-- Do NOT include any additional keys.
-- Do NOT include commentary outside of JSON.
+${EVIDENCE_GUIDELINES}
 `;
 
   const body = {
     model,
     response_format: { type: "json_object" },
+    max_completion_tokens: 900,
     messages: [
       { role: "system", content: systemPrompt.trim() },
-      { role: "user", content: JSON.stringify(input, null, 2) }
+      {
+        role: "user",
+        // send minified JSON to reduce tokens
+        content: JSON.stringify(input)
+      }
     ]
   };
 
@@ -5324,29 +5305,25 @@ async function runNutritionMiniLLM(env, input) {
 
   const systemPrompt = `
 You are a nutrition coach analyzing a single restaurant dish.
-
 You will receive:
-- dishName, restaurantName
-- a nutrition_summary per serving:
-  - energyKcal (kcal)
-  - protein_g, fat_g, carbs_g, sugar_g, fiber_g (grams)
-  - sodium_mg (milligrams)
-- optional tags from existing heuristics.
+- dishName, restaurantName,
+- nutrition_summary per serving:
+  - energyKcal,
+  - protein_g, fat_g, carbs_g, sugar_g, fiber_g,
+  - sodium_mg.
+Optionally you may also receive simple tags (e.g. "high_protein", "low_carb"), but you do not need them to work.
 
 Tasks:
-1. Classify each of these as "low", "medium", or "high" for ONE MEAL:
+1. Classify each of these for ONE MEAL as "low", "medium", or "high":
    - calories, protein, carbs, sugar, fiber, fat, sodium.
-   (Use reasonable ranges; you do not need to output the thresholds.)
-
+   Use reasonable ranges; you do NOT need to output the thresholds.
 2. Produce:
-   - summary: 1–2 sentences that describe the overall nutrition profile in plain language.
-   - highlights: 2–5 short positive or neutral points (e.g. "Good protein", "Low sugar").
+   - summary: 1–2 sentences in plain language about the overall nutrition profile.
+   - highlights: 2–5 short positive or neutral points (e.g. "Good protein", "Moderate calories").
    - cautions: 1–3 short points about things to watch (e.g. "High sodium", "Very high calories").
 
-${EVIDENCE_GUIDELINES}
-
 OUTPUT FORMAT:
-Return exactly one JSON object with shape:
+Return exactly ONE JSON object with this shape:
 
 {
   "summary": string,
@@ -5361,9 +5338,7 @@ Return exactly one JSON object with shape:
     "fat": "low"|"medium"|"high",
     "sodium": "low"|"medium"|"high"
   }
-}
-
-Do not include any extra text outside the JSON.`;
+}`;
 
   const body = {
     model,
@@ -5374,14 +5349,18 @@ Do not include any extra text outside the JSON.`;
     ]
   };
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json"
+  const res = await fetchWithTimeout(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
     },
-    body: JSON.stringify(body)
-  });
+    8000 // 8s timeout for nutrition LLM
+  );
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -6177,15 +6156,19 @@ async function callZestful(env, lines = []) {
   const url = `https://${host}/parseIngredients`;
 
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-RapidAPI-Key": env.ZESTFUL_RAPID_KEY,
-        "X-RapidAPI-Host": host
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-RapidAPI-Key": env.ZESTFUL_RAPID_KEY,
+          "X-RapidAPI-Host": host
+        },
+        body: JSON.stringify({ ingredients: lines })
       },
-      body: JSON.stringify({ ingredients: lines })
-    });
+      4000 // 4s timeout for Zestful
+    );
 
     if (!res.ok) {
       const t = await res.text().catch(() => "");
@@ -14628,6 +14611,8 @@ async function runDishAnalysis(env, body, ctx) {
   const correlationId =
     (body && body.correlationId) || (body && body.cid) || null;
   let debug = {};
+  const tStart = Date.now(); // total timer
+
   const useParallel = env && env.PARALLEL_LLM === "true";
   const lang = body.lang || body.language || "en";
   let devFlag =
@@ -14651,6 +14636,45 @@ async function runDishAnalysis(env, body, ctx) {
   ).trim();
   const menuSection = body.menuSection || body.section || null;
   const canonicalCategory = body.canonicalCategory || body.category || null;
+
+  // basic validation
+  if (!dishName) {
+    return {
+      status: 400,
+      result: {
+        ok: false,
+        error: "dishName is required",
+        hint: "Include dishName (or dish) in the request body."
+      }
+    };
+  }
+
+  // ---- Dish-level cache (KV) ----
+  const forceReanalyze =
+    body.force_reanalyze === true ||
+    body.forceReanalyze === true ||
+    body.force_reanalyze === 1;
+
+  const allowCache =
+    !devFlag && !forceReanalyze && !selectionComponentIdsInput;
+
+  let cacheKey = null;
+  if (allowCache && env && env.DISH_ANALYSIS_CACHE) {
+    try {
+      cacheKey = buildDishCacheKey(body);
+      const cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+      if (cached && cached.ok) {
+        cached.debug = cached.debug || {};
+        cached.debug.cache_hit_dish_analysis = true;
+        cached.debug.pipeline_version = PIPELINE_VERSION;
+        cached.debug.total_ms = Date.now() - tStart;
+        return { status: 200, result: cached };
+      }
+    } catch (e) {
+      // cache read failure should not break analysis
+      debug.cache_read_error = String(e);
+    }
+  }
 
   // cache keys for tracing
   debug.request_tags = {
@@ -14689,26 +14713,13 @@ async function runDishAnalysis(env, body, ctx) {
   let fatsecretNutritionBreakdown = null;
   let fsComponentAllergens = null;
 
-  if (!dishName) {
-    return {
-      status: 400,
-      result: {
-        ok: false,
-        error: "dishName is required",
-        hint: "Include dishName (or dish) in the request body."
-      }
-    };
-  }
-
+  const tRecipeStart = Date.now();
   const recipeResult = await resolveRecipeWithCache(env, {
     dishTitle: dishName,
     placeId: body.placeId || body.place_id || "",
     cuisine: body.cuisine || "",
     lang: body.lang || "en",
-    forceReanalyze:
-      body.force_reanalyze === true ||
-      body.forceReanalyze === true ||
-      body.force_reanalyze === 1,
+    forceReanalyze: forceReanalyze,
     classify: true,
     shape: "recipe_card",
     providersOverride: Array.isArray(body.providers)
@@ -14718,6 +14729,7 @@ async function runDishAnalysis(env, body, ctx) {
     userId: body.user_id || body.userId || "",
     devFlag
   });
+  debug.t_recipe_ms = Date.now() - tRecipeStart;
 
   devFlag =
     devFlag || recipeResult?.devFlag || recipeResult?.out?.devFlag || false;
@@ -15042,11 +15054,13 @@ async function runDishAnalysis(env, body, ctx) {
     return parts.length ? parts : [];
   })();
 
+  const tFatsecretStart = Date.now();
   const fatsecretResult = await classifyIngredientsWithFatSecret(
     env,
     ingredientsForLex,
     "en"
   );
+  debug.t_fatsecret_ms = Date.now() - tFatsecretStart;
   const fatsecretHits =
     fatsecretResult && fatsecretResult.ok
       ? fatsecretResult.allIngredientHits || []
@@ -15272,11 +15286,30 @@ async function runDishAnalysis(env, body, ctx) {
         }
       : null;
 
-    const promises = [
-      runAllergenMiniLLM(env, allergenInput),
-      runOrgansLLM(env, llmPayload),
-      nutritionInput ? runNutritionMiniLLM(env, nutritionInput) : null
-    ];
+    const allergenPromise = (async () => {
+      const t0 = Date.now();
+      const res = await runAllergenMiniLLM(env, allergenInput);
+      debug.t_llm_allergen_ms = Date.now() - t0;
+      return res;
+    })();
+
+    const organsPromise = (async () => {
+      const t0 = Date.now();
+      const res = await runOrgansLLM(env, llmPayload);
+      debug.t_llm_organs_ms = Date.now() - t0;
+      return res;
+    })();
+
+    const nutritionPromise = nutritionInput
+      ? (async () => {
+          const t0 = Date.now();
+          const res = await runNutritionMiniLLM(env, nutritionInput);
+          debug.t_llm_nutrition_ms = Date.now() - t0;
+          return res;
+        })()
+      : null;
+
+    const promises = [allergenPromise, organsPromise, nutritionPromise];
 
     const [allergenSettled, organsSettled, nutritionSettled] =
       await Promise.allSettled(promises);
@@ -15305,8 +15338,18 @@ async function runDishAnalysis(env, body, ctx) {
       nutrition_insights = null;
     }
   } else {
-    allergenMiniResult = await runAllergenMiniLLM(env, allergenInput);
-    organsLLMResult = await runOrgansLLM(env, llmPayload);
+    allergenMiniResult = await (async () => {
+      const t0 = Date.now();
+      const res = await runAllergenMiniLLM(env, allergenInput);
+      debug.t_llm_allergen_ms = Date.now() - t0;
+      return res;
+    })();
+    organsLLMResult = await (async () => {
+      const t0 = Date.now();
+      const res = await runOrgansLLM(env, llmPayload);
+      debug.t_llm_organs_ms = Date.now() - t0;
+      return res;
+    })();
 
     if (finalNutritionSummary) {
       const nutritionInput = {
@@ -15315,13 +15358,45 @@ async function runDishAnalysis(env, body, ctx) {
         nutrition_summary: finalNutritionSummary,
         tags: nutrition_badges || []
       };
-      nutrition_insights = await runNutritionMiniLLM(env, nutritionInput);
+      nutrition_insights = await (async () => {
+        const t0 = Date.now();
+        const res = await runNutritionMiniLLM(env, nutritionInput);
+        debug.t_llm_nutrition_ms = Date.now() - t0;
+        return res;
+      })();
     }
   }
 
   const tLLMsEnd = Date.now();
   debug.llms_ms = tLLMsEnd - tLLMsStart;
   debug.llms_parallel = !!useParallel;
+  debug.allergen_llm_ok =
+    allergenMiniResult && typeof allergenMiniResult.ok === "boolean"
+      ? allergenMiniResult.ok
+      : null;
+  debug.allergen_llm_error =
+    allergenMiniResult && allergenMiniResult.ok === false
+      ? String(allergenMiniResult.error || "")
+      : null;
+
+  debug.organs_llm_ok =
+    organsLLMResult && typeof organsLLMResult.ok === "boolean"
+      ? organsLLMResult.ok
+      : null;
+  debug.organs_llm_error =
+    organsLLMResult && organsLLMResult.ok === false
+      ? String(organsLLMResult.error || "")
+      : null;
+
+  // nutrition_insights can be null or a plain object; we only track explicit LLM error patterns
+  debug.nutrition_llm_ok =
+    nutrition_insights && typeof nutrition_insights === "object"
+      ? (nutrition_insights.ok === false ? false : true)
+      : null;
+  debug.nutrition_llm_error =
+    nutrition_insights && nutrition_insights.ok === false
+      ? String(nutrition_insights.error || "")
+      : null;
 
   // --- Map allergen LLM result ---
   allergen_flags = [];
@@ -16235,6 +16310,7 @@ async function runDishAnalysis(env, body, ctx) {
 
   debug.nutrition_servings_used = servingsUsed;
   debug.nutrition_source = nutrition_source;
+  debug.t_nutrition_ms = debug.t_nutrition_ms || 0; // placeholder for finer nutrition timing
 
   const portion = {
     manual_factor: manualPortionFactor,
@@ -16326,10 +16402,79 @@ async function runDishAnalysis(env, body, ctx) {
       .filter((id) => typeof id === "string");
 
     if (selectedIds.length > 0) {
+      let fsCoarseComponentAllergens = null;
+      try {
+        const pcsForFs = Array.isArray(plateComponents) ? plateComponents : [];
+        if (
+          pcsForFs.length > 0 &&
+          fsComponentAllergens &&
+          typeof fsComponentAllergens === "object"
+        ) {
+          fsCoarseComponentAllergens = {};
+
+          const fsEntries = Object.entries(fsComponentAllergens);
+
+          if (debug) {
+            debug.fs_coarse_mapping_inputs = {
+              plate_components_for_fs: pcsForFs.map((c, idx) => ({
+                idx,
+                id: c && c.component_id,
+                label: c && (c.label || c.component || c.name || null)
+              })),
+              fs_keys: fsEntries.map(([k]) => k)
+            };
+          }
+
+          pcsForFs.forEach((comp, idx) => {
+            const coarseId = comp && comp.component_id;
+            if (typeof coarseId !== "string" || !coarseId) return;
+
+            // 1) Try index-based fs_c{idx}
+            const fsIdIndex = `fs_c${idx}`;
+            let fsEntry = fsComponentAllergens[fsIdIndex];
+
+            // 2) Fallback: zip over fsEntries by order if index-based missing
+            if (
+              (!fsEntry ||
+                !Array.isArray(fsEntry.allergen_flags) ||
+                fsEntry.allergen_flags.length === 0) &&
+              fsEntries.length > idx
+            ) {
+              const [, entryByOrder] = fsEntries[idx];
+              fsEntry = entryByOrder;
+            }
+
+            if (
+              fsEntry &&
+              Array.isArray(fsEntry.allergen_flags) &&
+              fsEntry.allergen_flags.length > 0
+            ) {
+              fsCoarseComponentAllergens[coarseId] = {
+                allergen_flags: fsEntry.allergen_flags
+              };
+            }
+          });
+
+          if (
+            debug &&
+            fsCoarseComponentAllergens &&
+            Object.keys(fsCoarseComponentAllergens).length > 0
+          ) {
+            debug.fs_coarse_component_allergens = fsCoarseComponentAllergens;
+          }
+        }
+      } catch (err) {
+        if (debug) {
+          debug.fs_coarse_allergens_mapping_error = String(
+            (err && (err.stack || err.message)) || err
+          );
+        }
+      }
+
       const selectionInput = {
         plate_components: plateComponents,
         allergen_breakdown,
-        fs_component_allergens: fsComponentAllergens,
+        fs_component_allergens: fsCoarseComponentAllergens || fsComponentAllergens,
         organs,
         nutrition_summary: finalNutritionSummary,
         nutrition_breakdown: nutritionBreakdown,
@@ -16407,6 +16552,9 @@ async function runDishAnalysis(env, body, ctx) {
     }
   }
 
+  debug.total_ms = Date.now() - tStart;
+  debug.pipeline_version = PIPELINE_VERSION;
+
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -16436,6 +16584,27 @@ async function runDishAnalysis(env, body, ctx) {
     selection_custom: selection_custom || undefined,
     debug
   };
+
+  // ---- store in KV cache (best-effort) ----
+  if (allowCache && cacheKey && env && env.DISH_ANALYSIS_CACHE) {
+    try {
+      const toCache = { ...result, debug: { ...result.debug } };
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil(
+          env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(toCache), {
+            expirationTtl: 60 * 60 * 12 // 12 hours
+          })
+        );
+      } else {
+        env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(toCache), {
+          expirationTtl: 60 * 60 * 12
+        });
+      }
+    } catch (e) {
+      // do not break response if cache write fails
+      debug.cache_write_error = String(e);
+    }
+  }
 
   return { status: 200, result };
 }
@@ -16471,14 +16640,18 @@ async function fetchFatSecretAllergensViaProxy(env, ingredients, lang = "en") {
 
   let res;
   try {
-    res = await fetch(`${env.FATSECRET_PROXY_URL}/fatsecret/allergens`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": env.PROXY_API_KEY
+    res = await fetchWithTimeout(
+      `${env.FATSECRET_PROXY_URL}/fatsecret/allergens`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": env.PROXY_API_KEY
+        },
+        body: JSON.stringify({ ingredients, lang })
       },
-      body: JSON.stringify({ ingredients, lang })
-    });
+      6000 // 6s timeout for FatSecret proxy
+    );
   } catch (e) {
     return {
       ok: false,
