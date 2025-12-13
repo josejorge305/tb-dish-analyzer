@@ -2749,7 +2749,8 @@ function extractMenuItemsFromUber(raw, queryText = "") {
       calories_display,
       restaurantCalories,
       restaurant_name: restaurantName || "",
-      source: "uber_eats"
+      source: "uber_eats",
+      imageUrl: mi.imageUrl || mi.image_url || mi.image || null
     };
   }
 
