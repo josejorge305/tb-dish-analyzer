@@ -8748,7 +8748,352 @@ async function handleRecipeResolve(env, request, url, ctx) {
   });
 }
 
-// ========== Uber Eats (RapidAPI) — Address + GPS job/search, retries & polling ==========
+// ========== Uber Eats (Apify) — Tier 1 Scraper ==========
+// ========== Apify Async with Webhooks ==========
+// Start an async Apify run and get notified via webhook when complete
+async function startApifyRunAsync(env, query, address, maxRows = 15, locale = "en-US", jobId = null) {
+  const token = env.APIFY_TOKEN;
+  const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
+
+  if (!token) {
+    throw new Error("Apify: Missing APIFY_TOKEN");
+  }
+
+  // Generate a unique job ID if not provided
+  const apifyJobId = jobId || `apify_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  // Build webhook URL - this worker will receive the callback
+  const webhookUrl = `https://tb-dish-processor-production.tummybuddy.workers.dev/webhook/apify?jobId=${encodeURIComponent(apifyJobId)}`;
+
+  // Ad-hoc webhook config (base64 encoded)
+  const webhookConfig = [{
+    eventTypes: ["ACTOR.RUN.SUCCEEDED"],
+    requestUrl: webhookUrl,
+    payloadTemplate: `{"jobId": "${apifyJobId}", "runId": "{{resource.id}}", "datasetId": "{{resource.defaultDatasetId}}", "status": "{{resource.status}}"}`
+  }];
+  const webhooksParam = btoa(JSON.stringify(webhookConfig));
+
+  // Start async run (returns immediately with run info)
+  const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&memory=4096&webhooks=${webhooksParam}`;
+
+  const input = {
+    query: String(query || ""),
+    address: String(address),
+    locale: String(locale || "en-US"),
+    maxRows: Number(maxRows) || 15,
+    proxy: {
+      useApifyProxy: true,
+      apifyProxyGroups: ["RESIDENTIAL"]
+    }
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Apify async start failed: ${res.status} - ${text.slice(0, 200)}`);
+  }
+
+  const runInfo = await res.json();
+
+  // Store job metadata in KV for tracking
+  if (env.MENUS_CACHE) {
+    await env.MENUS_CACHE.put(
+      `apify-job:${apifyJobId}`,
+      JSON.stringify({
+        jobId: apifyJobId,
+        runId: runInfo.data?.id,
+        status: "running",
+        query,
+        address,
+        maxRows,
+        startedAt: new Date().toISOString()
+      }),
+      { expirationTtl: 3600 } // 1 hour TTL
+    );
+  }
+
+  return {
+    jobId: apifyJobId,
+    runId: runInfo.data?.id,
+    status: "running",
+    pollUrl: `/api/apify-job/${apifyJobId}`
+  };
+}
+
+// Fetch dataset items from a completed Apify run
+async function fetchApifyDataset(env, datasetId) {
+  const token = env.APIFY_TOKEN;
+  const url = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(token)}`;
+
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" }
+  });
+
+  if (!res.ok) {
+    throw new Error(`Apify dataset fetch failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+// Synchronous Apify call (original - kept for fallback/testing)
+async function fetchMenuFromApify(
+  env,
+  query,
+  address = "Miami, FL, USA",
+  maxRows = 15,
+  locale = "en-US"
+) {
+  const token = env.APIFY_TOKEN;
+  const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
+
+  if (!token) {
+    throw new Error("Apify: Missing APIFY_TOKEN");
+  }
+
+  // Use synchronous endpoint with increased memory for faster response
+  // memory=4096 gives 1 full CPU core, timeout=60s to fail fast
+  const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}&memory=4096&timeout=60`;
+
+  const input = {
+    query: String(query || ""),
+    address: String(address),
+    locale: String(locale || "en-US"),
+    maxRows: Number(maxRows) || 15,
+    proxy: {
+      useApifyProxy: true,
+      apifyProxyGroups: ["RESIDENTIAL"]
+    }
+  };
+
+  // Use AbortController for client-side timeout (15s) to fail fast to tier 2
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify(input),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const text = await res.text();
+
+  if (res.status === 408) {
+    throw new Error("Apify: Request timeout (exceeded 300s)");
+  }
+  if (res.status === 400) {
+    throw new Error(`Apify: Bad request - ${text.slice(0, 200)}`);
+  }
+  if (!res.ok) {
+    throw new Error(`Apify ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Apify: Response was not valid JSON");
+  }
+
+  // Apify returns dataset items as an array directly
+  // Normalize to match RapidAPI response structure for compatibility
+  if (Array.isArray(data)) {
+    return {
+      data: {
+        results: data
+      },
+      _source: "apify"
+    };
+  }
+
+  // If already in expected format
+  return { ...data, _source: "apify" };
+}
+
+// ========== Uber Eats Tiered Scraper — RapidAPI (Tier 1, faster) → Apify (Tier 2, fallback) ==========
+async function fetchMenuFromUberEatsTiered(
+  env,
+  query,
+  address = "Miami, FL, USA",
+  maxRows = 15,
+  lat = null,
+  lng = null,
+  radius = 5000
+) {
+  const rapidEnabled = !!env.RAPIDAPI_KEY;
+  const apifyEnabled = !!env.APIFY_TOKEN;
+
+  // Tier 1: RapidAPI (faster, ~9s typical response)
+  if (rapidEnabled) {
+    try {
+      const result = await fetchMenuFromUberEats(
+        env,
+        query,
+        address,
+        maxRows,
+        lat,
+        lng,
+        radius
+      );
+      result._tier = "rapidapi";
+      return result;
+    } catch (err) {
+      const msg = String(err?.message || err);
+      console.error(`[UberEats Tier1 RapidAPI] Failed: ${msg}`);
+      if (!apifyEnabled) {
+        throw err;
+      }
+    }
+  }
+
+  // Tier 2: Apify (fallback, slower but cleaner data)
+  if (apifyEnabled) {
+    try {
+      const result = await fetchMenuFromApify(env, query, address, maxRows);
+      result._tier = "apify";
+      return result;
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  throw new Error("UberEats: No scraper tier available (missing RAPIDAPI_KEY and APIFY_TOKEN)");
+}
+
+// ========== Uber Eats Tiered Job by Address — Race Apify & RapidAPI ==========
+// Returns same interface as postJobByAddress: { ok, immediate, raw, job_id?, _tier }
+// Runs both scrapers in parallel and returns the first successful response
+async function postJobByAddressTiered(
+  { query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null },
+  env
+) {
+  const apifyEnabled = !!env.APIFY_TOKEN;
+  const rapidEnabled = !!env.RAPIDAPI_KEY;
+
+  if (!apifyEnabled && !rapidEnabled) {
+    throw new Error("UberEats: No scraper available (missing APIFY_TOKEN and RAPIDAPI_KEY)");
+  }
+
+  // Build array of scraper promises
+  const scrapers = [];
+
+  if (rapidEnabled) {
+    // RapidAPI - generally faster, add first
+    scrapers.push(
+      postJobByAddress({ query, address, maxRows, locale, page, webhook }, env)
+        .then(result => ({ ...result, _tier: "rapidapi" }))
+        .catch(err => {
+          console.error(`[RapidAPI] Failed: ${err?.message || err}`);
+          return null;
+        })
+    );
+  }
+
+  if (apifyEnabled) {
+    // Apify - cleaner data but slower
+    scrapers.push(
+      fetchMenuFromApify(env, query, address, maxRows, locale)
+        .then(apifyResult => {
+          const results = apifyResult?.data?.results || apifyResult?.results || [];
+          if (!results.length) return null; // Treat empty as failure
+          return {
+            ok: true,
+            immediate: true,
+            raw: { returnvalue: { data: results }, _source: "apify" },
+            _tier: "apify"
+          };
+        })
+        .catch(err => {
+          console.error(`[Apify] Failed: ${err?.message || err}`);
+          return null;
+        })
+    );
+  }
+
+  // Race: return first successful (non-null) result
+  // Use Promise.any-like behavior: resolve on first success, reject if all fail
+  return new Promise((resolve, reject) => {
+    let completed = 0;
+    let resolved = false;
+    const total = scrapers.length;
+
+    scrapers.forEach(promise => {
+      promise.then(result => {
+        completed++;
+        if (!resolved && result !== null && result.ok) {
+          resolved = true;
+          resolve(result);
+        } else if (completed === total && !resolved) {
+          reject(new Error("UberEats: All scrapers failed"));
+        }
+      });
+    });
+  });
+}
+
+// ========== Uber Eats Tiered Job by Location (GPS) — Apify (Tier 1) → RapidAPI (Tier 2) ==========
+// Returns same interface as postJobByLocation: { ok, data/results, _tier }
+async function postJobByLocationTiered(
+  { query, lat, lng, radius = 6000, maxRows = 25 },
+  env
+) {
+  const tier1Enabled = !!env.APIFY_TOKEN;
+  const tier2Enabled = !!env.RAPIDAPI_KEY;
+
+  // Tier 1: Apify - use address from lat/lng (Apify doesn't support direct GPS)
+  // We'll reverse-geocode or use a generic address format
+  if (tier1Enabled && lat != null && lng != null) {
+    try {
+      // Apify doesn't support GPS directly, but we can try with coordinates as address
+      const gpsAddress = `${lat},${lng}`;
+      const apifyResult = await fetchMenuFromApify(env, query, gpsAddress, maxRows);
+      const results = apifyResult?.data?.results || apifyResult?.results || [];
+      return {
+        ok: true,
+        data: { results },
+        results,
+        _tier: "apify"
+      };
+    } catch (err) {
+      const msg = String(err?.message || err);
+      console.error(`[postJobByLocationTiered Tier1 Apify] Failed: ${msg}`);
+      if (!tier2Enabled) {
+        throw err;
+      }
+    }
+  }
+
+  // Tier 2: RapidAPI (fallback)
+  if (tier2Enabled) {
+    const result = await postJobByLocation(
+      { query, lat, lng, radius, maxRows },
+      env
+    );
+    result._tier = "rapidapi";
+    return result;
+  }
+
+  throw new Error("UberEats: No scraper tier available (missing APIFY_TOKEN and RAPIDAPI_KEY)");
+}
+
+// ========== Uber Eats (RapidAPI) — Address + GPS job/search, retries & polling — TIER 2 ==========
 async function fetchMenuFromUberEats(
   env,
   query,
@@ -8854,7 +9199,7 @@ async function fetchMenuFromUberEats(
     }
 
     const results =
-      j?.data?.results || j?.results || j?.data?.data?.results || [];
+      j?.returnvalue?.data || j?.data?.results || j?.results || j?.data?.data?.results || [];
     if (Array.isArray(results) && results.length) {
       resultsPayload = j;
       break;
@@ -8867,6 +9212,7 @@ async function fetchMenuFromUberEats(
   let parsed = resultsPayload; // keep using `parsed` below
 
   const hasCandidates =
+    (Array.isArray(parsed?.returnvalue?.data) && parsed.returnvalue.data.length) ||
     (Array.isArray(parsed?.data?.results) && parsed.data.results.length) ||
     (Array.isArray(parsed?.results) && parsed.results.length) ||
     (Array.isArray(parsed?.data?.data?.results) &&
@@ -9734,7 +10080,7 @@ async function callUberMenuGateway(env, googleContext, opts = {}) {
   const page = opts.page || 1;
   const attempts = opts.attempts || 8;
 
-  let job = await postJobByAddress(
+  let job = await postJobByAddressTiered(
     { query, address, maxRows, locale, page, webhook: null },
     env
   );
@@ -10880,6 +11226,461 @@ const _worker_impl = {
       );
     }
 
+    // --- DEBUG: Apify Uber Eats scraper (Tier 1) ---
+    if (pathname === "/debug/apify") {
+      const token = env.APIFY_TOKEN || "";
+      const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
+
+      const q = searchParams.get("query") || "pizza";
+      const addr = searchParams.get("address") || "Miami, FL, USA";
+      const max = Number(searchParams.get("maxRows") || 3);
+
+      if (!token) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "Missing APIFY_TOKEN secret",
+            hint: "Run: wrangler secret put APIFY_TOKEN --env production"
+          }, null, 2),
+          { headers: { "content-type": "application/json" } }
+        );
+      }
+
+      let status = 0, js = null, text = "";
+      try {
+        const result = await fetchMenuFromApify(env, q, addr, max);
+        js = result;
+        status = 200;
+      } catch (e) {
+        text = String(e?.message || e);
+        status = 500;
+      }
+
+      return new Response(
+        JSON.stringify({
+          ok: status === 200,
+          actor_id: actorId,
+          has_token: !!token,
+          query: q,
+          address: addr,
+          maxRows: max,
+          status,
+          result: js ?? null,
+          error: text || null
+        }, null, 2),
+        { headers: { "content-type": "application/json" } }
+      );
+    }
+
+    // --- DEBUG: Tiered scraper test (Apify → RapidAPI fallback) ---
+    if (pathname === "/debug/uber-tiered") {
+      const q = searchParams.get("query") || "pizza";
+      const addr = searchParams.get("address") || "Miami, FL, USA";
+      const max = Number(searchParams.get("maxRows") || 3);
+
+      const hasApify = !!env.APIFY_TOKEN;
+      const hasRapid = !!env.RAPIDAPI_KEY;
+
+      let status = 0, js = null, text = "", tier = null;
+      try {
+        const result = await fetchMenuFromUberEatsTiered(env, q, addr, max);
+        js = result;
+        tier = result?._tier || "unknown";
+        status = 200;
+      } catch (e) {
+        text = String(e?.message || e);
+        status = 500;
+      }
+
+      return new Response(
+        JSON.stringify({
+          ok: status === 200,
+          tiers: {
+            tier1_apify: hasApify,
+            tier2_rapidapi: hasRapid
+          },
+          used_tier: tier,
+          query: q,
+          address: addr,
+          maxRows: max,
+          status,
+          result_preview: js ? {
+            _tier: js._tier,
+            _source: js._source,
+            has_results: !!(js?.returnvalue?.data?.length || js?.data?.results?.length || js?.results?.length)
+          } : null,
+          error: text || null
+        }, null, 2),
+        { headers: { "content-type": "application/json" } }
+      );
+    }
+
+    // ========== APIFY WEBHOOK RECEIVER ==========
+    // Called by Apify when async run completes
+    if (pathname === "/webhook/apify" && request.method === "POST") {
+      try {
+        const payload = await request.json();
+        const jobId = searchParams.get("jobId") || payload.jobId;
+
+        console.log(`[Apify Webhook] Received payload for jobId=${jobId}:`, JSON.stringify(payload).slice(0, 500));
+
+        if (!jobId) {
+          return new Response(JSON.stringify({ ok: false, error: "Missing jobId" }), {
+            status: 400,
+            headers: { "content-type": "application/json" }
+          });
+        }
+
+        // Get existing job data from KV (contains real runId from when job was started)
+        const existing = env.MENUS_CACHE ? await env.MENUS_CACHE.get(`apify-job:${jobId}`, "json") : null;
+        console.log(`[Apify Webhook] Existing job data:`, JSON.stringify(existing || {}).slice(0, 300));
+
+        // Extract run info - prefer stored runId (real ID), then try payload
+        // 1. Stored runId from job start (most reliable)
+        // 2. Apify default format: { resource: { id, defaultDatasetId, ... } }
+        // 3. Our template (if interpolated): { jobId, runId, datasetId, status }
+        let runId = existing?.runId; // First priority: stored real runId
+        let datasetId = null;
+
+        // Try to get from Apify's default webhook format (resource object)
+        if (payload.resource) {
+          if (!runId) runId = payload.resource.id;
+          datasetId = payload.resource.defaultDatasetId;
+        }
+
+        // Fallback to template payload values if they're not placeholders
+        if (!runId && payload.runId && !payload.runId.includes("{{")) {
+          runId = payload.runId;
+        }
+        if (!datasetId && payload.datasetId && !payload.datasetId.includes("{{")) {
+          datasetId = payload.datasetId;
+        }
+
+        console.log(`[Apify Webhook] Using runId=${runId}, datasetId=${datasetId}`);
+
+        // If we still don't have datasetId but have runId, fetch run info from Apify
+        if (!datasetId && runId && env.APIFY_TOKEN) {
+          try {
+            console.log(`[Apify Webhook] Fetching run info for runId=${runId}`);
+            const runInfoRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${env.APIFY_TOKEN}`);
+            if (runInfoRes.ok) {
+              const runInfo = await runInfoRes.json();
+              datasetId = runInfo.data?.defaultDatasetId;
+              console.log(`[Apify Webhook] Got datasetId=${datasetId} from Apify API`);
+            } else {
+              console.error(`[Apify Webhook] Apify API returned ${runInfoRes.status}`);
+            }
+          } catch (e) {
+            console.error(`[Apify Webhook] Failed to fetch run info: ${e.message}`);
+          }
+        }
+
+        // Fetch the actual data from the dataset
+        let data = [];
+        if (datasetId) {
+          try {
+            data = await fetchApifyDataset(env, datasetId);
+            console.log(`[Apify Webhook] Fetched ${data.length} items from dataset`);
+          } catch (e) {
+            console.error(`[Apify Webhook] Failed to fetch dataset: ${e.message}`);
+          }
+        } else {
+          console.error(`[Apify Webhook] No datasetId available to fetch results`);
+        }
+
+        // Update job status in KV with results
+        if (env.MENUS_CACHE) {
+          await env.MENUS_CACHE.put(
+            `apify-job:${jobId}`,
+            JSON.stringify({
+              ...(existing || {}),
+              status: "completed",
+              datasetId: datasetId,
+              runId: runId, // Keep the real runId
+              completedAt: new Date().toISOString(),
+              resultCount: Array.isArray(data) ? data.length : 0,
+              data: data // Store the actual results
+            }),
+            { expirationTtl: 3600 }
+          );
+        }
+
+        // Return 200 to acknowledge webhook
+        return new Response(JSON.stringify({ ok: true, jobId, received: true, datasetId, resultCount: data.length }), {
+          headers: { "content-type": "application/json" }
+        });
+      } catch (e) {
+        console.error(`Apify webhook error: ${e.message}`);
+        return new Response(JSON.stringify({ ok: false, error: e.message }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+
+    // ========== APIFY JOB STATUS / RESULTS ==========
+    // GET /api/apify-job/:jobId - Check status and get results
+    if (pathname.startsWith("/api/apify-job/")) {
+      const jobId = pathname.replace("/api/apify-job/", "");
+
+      if (!jobId) {
+        return new Response(JSON.stringify({ ok: false, error: "Missing jobId" }), {
+          status: 400,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      const job = await env.MENUS_CACHE?.get(`apify-job:${jobId}`, "json");
+
+      if (!job) {
+        return new Response(JSON.stringify({ ok: false, error: "Job not found", jobId }), {
+          status: 404,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        ok: true,
+        ...job
+      }, null, 2), {
+        headers: { "content-type": "application/json" }
+      });
+    }
+
+    // ========== START ASYNC APIFY JOB ==========
+    // POST /api/apify-start - Start an async Apify scrape with webhook callback
+    if (pathname === "/api/apify-start" && request.method === "POST") {
+      try {
+        const body = await request.json().catch(() => ({}));
+        const query = body.query || searchParams.get("query") || "pizza";
+        const address = body.address || searchParams.get("address") || "Miami, FL, USA";
+        const maxRows = Number(body.maxRows || searchParams.get("maxRows") || 15);
+
+        const result = await startApifyRunAsync(env, query, address, maxRows);
+
+        return new Response(JSON.stringify({
+          ok: true,
+          message: "Apify job started - poll for results",
+          ...result
+        }, null, 2), {
+          headers: { "content-type": "application/json" }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ok: false, error: e.message }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+
+    // GET /api/apify-start - Start via GET for easy testing
+    if (pathname === "/api/apify-start" && request.method === "GET") {
+      try {
+        const query = searchParams.get("query") || "pizza";
+        const address = searchParams.get("address") || "Miami, FL, USA";
+        const maxRows = Number(searchParams.get("maxRows") || 15);
+
+        const result = await startApifyRunAsync(env, query, address, maxRows);
+
+        return new Response(JSON.stringify({
+          ok: true,
+          message: "Apify job started - poll for results",
+          ...result
+        }, null, 2), {
+          headers: { "content-type": "application/json" }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ok: false, error: e.message }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
+    }
+
+    // --- DEBUG: Test individual scrapers with timing ---
+    if (pathname === "/debug/scraper-timing") {
+      const q = searchParams.get("query") || "pizza";
+      const addr = searchParams.get("address") || "Miami, FL, USA";
+      const max = Number(searchParams.get("maxRows") || 3);
+      const testApify = searchParams.get("apify") !== "0";
+      const testRapid = searchParams.get("rapid") !== "0";
+
+      const results = {
+        query: q,
+        address: addr,
+        maxRows: max,
+        apify: null,
+        rapidapi: null
+      };
+
+      // Test Apify
+      if (testApify && env.APIFY_TOKEN) {
+        const startApify = Date.now();
+        try {
+          const apifyResult = await fetchMenuFromApify(env, q, addr, max);
+          const elapsed = Date.now() - startApify;
+          const dataCount = apifyResult?.data?.results?.length || 0;
+          results.apify = {
+            ok: true,
+            elapsed_ms: elapsed,
+            data_count: dataCount,
+            has_data: dataCount > 0
+          };
+        } catch (e) {
+          const elapsed = Date.now() - startApify;
+          results.apify = {
+            ok: false,
+            elapsed_ms: elapsed,
+            error: String(e?.message || e)
+          };
+        }
+      } else if (!env.APIFY_TOKEN) {
+        results.apify = { ok: false, error: "APIFY_TOKEN not set" };
+      }
+
+      // Test RapidAPI
+      if (testRapid && env.RAPIDAPI_KEY) {
+        const startRapid = Date.now();
+        try {
+          const rapidResult = await fetchMenuFromUberEats(env, q, addr, max);
+          const elapsed = Date.now() - startRapid;
+          const dataCount = rapidResult?.returnvalue?.data?.length || rapidResult?.data?.results?.length || 0;
+          results.rapidapi = {
+            ok: true,
+            elapsed_ms: elapsed,
+            data_count: dataCount,
+            has_data: dataCount > 0
+          };
+        } catch (e) {
+          const elapsed = Date.now() - startRapid;
+          results.rapidapi = {
+            ok: false,
+            elapsed_ms: elapsed,
+            error: String(e?.message || e)
+          };
+        }
+      } else if (!env.RAPIDAPI_KEY) {
+        results.rapidapi = { ok: false, error: "RAPIDAPI_KEY not set" };
+      }
+
+      return new Response(JSON.stringify(results, null, 2), {
+        headers: { "content-type": "application/json" }
+      });
+    }
+
+    // --- DEBUG: Menu cache management ---
+    if (pathname === "/debug/menu-cache/list") {
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const prefix = searchParams.get("prefix") || "menu:";
+      const limit = Number(searchParams.get("limit") || "50");
+      const list = await kv.list({ prefix, limit });
+      return new Response(JSON.stringify({
+        ok: true,
+        prefix,
+        count: list.keys.length,
+        keys: list.keys.map(k => ({ name: k.name, expiration: k.expiration })),
+        list_complete: list.list_complete,
+        cursor: list.cursor || null
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    if (pathname === "/debug/menu-cache/get") {
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const key = searchParams.get("key");
+      if (!key) {
+        return new Response(JSON.stringify({ ok: false, error: "Missing ?key=" }), {
+          status: 400, headers: { "content-type": "application/json" }
+        });
+      }
+      const value = await kv.get(key, "json");
+      return new Response(JSON.stringify({
+        ok: !!value,
+        key,
+        exists: !!value,
+        value: value || null
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    if (pathname === "/debug/menu-cache/delete") {
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const key = searchParams.get("key");
+      const prefix = searchParams.get("prefix");
+
+      if (key) {
+        // Delete single key
+        await kv.delete(key);
+        return new Response(JSON.stringify({ ok: true, deleted: key }, null, 2), {
+          headers: { "content-type": "application/json" }
+        });
+      } else if (prefix) {
+        // Delete all keys with prefix (batch)
+        const list = await kv.list({ prefix, limit: 100 });
+        const deleted = [];
+        for (const k of list.keys) {
+          await kv.delete(k.name);
+          deleted.push(k.name);
+        }
+        return new Response(JSON.stringify({
+          ok: true,
+          deleted_count: deleted.length,
+          deleted,
+          more_remaining: !list.list_complete
+        }, null, 2), { headers: { "content-type": "application/json" } });
+      } else {
+        return new Response(JSON.stringify({ ok: false, error: "Missing ?key= or ?prefix=" }), {
+          status: 400, headers: { "content-type": "application/json" }
+        });
+      }
+    }
+
+    if (pathname === "/debug/menu-cache/clear-all") {
+      // Safety: require confirmation param
+      if (searchParams.get("confirm") !== "yes") {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Add ?confirm=yes to clear all menu cache",
+          warning: "This will delete ALL cached menus"
+        }, null, 2), { status: 400, headers: { "content-type": "application/json" } });
+      }
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      let totalDeleted = 0;
+      let cursor = undefined;
+      do {
+        const list = await kv.list({ prefix: "menu:", limit: 100, cursor });
+        for (const k of list.keys) {
+          await kv.delete(k.name);
+          totalDeleted++;
+        }
+        cursor = list.list_complete ? undefined : list.cursor;
+      } while (cursor);
+
+      return new Response(JSON.stringify({
+        ok: true,
+        message: "All menu cache cleared",
+        deleted_count: totalDeleted
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
     if (pathname === "/debug/r2-list") {
       const prefix = searchParams.get("prefix") || "";
       const limit = Number(searchParams.get("limit") || "25");
@@ -11133,11 +11934,19 @@ const _worker_impl = {
           }
 
           // If cache has usable items, hydrate them as a fast-path
-          if (cached?.data) {
+          // ?fresh=1 bypasses cache and forces live fetch
+          const wantFresh = searchParams.get("fresh") === "1";
+
+          if (cached?.data && !wantFresh) {
             cachedItems = Array.isArray(cached.data.items)
               ? cached.data.items
               : null;
             if (cachedItems) cacheStatus = "hit";
+
+            // Stale-while-revalidate: return cache immediately, refresh in background if stale
+            // Cache is considered stale after 1 hour (3600 seconds)
+            const STALE_THRESHOLD_SEC = 3600;
+            const isStale = cacheAgeSec && cacheAgeSec > STALE_THRESHOLD_SEC;
 
             // Hydrate a local flattenedItems from cache so the same enqueue logic can use it
             if (cachedItems) {
@@ -11164,35 +11973,35 @@ const _worker_impl = {
                 }));
               }
 
-              // If analyze was requested we consumed the cache and can return it with enqueued[]
-              if (flattenedItems && wantAnalyze) {
-                const address = addressRaw;
-                const forceUS = !!forceUSFlag;
-                trace.used_path = "/api/job"; // [38.9]
-                await bumpStatusKV(env, { cache: 1 });
-                return respondTB(
-                  withBodyAnalytics(
-                    {
-                      ok: true,
-                      source: "cache",
-                      cache: cacheStatus,
-                      cache_age_seconds: cacheAgeSec,
-                      data: {
-                        query,
-                        address,
-                        forceUS,
-                        items: flattenedItems.slice(0, maxRows)
-                      },
-                      enqueued,
-                      ...warnPart()
+              // Return cached data immediately (stale-while-revalidate pattern)
+              const address = addressRaw;
+              const forceUS = !!forceUSFlag;
+              trace.used_path = "cache"; // [38.9]
+              await bumpStatusKV(env, { cache: 1 });
+              return respondTB(
+                withBodyAnalytics(
+                  {
+                    ok: true,
+                    source: "cache",
+                    cache: cacheStatus,
+                    cache_age_seconds: cacheAgeSec,
+                    cache_stale: isStale,
+                    data: {
+                      query,
+                      address,
+                      forceUS,
+                      items: flattenedItems.slice(0, maxRows)
                     },
-                    ctx,
-                    rid,
-                    trace
-                  ),
-                  200
-                );
-              }
+                    enqueued,
+                    hint: isStale ? "Cache is stale. Add ?fresh=1 to force refresh." : null,
+                    ...warnPart()
+                  },
+                  ctx,
+                  rid,
+                  trace
+                ),
+                200
+              );
             }
           }
         } catch (e) {
@@ -11206,10 +12015,16 @@ const _worker_impl = {
           if (forceUSFlag && !/usa|united states/i.test(address))
             address = `${addressRaw}, USA`;
 
-          const job = await postJobByAddress(
+          const job = await postJobByAddressTiered(
             { query, address, maxRows, locale, page },
             env
           );
+
+          // Update trace with tier info
+          const usedTier = job?._tier || "unknown";
+          trace.used_tier = usedTier;
+          trace.host = usedTier === "apify" ? "api.apify.com" : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
+          trace.used_path = usedTier === "apify" ? "/v2/acts/run-sync" : "/api/job";
 
           // Immediate data
           if (job?.immediate) {
@@ -11540,11 +12355,12 @@ const _worker_impl = {
         // GPS flow
         if (lat && lng) {
           try {
-            const jobRes = await postJobByLocation(
+            const jobRes = await postJobByLocationTiered(
               { query, lat: Number(lat), lng: Number(lng), radius, maxRows },
               env
             );
             if (jobRes?.path) trace.used_path = jobRes.path; // [38.9]
+            if (jobRes?._tier) trace.used_tier = jobRes._tier;
             const jobId = jobRes?.job_id || jobRes?.id || jobRes?.jobId;
             if (!jobId) {
               await bumpStatusKV(env, { errors_5xx: 1 });
@@ -11732,7 +12548,7 @@ const _worker_impl = {
           );
         }
 
-        const raw = await fetchMenuFromUberEats(
+        const raw = await fetchMenuFromUberEatsTiered(
           env,
           query,
           addressRaw,
@@ -11742,14 +12558,15 @@ const _worker_impl = {
           radius
         );
         if (searchParams.get("debug") === "1") {
-          trace.used_path = trace.used_path || "fetchMenuFromUberEats"; // keep trace detail
+          trace.used_path = trace.used_path || `fetchMenuFromUberEats:${raw?._tier || "unknown"}`; // keep trace detail
           await bumpStatusKV(env, { debug: 1 });
           const preview = buildDebugPreview(raw || {}, env);
           return respondTB(withBodyAnalytics(preview, ctx, rid, trace), 200);
         }
 
-        const usedHost =
-          env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+        const usedHost = raw?._tier === "apify"
+          ? "api.apify.com"
+          : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
         const flattenedItems = extractMenuItemsFromUber(raw, query);
 
         if (debug === "rank") {
@@ -11807,7 +12624,7 @@ const _worker_impl = {
           setWarn("Could not store fresh cache (non-fatal).");
         }
 
-        if (!trace.used_path) trace.used_path = "fetchMenuFromUberEats"; // [38.9]
+        if (!trace.used_path) trace.used_path = `fetchMenuFromUberEats:${raw?._tier || "unknown"}`; // [38.9]
         await bumpStatusKV(env, { live: 1 });
         return respondTB(
           withBodyAnalytics(
@@ -13353,11 +14170,10 @@ const _worker_impl = {
 
         // Prefer address job if provided; otherwise try location; otherwise 400
         let finished = null;
-        let usedHost =
-          env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
+        let usedTier = null;
 
         if (addressRaw) {
-          const job = await postJobByAddress(
+          const job = await postJobByAddressTiered(
             {
               query,
               address: addressRaw,
@@ -13367,6 +14183,7 @@ const _worker_impl = {
             },
             env
           );
+          usedTier = job?._tier || null;
           if (!job) {
             return notFoundCandidates(ctxTB, rid, trace, {
               query,
@@ -13380,7 +14197,7 @@ const _worker_impl = {
         } else if (latNum != null && lngNum != null) {
           // Location job path first
           try {
-            const job = await postJobByLocation(
+            const job = await postJobByLocationTiered(
               { query, lat: latNum, lng: lngNum, radius, maxRows },
               env
             );
