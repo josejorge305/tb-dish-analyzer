@@ -4358,9 +4358,10 @@ async function putCachedNutrition(env, name, data) {
 }
 
 async function enrichWithNutrition(env, rows = []) {
-  for (const row of rows) {
+  // Parallelize nutrition lookups for all ingredients at once
+  const enrichmentPromises = rows.map(async (row) => {
     const q = (row?.name || row?.original || "").trim();
-    if (!q) continue;
+    if (!q) return;
     let hit = await getCachedNutrition(env, q);
     if (!hit) {
       hit = await callUSDAFDC(env, q);
@@ -4380,7 +4381,8 @@ async function enrichWithNutrition(env, rows = []) {
         source: hit.source || "USDA_FDC"
       };
     }
-  }
+  });
+  await Promise.all(enrichmentPromises);
   return rows;
 }
 
@@ -7403,29 +7405,40 @@ async function resolveRecipeWithCache(
     const providerList = Array.isArray(providersOverride)
       ? providersOverride
       : providerOrder(env);
+
+    // Race all providers in parallel - first valid result wins
+    const providerPromises = providerList
+      .filter(p => recipeProviderFns[p])
+      .map(async (p) => {
+        const fn = recipeProviderFns[p];
+        try {
+          const candidate = await fn(env, dish, cuisine, lang);
+          if (candidate && Array.isArray(candidate.ingredients) && candidate.ingredients.length) {
+            return { candidate, provider: candidate.provider || p, valid: true };
+          }
+          return { candidate, provider: p, valid: false };
+        } catch (err) {
+          console.warn(`[provider:${p}]`, err?.message || err);
+          return { candidate: null, provider: p, valid: false, error: err?.message };
+        }
+      });
+
+    // Wait for all to settle, pick first valid result by provider priority order
+    const results = await Promise.all(providerPromises);
+
+    // Find first valid result according to original provider priority
     for (const p of providerList) {
-      const fn = recipeProviderFns[p];
-      if (!fn) continue;
-      let candidate = null;
-      try {
-        candidate = await fn(env, dish, cuisine, lang);
-      } catch (err) {
-        console.warn(`[provider:${p}]`, err?.message || err);
-        continue;
-      }
-      if (candidate) {
-        lastAttempt = candidate;
-      }
-      if (
-        candidate &&
-        Array.isArray(candidate.ingredients) &&
-        candidate.ingredients.length
-      ) {
-        candidateOut = candidate;
-        selected = candidate.provider || p;
+      const result = results.find(r => r.provider === p);
+      if (result?.valid) {
+        candidateOut = result.candidate;
+        selected = result.provider;
         break;
       }
+      if (result?.candidate) {
+        lastAttempt = result.candidate;
+      }
     }
+
     if (!candidateOut && lastAttempt) {
       candidateOut = lastAttempt;
       if (!selected) selected = lastAttempt.provider || null;
