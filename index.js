@@ -5673,17 +5673,18 @@ No extra keys, no commentary outside JSON.
         : "No portion reason provided.";
 
     // Normalize plate components: drop low-confidence, enforce at most one main, normalize area_ratio
+    // Also split compound labels like "bacon and sausage" into separate components
     let plate_components = plateComponentsRaw
       .filter((c) => {
         if (!c || typeof c !== "object") return false;
         const conf = typeof c.confidence === "number" ? c.confidence : 0;
         return conf >= 0.35;
       })
-      .map((c) => {
+      .flatMap((c) => {
         const role = typeof c.role === "string" && c.role ? c.role : "unknown";
         const category =
           typeof c.category === "string" && c.category ? c.category : "other";
-        const label =
+        const rawLabel =
           (typeof c.label === "string" && c.label) ||
           (typeof c.component === "string" && c.component) ||
           (typeof c.name === "string" && c.name) ||
@@ -5694,10 +5695,26 @@ No extra keys, no commentary outside JSON.
             ? c.area_ratio
             : 0;
 
+        // Split compound labels like "bacon and sausage", "eggs and toast", etc.
+        const splitPattern = /\s+and\s+|\s*,\s*|\s*&\s*/i;
+        const labels = rawLabel.split(splitPattern).map(s => s.trim()).filter(s => s.length > 0);
+
+        if (labels.length > 1) {
+          // Split area_ratio evenly among the split components
+          const splitRatio = area_ratio / labels.length;
+          return labels.map(label => ({
+            role,
+            category,
+            label,
+            confidence,
+            area_ratio: splitRatio
+          }));
+        }
+
         return {
           role,
           category,
-          label,
+          label: rawLabel,
           confidence,
           area_ratio
         };
