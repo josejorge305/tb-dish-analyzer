@@ -610,6 +610,12 @@ async function handleRestaurantsFindGateway(env, url) {
 
     const items = results.map((r, idx) => {
       const loc = r.geometry && r.geometry.location ? r.geometry.location : {};
+      // Build photo URL from photo_reference if available
+      let photoUrl = null;
+      if (Array.isArray(r.photos) && r.photos.length > 0 && r.photos[0].photo_reference) {
+        const photoRef = r.photos[0].photo_reference;
+        photoUrl = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoRef}&key=${apiKey}`;
+      }
       return {
         id: r.place_id || `google-${idx}`,
         name: r.name || "Unnamed place",
@@ -620,7 +626,8 @@ async function handleRestaurantsFindGateway(env, url) {
         lat: loc.lat ?? null,
         lng: loc.lng ?? null,
         placeId: r.place_id || `google-${idx}`,
-        url: r.website || ""
+        url: r.website || "",
+        photoUrl
       };
     });
 
@@ -2749,7 +2756,8 @@ function extractMenuItemsFromUber(raw, queryText = "") {
       calories_display,
       restaurantCalories,
       restaurant_name: restaurantName || "",
-      source: "uber_eats"
+      source: "uber_eats",
+      imageUrl: mi.imageUrl || mi.image_url || mi.image || null
     };
   }
 
@@ -4829,11 +4837,26 @@ INPUT:
 
 Goals:
 - Score organ COMFORT (not clinical risk).
-- Be conservative: when uncertain, prefer mild_negative over high_negative.
+- Match severity level to the actual impact described in reasons. If describing "high" amounts or "significant" effects, use moderate_negative or high_negative appropriately.
 - Use nutrition_summary as the primary signal; vision_insights and plate_components refine the scores.
 
-Organs (always exactly these 7 IDs):
-- gut, liver, heart, metabolic, immune, brain, kidney
+Severity calibration (IMPORTANT - match level to description):
+- high_negative: Major concerns (very high sat fat, sodium, sugar; multiple harmful factors combined; fried + processed + large portions)
+- moderate_negative: Notable concerns (high sat fat OR sodium OR sugar; processed meats; significant portion of unhealthy item)
+- mild_negative: Minor concerns (some sat fat, moderate sodium; small portion of less healthy item)
+- neutral: Balanced or negligible impact
+- mild_positive: Minor benefits (some vitamins/fiber; small healthy component)
+- moderate_positive: Notable benefits (good protein source; significant vegetables/fiber; heart-healthy fats)
+- high_positive: Major benefits (nutrient-dense whole foods; excellent vitamin/mineral profile)
+
+Organs (always exactly these 11 IDs):
+- gut, liver, heart, metabolic, immune, brain, kidney, eyes, skin, bones, thyroid
+
+Additional organ guidelines:
+- eyes: Beta-carotene (carrots, sweet potato), lutein (leafy greens), omega-3 (fish) are positive. High sugar/processed foods are mildly negative.
+- skin: Vitamin C, E, zinc, omega-3 are positive. Excessive sugar, processed foods, fried foods are negative.
+- bones: Calcium, vitamin D, K, magnesium are positive. Excessive sodium, caffeine, alcohol are negative.
+- thyroid: Iodine (seafood, seaweed), selenium are positive. Excessive soy, raw cruciferous in large amounts may be mildly negative.
 
 Severity levels:
 - high_negative, moderate_negative, mild_negative, neutral,
@@ -4860,7 +4883,7 @@ You MUST return JSON with this shape:
   "tummy_barometer": { "score": number, "label": string },
   "organs": [
     {
-      "organ": "gut" | "liver" | "heart" | "metabolic" | "immune" | "brain" | "kidney",
+      "organ": "gut" | "liver" | "heart" | "metabolic" | "immune" | "brain" | "kidney" | "eyes" | "skin" | "bones" | "thyroid",
       "score": number,
       "level": "high_negative" | "moderate_negative" | "mild_negative" | "neutral" | "mild_positive" | "moderate_positive" | "high_positive",
       "reasons": string[]
@@ -4901,7 +4924,7 @@ ${EVIDENCE_GUIDELINES}
   const body = {
     model,
     response_format: { type: "json_object" },
-    max_completion_tokens: 700,
+    max_completion_tokens: 1200,
     messages: [
       { role: "system", content: systemPrompt.trim() },
       {
@@ -16852,6 +16875,8 @@ async function runDishAnalysis(env, body, ctx) {
     : [];
 
   // If recipe came from OpenAI and has no explicit servings/yield, assume 4 servings per recipe
+  // SKIP this divisor when restaurantCalories is provided (already per-serving)
+  const hasRestaurantCaloriesForDivisor = restaurantCalories != null && !Number.isNaN(Number(restaurantCalories));
   try {
     let openaiServingsDivisor = 1;
     const recipeProvider =
@@ -16869,7 +16894,7 @@ async function runDishAnalysis(env, body, ctx) {
       typeof recipeOut.servings === "number" &&
       recipeOut.servings > 0;
 
-    if (recipeProvider === "openai" && !hasYield && !hasServings) {
+    if (recipeProvider === "openai" && !hasYield && !hasServings && !hasRestaurantCaloriesForDivisor) {
       openaiServingsDivisor = 4;
     }
 
@@ -17069,11 +17094,15 @@ async function runDishAnalysis(env, body, ctx) {
   debug.portion_ai_factor = aiPortionFactor;
   debug.portion_effective_factor = effectivePortionFactor;
 
+  // Skip portion factor when restaurantCalories is provided - those are already per-serving from the menu
+  const hasRestaurantCalories = restaurantCalories != null && !Number.isNaN(Number(restaurantCalories));
+
   if (
     finalNutritionSummary &&
     typeof effectivePortionFactor === "number" &&
     isFinite(effectivePortionFactor) &&
-    effectivePortionFactor !== 1
+    effectivePortionFactor !== 1 &&
+    !hasRestaurantCalories
   ) {
     finalNutritionSummary = {
       energyKcal:
@@ -17106,6 +17135,8 @@ async function runDishAnalysis(env, body, ctx) {
           : null
     };
     debug.nutrition_portion_factor_used = effectivePortionFactor;
+  } else if (hasRestaurantCalories) {
+    debug.nutrition_portion_factor_skipped = "restaurant_calories_already_per_serving";
   }
 
   if (finalNutritionSummary) {
