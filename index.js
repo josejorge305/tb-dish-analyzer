@@ -16882,6 +16882,95 @@ async function runDishAnalysis(env, body, ctx) {
       }))
     : [];
 
+  // Vision-augmented recipe merging:
+  // If vision detected ingredients not in the original recipe, classify them
+  // and merge their allergen/FODMAP hits into the analysis
+  try {
+    const visualIngredients = debug.vision_insights?.visual_ingredients || [];
+    if (visualIngredients.length > 0) {
+      // Extract ingredient names from vision (high confidence only)
+      const visionIngredientNames = visualIngredients
+        .filter((vi) => vi && vi.confidence >= 0.6)
+        .map((vi) => vi.guess || vi.label || vi.category)
+        .filter(Boolean);
+
+      if (visionIngredientNames.length > 0) {
+        // Get existing ingredient names (normalized) for deduplication
+        const existingIngredients = new Set(
+          (ingredientsForLex || []).map((n) => n.toLowerCase().trim())
+        );
+
+        // Filter to only NEW ingredients not already in recipe
+        const newVisionIngredients = visionIngredientNames.filter(
+          (name) => !existingIngredients.has(name.toLowerCase().trim())
+        );
+
+        if (newVisionIngredients.length > 0) {
+          debug.vision_new_ingredients = newVisionIngredients;
+
+          // Classify these new ingredients (uses cache if available)
+          const visionFatsecretResult = await classifyIngredientsWithFatSecret(
+            env,
+            newVisionIngredients,
+            "en"
+          );
+
+          if (visionFatsecretResult.ok && visionFatsecretResult.allIngredientHits?.length > 0) {
+            debug.vision_allergen_hits = visionFatsecretResult.allIngredientHits;
+            debug.vision_fatsecret_cache_stats = visionFatsecretResult._cacheStats;
+            debug.vision_augmented_analysis = true;
+
+            // Merge vision-detected allergens into allergen_flags (avoiding duplicates)
+            const existingAllergenKinds = new Set(
+              (allergen_flags || []).map((f) => (f.kind || "").toLowerCase())
+            );
+
+            for (const hit of visionFatsecretResult.allIngredientHits) {
+              if (!hit.allergens || !Array.isArray(hit.allergens)) continue;
+              for (const allergen of hit.allergens) {
+                const kind = (allergen || "").toLowerCase();
+                if (kind && !existingAllergenKinds.has(kind)) {
+                  allergen_flags.push({
+                    kind: allergen,
+                    present: "yes",
+                    message: `Detected via vision: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  });
+                  existingAllergenKinds.add(kind);
+                }
+              }
+
+              // Also check lactose from vision
+              if (hit.lactose_band && hit.lactose_band !== "none") {
+                if (!lactose_flags || lactose_flags.level === "none") {
+                  lactose_flags = {
+                    level: hit.lactose_band,
+                    reason: `Vision detected dairy: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  };
+                }
+              }
+
+              // Check FODMAP from vision
+              if (hit.fodmap && (!fodmap_flags || fodmap_flags.level === "low")) {
+                const visionFodmapLevel = hit.fodmap.level || hit.fodmap;
+                if (visionFodmapLevel === "high" || visionFodmapLevel === "medium") {
+                  fodmap_flags = {
+                    level: visionFodmapLevel,
+                    reason: `Vision detected: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    debug.vision_merge_error = String((err && (err.stack || err.message)) || err);
+  }
+
   // If recipe came from OpenAI and has no explicit servings/yield, assume 4 servings per recipe
   try {
     let openaiServingsDivisor = 1;
@@ -17607,9 +17696,43 @@ function mapFatSecretFoodAttributesToLexHits(ingredientName, foodAttributes) {
   return [hit];
 }
 
+// ---- Per-ingredient allergen/FatSecret cache helpers ----
+function ingredientAllergenCacheKey(ingredientName, lang = "en") {
+  const norm = (ingredientName || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `ingredient-allergen/${lang}/${norm || "unknown"}.json`;
+}
+
+async function getIngredientAllergenCache(env, ingredientName, lang = "en") {
+  if (!env?.R2_BUCKET) return null;
+  const key = ingredientAllergenCacheKey(ingredientName, lang);
+  try {
+    const obj = await env.R2_BUCKET.get(key);
+    if (!obj) return null;
+    return await obj.json();
+  } catch {
+    return null;
+  }
+}
+
+async function putIngredientAllergenCache(env, ingredientName, data, lang = "en") {
+  if (!env?.R2_BUCKET) return;
+  const key = ingredientAllergenCacheKey(ingredientName, lang);
+  try {
+    await env.R2_BUCKET.put(key, JSON.stringify({
+      ...data,
+      _cachedAt: new Date().toISOString()
+    }));
+  } catch {}
+}
+
 // classifyIngredientsWithFatSecret:
 // Uses our FatSecret proxy (Render) to turn ingredient names into
 // lex-style hits focused on allergens + lactose.
+// Now with per-ingredient caching for reuse across dishes.
 async function classifyIngredientsWithFatSecret(
   env,
   ingredientsForLex,
@@ -17621,43 +17744,79 @@ async function classifyIngredientsWithFatSecret(
     )
     .filter(Boolean);
 
-  const result = await fetchFatSecretAllergensViaProxy(
-    env,
-    ingredientNames,
-    lang
-  );
-  if (!result.ok) {
-    return {
-      ok: false,
-      reason: result.reason || "fatsecret-proxy-error",
-      perIngredient: [],
-      allIngredientHits: []
-    };
-  }
-
   const perIngredient = [];
   const allIngredientHits = [];
+  const uncachedIngredients = [];
 
-  for (const row of result.results || []) {
-    const name = row?.ingredient || "";
-    const hits = mapFatSecretFoodAttributesToLexHits(
-      name,
-      row?.food_attributes || {}
+  // Check cache for each ingredient in parallel
+  const cacheResults = await Promise.all(
+    ingredientNames.map(async (name) => {
+      const cached = await getIngredientAllergenCache(env, name, lang);
+      return { name, cached };
+    })
+  );
+
+  // Separate cached vs uncached
+  for (const { name, cached } of cacheResults) {
+    if (cached && cached.hits) {
+      perIngredient.push({
+        ingredient: name,
+        ok: true,
+        hits: cached.hits,
+        _cached: true
+      });
+      if (cached.hits && cached.hits.length) {
+        for (const h of cached.hits) allIngredientHits.push(h);
+      }
+    } else {
+      uncachedIngredients.push(name);
+    }
+  }
+
+  // Fetch only uncached ingredients from FatSecret
+  if (uncachedIngredients.length > 0) {
+    const result = await fetchFatSecretAllergensViaProxy(
+      env,
+      uncachedIngredients,
+      lang
     );
-    perIngredient.push({
-      ingredient: name,
-      ok: true,
-      hits
-    });
-    if (hits && hits.length) {
-      for (const h of hits) allIngredientHits.push(h);
+
+    if (result.ok) {
+      // Process and cache each result
+      const cachePromises = [];
+      for (const row of result.results || []) {
+        const name = row?.ingredient || "";
+        const hits = mapFatSecretFoodAttributesToLexHits(
+          name,
+          row?.food_attributes || {}
+        );
+        perIngredient.push({
+          ingredient: name,
+          ok: true,
+          hits
+        });
+        if (hits && hits.length) {
+          for (const h of hits) allIngredientHits.push(h);
+        }
+        // Cache this ingredient's result
+        cachePromises.push(
+          putIngredientAllergenCache(env, name, { hits, food_attributes: row?.food_attributes }, lang)
+        );
+      }
+      // Fire-and-forget cache writes
+      Promise.all(cachePromises).catch(() => {});
     }
   }
 
   return {
     ok: true,
     perIngredient,
-    allIngredientHits
+    allIngredientHits,
+    _cacheStats: {
+      total: ingredientNames.length,
+      cached: ingredientNames.length - uncachedIngredients.length,
+      fetched: uncachedIngredients.length
+    }
   };
 }
 // ---- Response helpers ----
