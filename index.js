@@ -3500,6 +3500,66 @@ function inferHitsFromText(title = "", desc = "") {
     });
   }
 
+  // Egg detection - critical for medical-grade accuracy
+  if (/\beggs?\b|scrambled|omelette?|omelet|frittata|quiche|benedict|sunny.?side|over.?easy|poached\b/.test(text)) {
+    push({
+      term: "egg",
+      canonical: "egg",
+      allergens: ["egg"],
+      classes: ["egg"]
+    });
+  }
+
+  // Fish detection
+  if (/\b(salmon|tuna|cod|tilapia|trout|halibut|mahi|bass|snapper|anchov|sardine|mackerel|swordfish|catfish|flounder|sole|haddock|perch|pike|carp|fish)\b/.test(text)) {
+    push({
+      term: "fish",
+      canonical: "fish",
+      allergens: ["fish"],
+      classes: ["fish"]
+    });
+  }
+
+  // Soy detection
+  if (/\b(soy|soya|tofu|tempeh|edamame|miso|tamari)\b/.test(text)) {
+    push({
+      term: "soy",
+      canonical: "soy",
+      allergens: ["soy"],
+      classes: ["soy"]
+    });
+  }
+
+  // Peanut detection
+  if (/\bpeanut/.test(text)) {
+    push({
+      term: "peanut",
+      canonical: "peanut",
+      allergens: ["peanut"],
+      classes: ["peanut", "nuts"]
+    });
+  }
+
+  // Tree nut detection
+  if (/\b(almond|walnut|cashew|pistachio|pecan|hazelnut|macadamia|brazil.?nut|chestnut|pine.?nut)\b/.test(text)) {
+    push({
+      term: "tree_nut",
+      canonical: "tree_nut",
+      allergens: ["tree_nut"],
+      classes: ["tree_nut", "nuts"]
+    });
+  }
+
+  // Sesame detection
+  if (/\b(sesame|tahini)\b/.test(text)) {
+    push({
+      term: "sesame",
+      canonical: "sesame",
+      allergens: ["sesame"],
+      classes: ["sesame"]
+    });
+  }
+
   return hits;
 }
 
@@ -3583,6 +3643,66 @@ function inferHitsFromIngredients(ingredients = []) {
         canonical: "gluten",
         allergens: ["gluten", "wheat"],
         classes: ["gluten"]
+      });
+    }
+
+    // Egg detection - critical for medical-grade accuracy
+    if (/\beggs?\b|scrambled|omelette?|omelet|frittata|quiche|benedict|sunny.?side|over.?easy|poached\b/.test(name)) {
+      push({
+        term: "egg",
+        canonical: "egg",
+        allergens: ["egg"],
+        classes: ["egg"]
+      });
+    }
+
+    // Fish detection
+    if (/\b(salmon|tuna|cod|tilapia|trout|halibut|mahi|bass|snapper|anchov|sardine|mackerel|swordfish|catfish|flounder|sole|haddock|perch|pike|carp|fish)\b/.test(name)) {
+      push({
+        term: "fish",
+        canonical: "fish",
+        allergens: ["fish"],
+        classes: ["fish"]
+      });
+    }
+
+    // Soy detection
+    if (/\b(soy|soya|tofu|tempeh|edamame|miso|tamari)\b/.test(name)) {
+      push({
+        term: "soy",
+        canonical: "soy",
+        allergens: ["soy"],
+        classes: ["soy"]
+      });
+    }
+
+    // Peanut detection
+    if (/\bpeanut/.test(name)) {
+      push({
+        term: "peanut",
+        canonical: "peanut",
+        allergens: ["peanut"],
+        classes: ["peanut", "nuts"]
+      });
+    }
+
+    // Tree nut detection
+    if (/\b(almond|walnut|cashew|pistachio|pecan|hazelnut|macadamia|brazil.?nut|chestnut|pine.?nut)\b/.test(name)) {
+      push({
+        term: "tree_nut",
+        canonical: "tree_nut",
+        allergens: ["tree_nut"],
+        classes: ["tree_nut", "nuts"]
+      });
+    }
+
+    // Sesame detection
+    if (/\b(sesame|tahini)\b/.test(name)) {
+      push({
+        term: "sesame",
+        canonical: "sesame",
+        allergens: ["sesame"],
+        classes: ["sesame"]
       });
     }
   }
@@ -5240,7 +5360,7 @@ ${EVIDENCE_GUIDELINES}
       };
     }
 
-    return { ok: true, data: parsed };
+    return { ok: true, data: parsed, provider: "openai" };
   } catch (err) {
     return {
       ok: false,
@@ -5248,6 +5368,287 @@ ${EVIDENCE_GUIDELINES}
       details: String(err)
     };
   }
+}
+
+// --- Grok (xAI) allergen analysis ---
+async function runAllergenGrokLLM(env, input, systemPrompt) {
+  const url = (env.GROK_API_URL || "https://api.x.ai/v1/chat/completions").trim();
+  const key = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
+
+  if (!key) {
+    return { ok: false, error: "missing-grok-api-key" };
+  }
+
+  const body = {
+    model: env.GROK_MODEL || "grok-2-latest",
+    messages: [
+      { role: "system", content: systemPrompt.trim() },
+      { role: "user", content: JSON.stringify(input) }
+    ],
+    temperature: 0.1
+  };
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return {
+        ok: false,
+        error: `grok-allergen-error-${res.status}`,
+        details: text
+      };
+    }
+
+    const json = await res.json();
+    const content = json?.choices?.[0]?.message?.content || "";
+
+    let parsed;
+    try {
+      // Try to extract JSON from response (Grok may include markdown)
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+    } catch (e) {
+      return {
+        ok: false,
+        error: "grok-allergen-json-parse-error",
+        details: String(e),
+        raw: content
+      };
+    }
+
+    return { ok: true, data: parsed, provider: "grok" };
+  } catch (err) {
+    return {
+      ok: false,
+      error: "grok-allergen-exception",
+      details: String(err)
+    };
+  }
+}
+
+// --- Cloudflare AI (Llama) allergen analysis ---
+async function runAllergenCloudflareLLM(env, input, systemPrompt) {
+  if (!env.AI) {
+    return { ok: false, error: "missing-cloudflare-ai-binding" };
+  }
+
+  try {
+    // Use Llama 3.1 70B for best quality
+    const response = await env.AI.run("@cf/meta/llama-3.1-70b-instruct", {
+      messages: [
+        { role: "system", content: systemPrompt.trim() + "\n\nIMPORTANT: Return ONLY valid JSON, no markdown or explanations." },
+        { role: "user", content: JSON.stringify(input) }
+      ],
+      max_tokens: 1500,
+      temperature: 0.1
+    });
+
+    const content = response?.response || "";
+
+    let parsed;
+    try {
+      // Try to extract JSON from response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+    } catch (e) {
+      return {
+        ok: false,
+        error: "cloudflare-allergen-json-parse-error",
+        details: String(e),
+        raw: content
+      };
+    }
+
+    return { ok: true, data: parsed, provider: "cloudflare-llama" };
+  } catch (err) {
+    return {
+      ok: false,
+      error: "cloudflare-allergen-exception",
+      details: String(err)
+    };
+  }
+}
+
+// --- Tiered LLM allergen analysis: OpenAI → Grok → Cloudflare ---
+async function runAllergenTieredLLM(env, input) {
+  // Build the shared system prompt
+  const systemPrompt = buildAllergenSystemPrompt();
+
+  // Tier 1: OpenAI (primary - best quality)
+  if (env.OPENAI_API_KEY) {
+    const openaiResult = await runAllergenMiniLLM(env, input);
+    if (openaiResult.ok) {
+      openaiResult.tier = 1;
+      openaiResult.provider = "openai";
+      return openaiResult;
+    }
+    // Log but continue to next tier
+    console.warn("OpenAI allergen LLM failed:", openaiResult.error);
+  }
+
+  // Tier 2: Grok (xAI - strong alternative)
+  const grokKey = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
+  if (grokKey) {
+    const grokResult = await runAllergenGrokLLM(env, input, systemPrompt);
+    if (grokResult.ok) {
+      grokResult.tier = 2;
+      return grokResult;
+    }
+    console.warn("Grok allergen LLM failed:", grokResult.error);
+  }
+
+  // Tier 3: Cloudflare AI Llama (always available)
+  if (env.AI) {
+    const cfResult = await runAllergenCloudflareLLM(env, input, systemPrompt);
+    if (cfResult.ok) {
+      cfResult.tier = 3;
+      return cfResult;
+    }
+    console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error);
+  }
+
+  // All tiers failed - this should never happen in production
+  return {
+    ok: false,
+    error: "all-allergen-llm-tiers-failed",
+    details: "OpenAI, Grok, and Cloudflare AI all failed to analyze allergens"
+  };
+}
+
+// Extract the allergen system prompt for reuse across providers
+function buildAllergenSystemPrompt() {
+  return `
+You are an expert allergen, FODMAP, and lactose analyst for restaurant dishes.
+You analyze ONE dish at a time using ONLY the provided input (no external knowledge).
+Return exactly ONE JSON object in the required shape, with no extra text.
+
+INPUT:
+- dishName, restaurantName, menuSection, menuDescription.
+- ingredients: structured list of parsed ingredients (multi-language possible).
+- tags: labels like "gluten-free", "vegan", "vegetarian", "lactose-free", "sin gluten", etc.
+- plate_components (optional):
+  - Each component: role ("main" | "side" | "unknown"), label, category ("sandwich", "burger", "pasta", "fried_potatoes", "salad", "other"),
+    confidence (0–1), area_ratio (0–1).
+  - Use this to understand mains vs sides, and mention when risk comes from a side vs the main.
+
+YOUR TASKS:
+1. Decide presence of allergens:
+   - gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame.
+   For each: "present": "yes" | "no" | "maybe" + short concrete reason.
+2. Estimate lactose level:
+   - "none" | "trace" | "low" | "medium" | "high" with a short reason.
+3. Estimate overall FODMAP level for the dish:
+   - "low" | "medium" | "high" with a short reason.
+4. Set extra flags:
+   - pork, beef, alcohol, spicy (each: "yes" | "no" | "maybe" with reason).
+5. Emit lifestyle_tags and lifestyle_checks for red meat, vegetarian/vegan.
+6. Emit component_allergens describing key components on the plate using the SAME allergen/lactose/FODMAP structure as the global ones.
+
+STRICTNESS RULES (IMPORTANT):
+- DO NOT invent ingredients that are not clearly implied or typical by name/description.
+- Only set "present": "yes" when:
+  - An allergen is explicitly mentioned in dishName, menuDescription, ingredients, or tags,
+  - OR when it is overwhelmingly implied (e.g. "shrimp tacos" → shellfish).
+- When a recipe often contains an allergen but the text does not mention it:
+  - Use "present": "maybe" with a clear explanation (e.g. "Meatballs often use egg as a binder, but egg is not listed here.").
+- If the text gives no indication for an allergen and no tags imply it:
+  - Prefer "present": "no" and mention that it is not listed or implied.
+
+MULTI-LANGUAGE AWARENESS:
+- Recognize common food words in Spanish, Italian, French, Portuguese, etc.
+  - "queso", "nata", "crema", "leche" → dairy (milk).
+  - "pan", "brioche", "baguette", "pasta" → usually gluten unless clearly gluten-free.
+  - "mariscos", "gambas", "camarón", "langostino" → shellfish.
+  - "huevos", "oeufs", "uova" → eggs.
+  - "pescado", "poisson", "pesce" → fish.
+- Use tags such as "vegan", "vegetarian", "gluten-free", "lactose-free", "sin gluten", "sin lactosa" to refine decisions.
+  - Vegan: no meat, fish, shellfish, dairy, eggs.
+  - Vegetarian: no meat/fish/shellfish but dairy/eggs allowed.
+
+GLUTEN RULES (SUMMARY):
+- If ingredients include wheat, flour, bread, bun, brioche, baguette, pasta, noodles (any language) and not explicitly gluten-free:
+  → gluten.present = "yes".
+- If dish or tags include clear gluten-free indicators and NO explicit wheat/flour:
+  → gluten.present = "no" with explanation.
+- If a component is ambiguous (e.g. just "bun") and there is no gluten-free tag:
+  → gluten.present = "maybe" with a reason like "Bun usually contains wheat; menu does not clarify."
+
+MILK & LACTOSE RULES (SUMMARY):
+- Dairy words (milk, cream, butter, cheese, queso, yogurt, nata, crema, leche, etc.) imply milk allergen = "yes".
+- Lactose level:
+  - High: fresh milk, cream, fresh cheeses, ice cream, sweetened dairy sauces.
+  - Medium: butter, soft cheeses, yogurt (unless explicitly lactose-free).
+  - Low/Trace: aged hard cheeses.
+  - None: plant milks or explicit lactose-free products.
+
+FODMAP RULES (SUMMARY):
+- Common high-FODMAP: wheat bread/pasta, garlic, onions, honey, some fruits (apples, pears, mango), many beans, certain sweeteners.
+- "high": multiple strong high-FODMAP ingredients (e.g. garlic + onion + wheat bun).
+- "medium": some high-FODMAP components but balanced with low-FODMAP ingredients.
+- "low": mostly low-FODMAP foods (meat, fish, eggs, rice, potatoes, many vegetables) with no obvious strong triggers.
+
+OUTPUT FORMAT:
+Return exactly ONE JSON object with this shape:
+
+{
+  "allergens": {
+    "gluten":    { "present": "yes" | "no" | "maybe", "reason": string },
+    "milk":      { "present": "yes" | "no" | "maybe", "reason": string },
+    "egg":       { "present": "yes" | "no" | "maybe", "reason": string },
+    "soy":       { "present": "yes" | "no" | "maybe", "reason": string },
+    "peanut":    { "present": "yes" | "no" | "maybe", "reason": string },
+    "tree_nut":  { "present": "yes" | "no" | "maybe", "reason": string },
+    "fish":      { "present": "yes" | "no" | "maybe", "reason": string },
+    "shellfish": { "present": "yes" | "no" | "maybe", "reason": string },
+    "sesame":    { "present": "yes" | "no" | "maybe", "reason": string }
+  },
+  "lactose": {
+    "level": "none" | "trace" | "low" | "medium" | "high",
+    "reason": string
+  },
+  "fodmap": {
+    "level": "low" | "medium" | "high",
+    "reason": string
+  },
+  "extra_flags": {
+    "pork":    { "present": "yes" | "no" | "maybe", "reason": string },
+    "beef":    { "present": "yes" | "no" | "maybe", "reason": string },
+    "alcohol": { "present": "yes" | "no" | "maybe", "reason": string },
+    "spicy":   { "present": "yes" | "no" | "maybe", "reason": string }
+  },
+  "lifestyle_tags": string[],
+  "lifestyle_checks": {
+    "contains_red_meat": "yes" | "no" | "maybe",
+    "red_meat_free": "yes" | "no" | "maybe",
+    "vegetarian": "yes" | "no" | "maybe",
+    "vegan": "yes" | "no" | "maybe"
+  },
+  "component_allergens": [
+    {
+      "component_label": string,
+      "role": "main" | "side" | "unknown",
+      "category": string,
+      "allergens": { ... same structure ... },
+      "lactose": { "level": string, "reason": string },
+      "fodmap": { "level": string, "reason": string }
+    }
+  ],
+  "meta": {
+    "confidence": number,
+    "notes": string
+  }
+}
+
+${EVIDENCE_GUIDELINES}
+`;
 }
 
 function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
@@ -14955,6 +15356,139 @@ function buildOrganSentences(organsArr = []) {
   return out;
 }
 
+// Smart human-like allergen summary paragraph
+function buildSmartAllergenSummary(allergenFlags, lactoseFlags, allergenBreakdown) {
+  if (!Array.isArray(allergenFlags) || allergenFlags.length === 0) {
+    return "No major allergens were detected in this dish based on the available information.";
+  }
+
+  const sentences = [];
+
+  // Group allergens by presence level
+  const confirmed = allergenFlags.filter(f => f.present === "yes");
+  const possible = allergenFlags.filter(f => f.present === "maybe");
+
+  // Allergen display names with articles
+  const allergenNames = {
+    gluten: "gluten",
+    milk: "dairy (milk)",
+    egg: "eggs",
+    soy: "soy",
+    peanut: "peanuts",
+    tree_nut: "tree nuts",
+    fish: "fish",
+    shellfish: "shellfish",
+    sesame: "sesame"
+  };
+
+  // Build confirmed allergens sentence
+  if (confirmed.length > 0) {
+    const names = confirmed.map(f => allergenNames[f.kind] || f.kind);
+    if (names.length === 1) {
+      sentences.push(`This dish contains ${names[0]}.`);
+    } else if (names.length === 2) {
+      sentences.push(`This dish contains ${names[0]} and ${names[1]}.`);
+    } else {
+      const last = names.pop();
+      sentences.push(`This dish contains ${names.join(", ")}, and ${last}.`);
+    }
+  }
+
+  // Add lactose level for dairy with specific detail
+  const hasDairy = confirmed.some(f => f.kind === "milk") || possible.some(f => f.kind === "milk");
+  if (hasDairy && lactoseFlags && lactoseFlags.level) {
+    const level = lactoseFlags.level.toLowerCase();
+    const reason = lactoseFlags.reason || "";
+
+    if (level === "high") {
+      sentences.push(`The dairy content has high lactose levels${reason ? ` (${reason.toLowerCase()})` : ""}, which may cause discomfort for lactose-intolerant individuals.`);
+    } else if (level === "medium") {
+      sentences.push(`The dairy content has moderate lactose levels${reason ? ` (${reason.toLowerCase()})` : ""}.`);
+    } else if (level === "low" || level === "trace") {
+      sentences.push(`The dairy content has low lactose levels${reason ? ` (${reason.toLowerCase()})` : ""}, which may be tolerable for some lactose-sensitive individuals.`);
+    } else if (level === "none") {
+      sentences.push("The dairy ingredients appear to be lactose-free.");
+    }
+  }
+
+  // Build possible allergens sentence
+  if (possible.length > 0) {
+    const names = possible.map(f => allergenNames[f.kind] || f.kind);
+    const reasons = possible.map(f => f.message).filter(Boolean);
+
+    if (names.length === 1) {
+      sentences.push(`This dish may contain ${names[0]}${reasons[0] ? ` (${reasons[0].toLowerCase()})` : ""}.`);
+    } else {
+      sentences.push(`This dish may also contain ${names.join(" and ")}.`);
+    }
+  }
+
+  // Add component-specific allergen details if available
+  if (Array.isArray(allergenBreakdown) && allergenBreakdown.length > 0) {
+    const componentDetails = [];
+    for (const comp of allergenBreakdown) {
+      if (!comp || !comp.component) continue;
+      const compAllergens = (comp.allergen_flags || []).filter(f => f.present === "yes");
+      if (compAllergens.length > 0) {
+        const compNames = compAllergens.map(f => allergenNames[f.kind] || f.kind);
+        componentDetails.push(`${comp.component} (${compNames.join(", ")})`);
+      }
+    }
+    if (componentDetails.length > 1) {
+      sentences.push(`Allergen sources by component: ${componentDetails.join("; ")}.`);
+    }
+  }
+
+  return sentences.join(" ");
+}
+
+// Smart human-like FODMAP summary paragraph
+function buildSmartFodmapSummary(fodmapFlags, allergenBreakdown, plateComponents) {
+  if (!fodmapFlags || !fodmapFlags.level) {
+    return "FODMAP level could not be determined from the available information.";
+  }
+
+  const sentences = [];
+  const level = fodmapFlags.level.toLowerCase();
+  const reason = fodmapFlags.reason || "";
+
+  // Main FODMAP level sentence
+  if (level === "high") {
+    sentences.push(`This dish has a high FODMAP content${reason ? `, primarily due to ${reason.toLowerCase()}` : ""}.`);
+    sentences.push("Individuals following a low-FODMAP diet should avoid this dish or consume only a small portion.");
+  } else if (level === "medium") {
+    sentences.push(`This dish has a moderate FODMAP content${reason ? `, due to ${reason.toLowerCase()}` : ""}.`);
+    sentences.push("Portion size matters for those sensitive to FODMAPs.");
+  } else if (level === "low") {
+    sentences.push(`This dish has a low FODMAP content${reason ? ` (${reason.toLowerCase()})` : ""}.`);
+    sentences.push("This is generally suitable for those following a low-FODMAP diet.");
+  }
+
+  // Add component-specific FODMAP details if available
+  if (Array.isArray(allergenBreakdown) && allergenBreakdown.length > 0) {
+    const highFodmapComps = [];
+    const lowFodmapComps = [];
+
+    for (const comp of allergenBreakdown) {
+      if (!comp || !comp.component || !comp.fodmap_flags) continue;
+      const compLevel = (comp.fodmap_flags.level || "").toLowerCase();
+      if (compLevel === "high") {
+        highFodmapComps.push(comp.component);
+      } else if (compLevel === "low") {
+        lowFodmapComps.push(comp.component);
+      }
+    }
+
+    if (highFodmapComps.length > 0 && lowFodmapComps.length > 0) {
+      sentences.push(`High-FODMAP components include ${highFodmapComps.join(", ")}, while ${lowFodmapComps.join(", ")} ${lowFodmapComps.length === 1 ? "is" : "are"} low-FODMAP.`);
+    } else if (highFodmapComps.length > 0) {
+      sentences.push(`The main FODMAP contributors are ${highFodmapComps.join(" and ")}.`);
+    }
+  }
+
+  return sentences.join(" ");
+}
+
 async function getOrganEffectsForIngredients(env, ingredients = []) {
   if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {} };
 
@@ -16128,8 +16662,10 @@ async function runDishAnalysis(env, body, ctx) {
 
     const allergenPromise = (async () => {
       const t0 = Date.now();
-      const res = await runAllergenMiniLLM(env, allergenInput);
+      const res = await runAllergenTieredLLM(env, allergenInput);
       debug.t_llm_allergen_ms = Date.now() - t0;
+      debug.allergen_llm_provider = res.provider || null;
+      debug.allergen_llm_tier = res.tier || null;
       return res;
     })();
 
@@ -16180,8 +16716,10 @@ async function runDishAnalysis(env, body, ctx) {
   } else {
     allergenMiniResult = await (async () => {
       const t0 = Date.now();
-      const res = await runAllergenMiniLLM(env, allergenInput);
+      const res = await runAllergenTieredLLM(env, allergenInput);
       debug.t_llm_allergen_ms = Date.now() - t0;
+      debug.allergen_llm_provider = res.provider || null;
+      debug.allergen_llm_tier = res.tier || null;
       return res;
     })();
     organsLLMResult = await (async () => {
@@ -16385,7 +16923,7 @@ async function runDishAnalysis(env, body, ctx) {
       if (allergenInput) {
         const componentPromises = plateComponents.map((pc, idx) => {
           const compInput = buildComponentAllergenInput(allergenInput, pc, idx);
-          return runAllergenMiniLLM(env, compInput);
+          return runAllergenTieredLLM(env, compInput);
         });
 
         const settled = await Promise.allSettled(componentPromises);
@@ -16481,7 +17019,11 @@ async function runDishAnalysis(env, body, ctx) {
         ? a.lifestyle_checks
         : null;
   } else {
+    // All LLM tiers failed - this should be extremely rare with OpenAI + Grok + Cloudflare
     debug.allergen_llm_raw = allergenMiniResult || null;
+    debug.allergen_all_tiers_failed = true;
+    debug.allergen_error = allergenMiniResult?.error || "all-tiers-failed";
+    console.error("CRITICAL: All allergen LLM tiers failed:", allergenMiniResult?.error);
   }
 
   // --- Map organs LLM result ---
@@ -17403,6 +17945,10 @@ async function runDishAnalysis(env, body, ctx) {
   debug.total_ms = Date.now() - tStart;
   debug.pipeline_version = PIPELINE_VERSION;
 
+  // Build smart human-readable summaries
+  const allergen_summary = buildSmartAllergenSummary(allergen_flags, lactose_flags, allergen_breakdown);
+  const fodmap_summary = buildSmartFodmapSummary(fodmap_flags, allergen_breakdown, plateComponents);
+
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -17415,8 +17961,10 @@ async function runDishAnalysis(env, body, ctx) {
     normalized,
     organs,
     allergen_flags,
+    allergen_summary,
     allergen_breakdown,
     fodmap_flags,
+    fodmap_summary,
     lactose_flags,
     lifestyle_tags: allergen_lifestyle_tags,
     lifestyle_checks: allergen_lifestyle_checks,
