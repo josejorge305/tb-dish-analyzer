@@ -3432,7 +3432,11 @@ function inferHitsFromRecipeCard(card = {}) {
 function inferHitsFromText(title = "", desc = "") {
   const text = `${title} ${desc}`.toLowerCase();
   const hits = [];
-  const push = (o) =>
+  const seen = new Set(); // Avoid duplicate hits
+  const push = (o) => {
+    const key = o.canonical || o.term;
+    if (seen.has(key)) return;
+    seen.add(key);
     hits.push({
       term: o.term || o.canonical || o.label || null,
       canonical: o.canonical || o.term || o.label || null,
@@ -3440,19 +3444,17 @@ function inferHitsFromText(title = "", desc = "") {
       classes: o.classes || [],
       fodmap: o.fodmap,
       tags: o.tags || [],
-      source: "infer:title"
+      source: "infer:text"
     });
+  };
 
+  // FODMAP triggers
   if (/\bgarlic\b/.test(text)) {
     push({
       term: "garlic",
       canonical: "garlic",
       classes: ["garlic", "allium"],
-      fodmap: {
-        level: "high",
-        relevant: true,
-        drivers: ["garlic", "fructans"]
-      }
+      fodmap: { level: "high", relevant: true, drivers: ["garlic", "fructans"] }
     });
   }
   if (/\bonion\b|shallot|scallion/.test(text)) {
@@ -3460,36 +3462,142 @@ function inferHitsFromText(title = "", desc = "") {
       term: "onion",
       canonical: "onion",
       classes: ["onion", "allium"],
-      fodmap: {
-        level: "high",
-        relevant: true,
-        drivers: ["onion", "fructans"]
-      }
+      fodmap: { level: "high", relevant: true, drivers: ["onion", "fructans"] }
     });
   }
-  if (
-    /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
-      text
-    )
-  ) {
+  if (/\bhoney\b/.test(text)) {
+    push({
+      term: "honey",
+      canonical: "honey",
+      classes: ["sweetener"],
+      fodmap: { level: "high", relevant: true, drivers: ["fructose"] }
+    });
+  }
+  if (/\bapple\b|apple cider/.test(text)) {
+    push({
+      term: "apple",
+      canonical: "apple",
+      classes: ["fruit"],
+      fodmap: { level: "high", relevant: true, drivers: ["fructose", "sorbitol"] }
+    });
+  }
+  if (/\bmushroom\b/.test(text)) {
+    push({
+      term: "mushroom",
+      canonical: "mushroom",
+      classes: ["vegetable", "fungi"],
+      fodmap: { level: "high", relevant: true, drivers: ["mannitol"] }
+    });
+  }
+  if (/\bcauliflower\b/.test(text)) {
+    push({
+      term: "cauliflower",
+      canonical: "cauliflower",
+      classes: ["vegetable"],
+      fodmap: { level: "high", relevant: true, drivers: ["mannitol"] }
+    });
+  }
+  if (/\bavocado\b|guacamole/.test(text)) {
+    push({
+      term: "avocado",
+      canonical: "avocado",
+      classes: ["fruit"],
+      fodmap: { level: "medium", relevant: true, drivers: ["sorbitol"] }
+    });
+  }
+
+  // Major allergens - FDA Big 9
+  if (/(milk|cream|butter|cheese|parmesan|mozzarella|ricotta|brie|cheddar|gouda|feta|yogurt|whey|casein|gelato|ice cream)\b/.test(text)) {
     push({
       term: "dairy",
       canonical: "dairy",
       allergens: ["milk"],
       classes: ["dairy"],
-      fodmap: {
-        level: "low",
-        relevant: true,
-        drivers: ["lactose"]
-      }
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
     });
   }
-  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text)) {
+  if (/\bshrimp|prawn|lobster|crab|shellfish|clam|mussel|oyster|scallop|crawfish|crayfish\b/.test(text)) {
     push({
       term: "shellfish",
       canonical: "shellfish",
       allergens: ["shellfish"],
       classes: ["shellfish"]
+    });
+  }
+  if (/\bpeanut|peanuts\b/.test(text)) {
+    push({
+      term: "peanut",
+      canonical: "peanut",
+      allergens: ["peanut"],
+      classes: ["legume", "nut"]
+    });
+  }
+  if (/\balmond|walnut|pecan|cashew|pistachio|hazelnut|macadamia|brazil nut|tree nut/.test(text)) {
+    push({
+      term: "tree nut",
+      canonical: "tree_nut",
+      allergens: ["tree nut"],
+      classes: ["nut"]
+    });
+  }
+  if (/\begg\b|eggs\b|omelette|omelet|frittata|quiche|meringue|aioli|mayo|mayonnaise/.test(text)) {
+    push({
+      term: "egg",
+      canonical: "egg",
+      allergens: ["egg"],
+      classes: ["egg"]
+    });
+  }
+  if (/\bwheat|bread|flour|pasta|noodle|tortilla|pita|bagel|croissant|biscuit|cracker|pretzel|breaded|crusted|panko\b/.test(text)) {
+    push({
+      term: "wheat",
+      canonical: "wheat",
+      allergens: ["wheat", "gluten"],
+      classes: ["grain", "gluten"]
+    });
+  }
+  if (/\bsoy\b|soybean|tofu|tempeh|edamame|miso|soy sauce/.test(text)) {
+    push({
+      term: "soy",
+      canonical: "soy",
+      allergens: ["soy"],
+      classes: ["legume"]
+    });
+  }
+  if (/\bsalmon|tuna|cod|tilapia|halibut|trout|bass|anchov|sardine|mackerel|swordfish|mahi|snapper|\bfish\b/.test(text)) {
+    push({
+      term: "fish",
+      canonical: "fish",
+      allergens: ["fish"],
+      classes: ["fish", "seafood"]
+    });
+  }
+  if (/\bsesame|tahini\b/.test(text)) {
+    push({
+      term: "sesame",
+      canonical: "sesame",
+      allergens: ["sesame"],
+      classes: ["seed"]
+    });
+  }
+
+  // Gluten sources (beyond wheat)
+  if (/\bbarley|rye|spelt|triticale|farro|couscous|bulgur|seitan\b/.test(text)) {
+    push({
+      term: "gluten",
+      canonical: "gluten",
+      allergens: ["gluten"],
+      classes: ["grain", "gluten"]
+    });
+  }
+
+  // Sulfites (common in wine sauces, dried fruits)
+  if (/\bwine\b|wine sauce|dried fruit|dried apricot/.test(text)) {
+    push({
+      term: "sulfites",
+      canonical: "sulfites",
+      allergens: ["sulfites"],
+      classes: ["preservative"]
     });
   }
 
