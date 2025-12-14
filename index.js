@@ -3507,12 +3507,220 @@ function inferHitsFromText(title = "", desc = "") {
   }
 
   // Major allergens - FDA Big 9
-  if (/(milk|cream|butter|cheese|parmesan|mozzarella|ricotta|brie|cheddar|gouda|feta|yogurt|whey|casein|gelato|ice cream)\b/.test(text)) {
+  // Dairy - detect specific types with their lactose levels
+  // High lactose: milk, ice cream, soft cheeses, cream, condensed milk
+  // Medium lactose: yogurt, sour cream, cottage cheese, ricotta
+  // Low lactose: butter, hard aged cheeses (parmesan, cheddar, gouda, brie, feta), ghee
+  // Lactose-free alternatives: lactose-free milk, lactaid
+
+  // High lactose dairy
+  if (/\bmilk\b(?!.*lactose.?free)/.test(text)) {
     push({
-      term: "dairy",
-      canonical: "dairy",
+      term: "milk",
+      canonical: "milk",
       allergens: ["milk"],
       classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bice cream|gelato\b/.test(text)) {
+    push({
+      term: "ice cream",
+      canonical: "ice_cream",
+      allergens: ["milk"],
+      classes: ["dairy", "dessert"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bheavy cream|whipping cream|half.and.half|condensed milk|evaporated milk\b/.test(text)) {
+    push({
+      term: "cream",
+      canonical: "cream",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcream cheese|mascarpone\b/.test(text)) {
+    push({
+      term: "cream cheese",
+      canonical: "cream_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Medium lactose dairy
+  if (/\byogurt|yoghurt\b/.test(text)) {
+    push({
+      term: "yogurt",
+      canonical: "yogurt",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bsour cream|crema\b/.test(text)) {
+    push({
+      term: "sour cream",
+      canonical: "sour_cream",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcottage cheese\b/.test(text)) {
+    push({
+      term: "cottage cheese",
+      canonical: "cottage_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bricotta\b/.test(text)) {
+    push({
+      term: "ricotta",
+      canonical: "ricotta",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bmozzarella\b/.test(text)) {
+    push({
+      term: "mozzarella",
+      canonical: "mozzarella",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Low lactose dairy (aged/hard cheeses, butter)
+  if (/\bparmesan|parmigiano|pecorino|romano\b/.test(text)) {
+    push({
+      term: "parmesan",
+      canonical: "parmesan",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcheddar\b/.test(text)) {
+    push({
+      term: "cheddar",
+      canonical: "cheddar",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bgouda|gruyere|swiss cheese|emmental\b/.test(text)) {
+    push({
+      term: "aged cheese",
+      canonical: "aged_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bbrie|camembert\b/.test(text)) {
+    push({
+      term: "brie",
+      canonical: "brie",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bfeta\b/.test(text)) {
+    push({
+      term: "feta",
+      canonical: "feta",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bblue cheese|gorgonzola|roquefort\b/.test(text)) {
+    push({
+      term: "blue cheese",
+      canonical: "blue_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bbutter\b(?!.*peanut|.*almond|.*cashew)/.test(text)) {
+    push({
+      term: "butter",
+      canonical: "butter",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bghee\b/.test(text)) {
+    push({
+      term: "ghee",
+      canonical: "ghee",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "none",
+      fodmap: { level: "low", relevant: false, drivers: [] }
+    });
+  }
+
+  // Generic cheese fallback (if no specific type detected)
+  if (/\bcheese\b/.test(text) && !seen.has("parmesan") && !seen.has("cheddar") && !seen.has("mozzarella") && !seen.has("feta") && !seen.has("brie") && !seen.has("ricotta") && !seen.has("cream_cheese") && !seen.has("cottage_cheese") && !seen.has("aged_cheese") && !seen.has("blue_cheese")) {
+    push({
+      term: "cheese",
+      canonical: "cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Generic creamy/dairy fallback
+  if (/\bcreamy\b|cream sauce|alfredo/.test(text) && !seen.has("cream") && !seen.has("cream_cheese") && !seen.has("sour_cream")) {
+    push({
+      term: "cream sauce",
+      canonical: "cream_sauce",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Whey/casein protein (common in processed foods)
+  if (/\bwhey|casein\b/.test(text)) {
+    push({
+      term: "whey/casein",
+      canonical: "whey_casein",
+      allergens: ["milk"],
+      classes: ["dairy", "protein"],
+      lactose_band: "low",
       fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
     });
   }
