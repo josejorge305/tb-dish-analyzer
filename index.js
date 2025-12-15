@@ -5241,6 +5241,12 @@ FODMAP RULES (SUMMARY):
 - "medium": some high-FODMAP components but balanced with low-FODMAP ingredients.
 - "low": mostly low-FODMAP foods (meat, fish, eggs, rice, potatoes, many vegetables) with no obvious strong triggers.
 
+ALLERGEN CLASSIFICATION (CRITICAL - DO NOT CONFUSE):
+- TREE NUTS: almonds, cashews, walnuts, pecans, pistachios, hazelnuts, macadamia, brazil nuts, pine nuts.
+- SESAME: sesame seeds, tahini, sesame oil. SESAME IS NOT A TREE NUT - it is a SEPARATE allergen category.
+- PEANUTS: peanuts, peanut butter. PEANUTS ARE LEGUMES, NOT TREE NUTS.
+- Never classify sesame as tree_nut. Never classify peanuts as tree_nut. These are medically distinct categories.
+
 OUTPUT FORMAT:
 Return exactly ONE JSON object with this shape:
 
@@ -5594,6 +5600,12 @@ FODMAP RULES (SUMMARY):
 - "high": multiple strong high-FODMAP ingredients (e.g. garlic + onion + wheat bun).
 - "medium": some high-FODMAP components but balanced with low-FODMAP ingredients.
 - "low": mostly low-FODMAP foods (meat, fish, eggs, rice, potatoes, many vegetables) with no obvious strong triggers.
+
+ALLERGEN CLASSIFICATION (CRITICAL - DO NOT CONFUSE):
+- TREE NUTS: almonds, cashews, walnuts, pecans, pistachios, hazelnuts, macadamia, brazil nuts, pine nuts.
+- SESAME: sesame seeds, tahini, sesame oil. SESAME IS NOT A TREE NUT - it is a SEPARATE allergen category.
+- PEANUTS: peanuts, peanut butter. PEANUTS ARE LEGUMES, NOT TREE NUTS.
+- Never classify sesame as tree_nut. Never classify peanuts as tree_nut. These are medically distinct categories.
 
 OUTPUT FORMAT:
 Return exactly ONE JSON object with this shape:
