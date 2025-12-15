@@ -5198,7 +5198,14 @@ YOUR TASKS:
 4. Set extra flags:
    - pork, beef, alcohol, spicy (each: "yes" | "no" | "maybe" with reason).
 5. Emit lifestyle_tags and lifestyle_checks for red meat, vegetarian/vegan.
-6. Emit component_allergens describing key components on the plate using the SAME allergen/lactose/FODMAP structure as the global ones.
+6. ALWAYS emit component_allergens - this is REQUIRED even when plate_components is empty:
+   - If plate_components is provided, use those components.
+   - If plate_components is empty/missing, INFER components from the dishName (e.g., "Grand Slam with Eggs, Bacon, Pancakes" → Eggs, Bacon, Pancakes).
+   - Each component needs its own allergen/lactose/FODMAP analysis.
+   - Combo meals, breakfast platters, and multi-item dishes MUST have multiple component entries.
+   - BOWL DISHES (burrito bowls, poke bowls, grain bowls, acai bowls): Always break into base (rice/greens), protein, beans/legumes, toppings, sauces/dressings as separate components.
+   - LOADED DISHES (loaded fries, nachos, potato skins): Break into base item, cheese, meat toppings, sauces separately.
+   - SANDWICHES/SUBS: Break into bread, protein/meat, cheese, vegetables, condiments as separate components for allergen tracking.
 
 STRICTNESS RULES (IMPORTANT):
 - DO NOT invent ingredients that are not clearly implied or typical by name/description.
@@ -5321,7 +5328,7 @@ ${EVIDENCE_GUIDELINES}
   const body = {
     model,
     response_format: { type: "json_object" },
-    max_completion_tokens: 900,
+    max_completion_tokens: 4000, // Increased for multi-component dishes with detailed per-component allergen analysis
     messages: [
       { role: "system", content: systemPrompt.trim() },
       {
@@ -5386,12 +5393,13 @@ async function runAllergenGrokLLM(env, input, systemPrompt) {
   }
 
   const body = {
-    model: env.GROK_MODEL || "grok-2-latest",
+    model: env.GROK_MODEL || "grok-3", // grok-3 is the current public API model
     messages: [
       { role: "system", content: systemPrompt.trim() },
       { role: "user", content: JSON.stringify(input) }
     ],
-    temperature: 0.1
+    temperature: 0.1,
+    max_tokens: 4000 // Increased for multi-component dishes with detailed per-component allergen analysis
   };
 
   try {
@@ -5453,7 +5461,7 @@ async function runAllergenCloudflareLLM(env, input, systemPrompt) {
         { role: "system", content: systemPrompt.trim() + "\n\nIMPORTANT: Return ONLY valid JSON, no markdown or explanations." },
         { role: "user", content: JSON.stringify(input) }
       ],
-      max_tokens: 1500,
+      max_tokens: 2500, // Increased for multi-component dishes
       temperature: 0.1
     });
 
@@ -5488,6 +5496,9 @@ async function runAllergenTieredLLM(env, input) {
   // Build the shared system prompt
   const systemPrompt = buildAllergenSystemPrompt();
 
+  // Track errors from each tier for debugging
+  const tierErrors = {};
+
   // Tier 1: OpenAI (primary - best quality)
   if (env.OPENAI_API_KEY) {
     const openaiResult = await runAllergenMiniLLM(env, input);
@@ -5497,7 +5508,10 @@ async function runAllergenTieredLLM(env, input) {
       return openaiResult;
     }
     // Log but continue to next tier
-    console.warn("OpenAI allergen LLM failed:", openaiResult.error);
+    tierErrors.openai = { error: openaiResult.error, details: openaiResult.details };
+    console.warn("OpenAI allergen LLM failed:", openaiResult.error, openaiResult.details);
+  } else {
+    tierErrors.openai = { error: "no-api-key" };
   }
 
   // Tier 2: Grok (xAI - strong alternative)
@@ -5508,7 +5522,10 @@ async function runAllergenTieredLLM(env, input) {
       grokResult.tier = 2;
       return grokResult;
     }
-    console.warn("Grok allergen LLM failed:", grokResult.error);
+    tierErrors.grok = { error: grokResult.error, details: grokResult.details };
+    console.warn("Grok allergen LLM failed:", grokResult.error, grokResult.details);
+  } else {
+    tierErrors.grok = { error: "no-api-key" };
   }
 
   // Tier 3: Cloudflare AI Llama (always available)
@@ -5518,14 +5535,18 @@ async function runAllergenTieredLLM(env, input) {
       cfResult.tier = 3;
       return cfResult;
     }
-    console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error);
+    tierErrors.cloudflare = { error: cfResult.error, details: cfResult.details };
+    console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error, cfResult.details);
+  } else {
+    tierErrors.cloudflare = { error: "no-ai-binding" };
   }
 
   // All tiers failed - this should never happen in production
   return {
     ok: false,
     error: "all-allergen-llm-tiers-failed",
-    details: "OpenAI, Grok, and Cloudflare AI all failed to analyze allergens"
+    details: "OpenAI, Grok, and Cloudflare AI all failed to analyze allergens",
+    tierErrors
   };
 }
 
@@ -5556,7 +5577,14 @@ YOUR TASKS:
 4. Set extra flags:
    - pork, beef, alcohol, spicy (each: "yes" | "no" | "maybe" with reason).
 5. Emit lifestyle_tags and lifestyle_checks for red meat, vegetarian/vegan.
-6. Emit component_allergens describing key components on the plate using the SAME allergen/lactose/FODMAP structure as the global ones.
+6. ALWAYS emit component_allergens - this is REQUIRED even when plate_components is empty:
+   - If plate_components is provided, use those components.
+   - If plate_components is empty/missing, INFER components from the dishName (e.g., "Grand Slam with Eggs, Bacon, Pancakes" → Eggs, Bacon, Pancakes).
+   - Each component needs its own allergen/lactose/FODMAP analysis.
+   - Combo meals, breakfast platters, and multi-item dishes MUST have multiple component entries.
+   - BOWL DISHES (burrito bowls, poke bowls, grain bowls, acai bowls): Always break into base (rice/greens), protein, beans/legumes, toppings, sauces/dressings as separate components.
+   - LOADED DISHES (loaded fries, nachos, potato skins): Break into base item, cheese, meat toppings, sauces separately.
+   - SANDWICHES/SUBS: Break into bread, protein/meat, cheese, vegetables, condiments as separate components for allergen tracking.
 
 STRICTNESS RULES (IMPORTANT):
 - DO NOT invent ingredients that are not clearly implied or typical by name/description.
@@ -16796,6 +16824,15 @@ async function runDishAnalysis(env, body, ctx) {
   lifestyle_checks = null;
   let allergen_breakdown = null;
 
+  // Debug: capture the shape of allergenMiniResult before processing
+  debug.allergen_result_shape = allergenMiniResult ? {
+    ok: allergenMiniResult.ok,
+    hasData: !!allergenMiniResult.data,
+    dataType: typeof allergenMiniResult.data,
+    keys: allergenMiniResult.data ? Object.keys(allergenMiniResult.data).slice(0, 10) : null,
+    hasComponentAllergens: allergenMiniResult.data && Array.isArray(allergenMiniResult.data.component_allergens)
+  } : null;
+
   if (
     allergenMiniResult &&
     allergenMiniResult.ok &&
@@ -16839,14 +16876,15 @@ async function runDishAnalysis(env, body, ctx) {
 
     try {
       const componentAllergensRaw = a.component_allergens;
+      // Process component_allergens even when plateComponents is empty (no image)
+      // The LLM provides component_label, role, and category directly
       if (
         Array.isArray(componentAllergensRaw) &&
-        componentAllergensRaw.length > 0 &&
-        plateComponents &&
-        plateComponents.length > 0
+        componentAllergensRaw.length > 0
       ) {
         allergen_breakdown = componentAllergensRaw.map((compEntry, idx) => {
-          const pc = plateComponents[idx] || {};
+          // Use plateComponents if available, otherwise rely on LLM's component data
+          const pc = (plateComponents && plateComponents[idx]) || {};
           const label =
             compEntry?.component_label ||
             pc.label ||
@@ -16916,6 +16954,20 @@ async function runDishAnalysis(env, body, ctx) {
           };
         });
         debug.allergen_component_raw = componentAllergensRaw;
+
+        // If plateComponents is empty but we have LLM-derived components, populate plateComponents
+        // This ensures plate_components is available for nutrition breakdown and UI display
+        if (!plateComponents || plateComponents.length === 0) {
+          plateComponents = allergen_breakdown.map((comp, idx) => ({
+            component_id: comp.component_id || `c${idx}`,
+            role: comp.role || "unknown",
+            category: comp.category || "other",
+            label: comp.component,
+            confidence: 0.8,
+            area_ratio: 1 / allergen_breakdown.length
+          }));
+          debug.plate_components_source = "llm-component-allergens";
+        }
       }
     } catch (err) {
       allergen_breakdown = null;
@@ -17036,6 +17088,102 @@ async function runDishAnalysis(env, body, ctx) {
     debug.allergen_all_tiers_failed = true;
     debug.allergen_error = allergenMiniResult?.error || "all-tiers-failed";
     console.error("CRITICAL: All allergen LLM tiers failed:", allergenMiniResult?.error);
+  }
+
+  // --- Aggregate component allergens to dish-level if allergen_flags is empty ---
+  // This ensures dish-level allergen_flags are populated even when LLM only returns component_allergens
+  if (
+    (!Array.isArray(allergen_flags) || allergen_flags.length === 0) &&
+    Array.isArray(allergen_breakdown) &&
+    allergen_breakdown.length > 0
+  ) {
+    const aggregatedAllergens = new Map(); // kind -> {present, messages[], sources[]}
+    const aggregatedFodmap = { level: null, reasons: [] };
+    const aggregatedLactose = { level: null, reasons: [] };
+
+    const fodmapOrder = { high: 3, medium: 2, low: 1, none: 0 };
+    const lactoseOrder = { high: 3, medium: 2, low: 1, trace: 0.5, none: 0 };
+
+    for (const comp of allergen_breakdown) {
+      if (!comp) continue;
+
+      // Aggregate allergen flags
+      if (Array.isArray(comp.allergen_flags)) {
+        for (const flag of comp.allergen_flags) {
+          if (!flag || !flag.kind) continue;
+          const kind = flag.kind;
+          const present = flag.present;
+          if (present !== "yes" && present !== "maybe") continue;
+
+          if (!aggregatedAllergens.has(kind)) {
+            aggregatedAllergens.set(kind, { present: "maybe", messages: [], sources: new Set() });
+          }
+          const entry = aggregatedAllergens.get(kind);
+          // Upgrade to "yes" if any component says "yes"
+          if (present === "yes") entry.present = "yes";
+          if (flag.message) entry.messages.push(`${comp.component}: ${flag.message}`);
+          if (flag.source) entry.sources.add(flag.source);
+        }
+      }
+
+      // Aggregate FODMAP flags (take highest level)
+      if (comp.fodmap_flags && comp.fodmap_flags.level) {
+        const level = comp.fodmap_flags.level.toLowerCase();
+        const currentOrder = fodmapOrder[aggregatedFodmap.level] || -1;
+        const newOrder = fodmapOrder[level] || 0;
+        if (newOrder > currentOrder) {
+          aggregatedFodmap.level = level;
+        }
+        if (comp.fodmap_flags.reason) {
+          aggregatedFodmap.reasons.push(`${comp.component}: ${comp.fodmap_flags.reason}`);
+        }
+      }
+
+      // Aggregate lactose flags (take highest level)
+      if (comp.lactose_flags && comp.lactose_flags.level) {
+        const level = comp.lactose_flags.level.toLowerCase();
+        const currentOrder = lactoseOrder[aggregatedLactose.level] || -1;
+        const newOrder = lactoseOrder[level] || 0;
+        if (newOrder > currentOrder) {
+          aggregatedLactose.level = level;
+        }
+        if (comp.lactose_flags.reason) {
+          aggregatedLactose.reasons.push(`${comp.component}: ${comp.lactose_flags.reason}`);
+        }
+      }
+    }
+
+    // Populate allergen_flags from aggregation
+    for (const [kind, entry] of aggregatedAllergens) {
+      allergen_flags.push({
+        kind,
+        present: entry.present,
+        message: entry.messages.length > 0 ? entry.messages[0] : `Detected in dish components.`,
+        source: entry.sources.size > 0 ? Array.from(entry.sources).join(",") : "aggregated-from-components"
+      });
+    }
+
+    // Populate fodmap_flags from aggregation if still null
+    if (!fodmap_flags && aggregatedFodmap.level) {
+      fodmap_flags = {
+        level: aggregatedFodmap.level,
+        reason: aggregatedFodmap.reasons.length > 0 ? aggregatedFodmap.reasons.join("; ") : "Aggregated from dish components.",
+        source: "aggregated-from-components"
+      };
+    }
+
+    // Populate lactose_flags from aggregation if still null
+    if (!lactose_flags && aggregatedLactose.level) {
+      lactose_flags = {
+        level: aggregatedLactose.level,
+        reason: aggregatedLactose.reasons.length > 0 ? aggregatedLactose.reasons.join("; ") : "Aggregated from dish components.",
+        source: "aggregated-from-components"
+      };
+    }
+
+    if (allergen_flags.length > 0) {
+      debug.allergen_flags_aggregated_from_breakdown = true;
+    }
   }
 
   // --- Map organs LLM result ---
@@ -17291,7 +17439,7 @@ async function runDishAnalysis(env, body, ctx) {
     fodmap_edamam: edamamFodmap || null,
     edamam_healthLabels: edamamHealthLabels,
     organs_llm_raw: organsLLMDebug || null,
-    allergen_llm_raw: allergenMiniDebug || null,
+    // allergen_llm_raw is already set earlier at line 16815 - don't overwrite it
     dish_image_url: dishImageUrl
   };
 
