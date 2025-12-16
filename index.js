@@ -15568,6 +15568,219 @@ function buildSmartFodmapSummary(fodmapFlags, allergenBreakdown, plateComponents
   return sentences.join(" ");
 }
 
+/**
+ * Build a "Likely Recipe" by merging base recipe with vision-detected ingredients
+ * and adjusting cooking instructions based on detected cooking method.
+ */
+function buildLikelyRecipe(recipeResult, visionInsights, nutritionBreakdown) {
+  const likely = {
+    title: null,
+    source: null,
+    cooking_method: null,
+    cooking_method_confidence: null,
+    cooking_method_adjusted: false,
+    ingredients: [],
+    instructions: [],
+    notes: []
+  };
+
+  // Extract base recipe data
+  const baseRecipe = recipeResult?.recipe || recipeResult?.out?.recipe || {};
+  const recipeIngredients = recipeResult?.ingredients || recipeResult?.ingredients_parsed || [];
+  const recipeSteps = baseRecipe.steps || [];
+  const recipeNotes = baseRecipe.notes || [];
+
+  likely.title = baseRecipe.title || baseRecipe.name || recipeResult?.dish || "Unknown Dish";
+  likely.source = recipeResult?.source || recipeResult?.responseSource || "unknown";
+
+  // Get vision cooking method
+  const visionCookingMethod = visionInsights?.visual_cooking_method;
+  if (visionCookingMethod && visionCookingMethod.primary) {
+    likely.cooking_method = visionCookingMethod.primary;
+    likely.cooking_method_confidence = visionCookingMethod.confidence || null;
+    likely.cooking_method_reason = visionCookingMethod.reason || null;
+  }
+
+  // Get vision-detected ingredients
+  const visionIngredients = visionInsights?.visual_ingredients || [];
+
+  // Build ingredient map from recipe (lowercase for matching)
+  const recipeIngredientMap = new Map();
+  for (const ing of recipeIngredients) {
+    const name = (ing.name || ing.food || "").toLowerCase().trim();
+    if (name) {
+      recipeIngredientMap.set(name, {
+        name: ing.name || ing.food,
+        quantity: ing.qty || ing.quantity || null,
+        unit: ing.unit || null,
+        source: "recipe",
+        category: null
+      });
+    }
+  }
+
+  // Add vision ingredients, marking new ones
+  for (const vi of visionIngredients) {
+    const guess = (vi.guess || "").toLowerCase().trim();
+    if (!guess) continue;
+
+    // Check if already in recipe (fuzzy match)
+    let found = false;
+    for (const [recName] of recipeIngredientMap) {
+      if (recName.includes(guess) || guess.includes(recName) ||
+          levenshteinSimilar(recName, guess)) {
+        found = true;
+        // Update with vision confidence
+        const existing = recipeIngredientMap.get(recName);
+        existing.vision_confirmed = true;
+        existing.vision_confidence = vi.confidence || null;
+        break;
+      }
+    }
+
+    if (!found) {
+      // New ingredient detected by vision
+      recipeIngredientMap.set(guess, {
+        name: vi.guess,
+        quantity: null,
+        unit: null,
+        source: "vision",
+        category: vi.category || null,
+        vision_confidence: vi.confidence || null,
+        vision_evidence: vi.evidence || null
+      });
+    }
+  }
+
+  // Also check FatSecret nutrition breakdown for additional ingredients
+  if (Array.isArray(nutritionBreakdown)) {
+    for (const comp of nutritionBreakdown) {
+      const compName = (comp.component || "").toLowerCase().trim();
+      if (!compName || comp.category === "whole_dish") continue;
+
+      let found = false;
+      for (const [recName] of recipeIngredientMap) {
+        if (recName.includes(compName) || compName.includes(recName) ||
+            levenshteinSimilar(recName, compName)) {
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        recipeIngredientMap.set(compName, {
+          name: comp.component,
+          quantity: null,
+          unit: null,
+          source: "vision_nutrition",
+          energyKcal: comp.energyKcal || null,
+          protein_g: comp.protein_g || null
+        });
+      }
+    }
+  }
+
+  // Convert map to array
+  likely.ingredients = Array.from(recipeIngredientMap.values());
+
+  // Cooking method verb mappings for instruction adjustment
+  const cookingVerbs = {
+    grilled: ["grill", "grilling", "grilled"],
+    fried: ["fry", "frying", "fried", "pan-fry", "pan-frying"],
+    deep_fried: ["deep-fry", "deep-frying", "deep-fried"],
+    baked: ["bake", "baking", "baked"],
+    roasted: ["roast", "roasting", "roasted"],
+    steamed: ["steam", "steaming", "steamed"],
+    sautéed: ["sauté", "sautéing", "sautéed", "saute", "sauteing", "sauteed"],
+    boiled: ["boil", "boiling", "boiled"],
+    broiled: ["broil", "broiling", "broiled"]
+  };
+
+  // Get verbs for detected cooking method
+  const detectedVerbs = likely.cooking_method ? cookingVerbs[likely.cooking_method] || [] : [];
+
+  // Adjust instructions based on cooking method
+  for (const step of recipeSteps) {
+    let adjustedStep = step;
+    let wasAdjusted = false;
+
+    if (likely.cooking_method && detectedVerbs.length > 0) {
+      // Check if step mentions a different cooking method
+      for (const [method, verbs] of Object.entries(cookingVerbs)) {
+        if (method === likely.cooking_method) continue;
+
+        for (const verb of verbs) {
+          const regex = new RegExp(`\\b${verb}\\b`, "gi");
+          if (regex.test(adjustedStep)) {
+            // Replace with detected method's verb
+            const replacement = detectedVerbs[0];
+            adjustedStep = adjustedStep.replace(regex, replacement);
+            wasAdjusted = true;
+            likely.cooking_method_adjusted = true;
+          }
+        }
+      }
+    }
+
+    likely.instructions.push({
+      text: adjustedStep,
+      adjusted: wasAdjusted,
+      original: wasAdjusted ? step : null
+    });
+  }
+
+  // Add notes
+  likely.notes = Array.isArray(recipeNotes) ? recipeNotes : [];
+
+  // Add vision adjustment note if cooking method was changed
+  if (likely.cooking_method_adjusted) {
+    likely.notes.push(`Cooking method adjusted to "${likely.cooking_method}" based on visual analysis (${Math.round((likely.cooking_method_confidence || 0) * 100)}% confidence).`);
+  }
+
+  // Count sources
+  const recipeSourCount = likely.ingredients.filter(i => i.source === "recipe").length;
+  const visionSourceCount = likely.ingredients.filter(i => i.source === "vision" || i.source === "vision_nutrition").length;
+  const confirmedCount = likely.ingredients.filter(i => i.vision_confirmed).length;
+
+  likely.ingredient_stats = {
+    total: likely.ingredients.length,
+    from_recipe: recipeSourCount,
+    from_vision: visionSourceCount,
+    vision_confirmed: confirmedCount
+  };
+
+  return likely;
+}
+
+// Simple Levenshtein-based similarity check
+function levenshteinSimilar(a, b, threshold = 0.7) {
+  if (!a || !b) return false;
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+  if (longer.length === 0) return true;
+
+  const costs = [];
+  for (let i = 0; i <= shorter.length; i++) {
+    let lastValue = i;
+    for (let j = 0; j <= longer.length; j++) {
+      if (i === 0) {
+        costs[j] = j;
+      } else if (j > 0) {
+        let newValue = costs[j - 1];
+        if (shorter.charAt(i - 1) !== longer.charAt(j - 1)) {
+          newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+        }
+        costs[j - 1] = lastValue;
+        lastValue = newValue;
+      }
+    }
+    if (i > 0) costs[longer.length] = lastValue;
+  }
+
+  const similarity = (longer.length - costs[longer.length]) / longer.length;
+  return similarity >= threshold;
+}
+
 async function getOrganEffectsForIngredients(env, ingredients = []) {
   if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {} };
 
@@ -18085,6 +18298,10 @@ async function runDishAnalysis(env, body, ctx) {
   const allergen_summary = buildSmartAllergenSummary(allergen_flags, lactose_flags, allergen_breakdown);
   const fodmap_summary = buildSmartFodmapSummary(fodmap_flags, allergen_breakdown, plateComponents);
 
+  // Build Likely Recipe (merges recipe + vision ingredients + adjusted cooking method)
+  const visionInsightsForRecipe = debug.vision_insights || null;
+  const likely_recipe = buildLikelyRecipe(recipeResult, visionInsightsForRecipe, nutritionBreakdown);
+
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -18094,6 +18311,7 @@ async function runDishAnalysis(env, body, ctx) {
     imageUrl: dishImageUrl,
     summary,
     recipe: recipeResult,
+    likely_recipe,
     normalized,
     organs,
     allergen_flags,
