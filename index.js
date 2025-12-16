@@ -17437,6 +17437,30 @@ async function runDishAnalysis(env, body, ctx) {
           normalized.nutrition_breakdown.length > 0
         ) {
           fatsecretNutritionBreakdown = normalized.nutrition_breakdown;
+
+          // Sum FatSecret component nutrition for the final summary
+          // This gives accurate per-plate nutrition from vision when available
+          const fsSum = normalized.nutrition_breakdown.reduce(
+            (acc, comp) => {
+              acc.energyKcal += comp.energyKcal || 0;
+              acc.protein_g += comp.protein_g || 0;
+              acc.fat_g += comp.fat_g || 0;
+              acc.carbs_g += comp.carbs_g || 0;
+              acc.sugar_g += comp.sugar_g || 0;
+              acc.fiber_g += comp.fiber_g || 0;
+              acc.sodium_mg += comp.sodium_mg || 0;
+              return acc;
+            },
+            { energyKcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, sugar_g: 0, fiber_g: 0, sodium_mg: 0 }
+          );
+
+          // Use FatSecret image nutrition as finalNutritionSummary
+          // This is more accurate for photo-based analysis than recipe search
+          if (fsSum.energyKcal > 0) {
+            finalNutritionSummary = fsSum;
+            nutrition_source = "fatsecret_image";
+            debug.fatsecret_nutrition_sum = fsSum;
+          }
         }
 
         if (normalized && normalized.component_allergens) {
@@ -17525,10 +17549,16 @@ async function runDishAnalysis(env, body, ctx) {
       servingsDivisor = 4;
     }
 
+    // Skip per-serving divisor when:
+    // 1. nutrition_source is "fatsecret_image" (FatSecret returns per-portion values from detected food)
+    // 2. Other conditions already handled (restaurantCalories, etc.)
+    const skipDivisorForFatSecret = nutrition_source === "fatsecret_image";
+
     if (
       servingsDivisor > 1 &&
       finalNutritionSummary &&
-      typeof finalNutritionSummary === "object"
+      typeof finalNutritionSummary === "object" &&
+      !skipDivisorForFatSecret
     ) {
       finalNutritionSummary = {
         energyKcal:
