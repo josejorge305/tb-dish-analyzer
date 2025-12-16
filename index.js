@@ -17495,67 +17495,74 @@ async function runDishAnalysis(env, body, ctx) {
       }))
     : [];
 
-  // If recipe came from OpenAI and has no explicit servings/yield, assume 4 servings per recipe
+  // Normalize nutrition to per-serving values using recipe yield
   // SKIP this divisor when restaurantCalories is provided (already per-serving)
   const hasRestaurantCaloriesForDivisor = restaurantCalories != null && !Number.isNaN(Number(restaurantCalories));
   try {
-    let openaiServingsDivisor = 1;
+    let servingsDivisor = 1;
     const recipeProvider =
       recipeResult?.out?.provider ??
       recipeResult?.source ??
       recipeResult?.responseSource ??
       null;
     const recipeOut = recipeResult?.out;
-    const hasYield =
-      recipeOut &&
-      typeof recipeOut.yield === "number" &&
-      recipeOut.yield > 0;
-    const hasServings =
-      recipeOut &&
-      typeof recipeOut.servings === "number" &&
-      recipeOut.servings > 0;
+    const recipeRaw = recipeOut?.raw;
 
-    if (recipeProvider === "openai" && !hasYield && !hasServings && !hasRestaurantCaloriesForDivisor) {
-      openaiServingsDivisor = 4;
+    // Get yield from Edamam raw response or recipe out
+    const edamamYield = recipeRaw && typeof recipeRaw.yield === "number" ? recipeRaw.yield : null;
+    const recipeYield = recipeOut && typeof recipeOut.yield === "number" ? recipeOut.yield : null;
+    const recipeServings = recipeOut && typeof recipeOut.servings === "number" ? recipeOut.servings : null;
+
+    // Use the best available serving count
+    const actualYield = edamamYield || recipeYield || recipeServings;
+    const hasYield = actualYield && actualYield > 0;
+
+    if (!hasRestaurantCaloriesForDivisor && hasYield && actualYield > 1) {
+      // Edamam/Spoonacular: use actual yield from recipe
+      servingsDivisor = actualYield;
+    } else if (recipeProvider === "openai" && !hasYield && !hasRestaurantCaloriesForDivisor) {
+      // OpenAI fallback: assume 4 servings when no yield info
+      servingsDivisor = 4;
     }
 
     if (
-      openaiServingsDivisor > 1 &&
+      servingsDivisor > 1 &&
       finalNutritionSummary &&
       typeof finalNutritionSummary === "object"
     ) {
       finalNutritionSummary = {
         energyKcal:
           typeof finalNutritionSummary.energyKcal === "number"
-            ? finalNutritionSummary.energyKcal / openaiServingsDivisor
+            ? finalNutritionSummary.energyKcal / servingsDivisor
             : finalNutritionSummary.energyKcal,
         protein_g:
           typeof finalNutritionSummary.protein_g === "number"
-            ? finalNutritionSummary.protein_g / openaiServingsDivisor
+            ? finalNutritionSummary.protein_g / servingsDivisor
             : finalNutritionSummary.protein_g,
         fat_g:
           typeof finalNutritionSummary.fat_g === "number"
-            ? finalNutritionSummary.fat_g / openaiServingsDivisor
+            ? finalNutritionSummary.fat_g / servingsDivisor
             : finalNutritionSummary.fat_g,
         carbs_g:
           typeof finalNutritionSummary.carbs_g === "number"
-            ? finalNutritionSummary.carbs_g / openaiServingsDivisor
+            ? finalNutritionSummary.carbs_g / servingsDivisor
             : finalNutritionSummary.carbs_g,
         sugar_g:
           typeof finalNutritionSummary.sugar_g === "number"
-            ? finalNutritionSummary.sugar_g / openaiServingsDivisor
+            ? finalNutritionSummary.sugar_g / servingsDivisor
             : finalNutritionSummary.sugar_g,
         fiber_g:
           typeof finalNutritionSummary.fiber_g === "number"
-            ? finalNutritionSummary.fiber_g / openaiServingsDivisor
+            ? finalNutritionSummary.fiber_g / servingsDivisor
             : finalNutritionSummary.fiber_g,
         sodium_mg:
           typeof finalNutritionSummary.sodium_mg === "number"
-            ? finalNutritionSummary.sodium_mg / openaiServingsDivisor
+            ? finalNutritionSummary.sodium_mg / servingsDivisor
             : finalNutritionSummary.sodium_mg
       };
 
-      debug.openai_servings_divisor = openaiServingsDivisor;
+      debug.servings_divisor = servingsDivisor;
+      debug.servings_source = edamamYield ? "edamam_yield" : recipeYield ? "recipe_yield" : recipeServings ? "recipe_servings" : "openai_default";
     }
   } catch {
     // non-fatal; keep existing summary
@@ -17848,6 +17855,26 @@ async function runDishAnalysis(env, body, ctx) {
           sodium_mg: macros.sodium_mg * safeWeight
         };
       });
+    } else if (finalNutritionSummary) {
+      // Fallback: Create single whole-dish component when no plate components
+      // This ensures nutrition_breakdown is never null when we have nutrition data
+      const dishLabel = dishName || "Whole Dish";
+      nutritionBreakdown = [
+        {
+          component_id: "whole_dish",
+          component: dishLabel,
+          role: "main",
+          category: "whole_dish",
+          share_ratio: 1,
+          energyKcal: finalNutritionSummary.energyKcal || 0,
+          protein_g: finalNutritionSummary.protein_g || 0,
+          fat_g: finalNutritionSummary.fat_g || 0,
+          carbs_g: finalNutritionSummary.carbs_g || 0,
+          sugar_g: finalNutritionSummary.sugar_g || 0,
+          fiber_g: finalNutritionSummary.fiber_g || 0,
+          sodium_mg: finalNutritionSummary.sodium_mg || 0
+        }
+      ];
     }
   } catch (err) {
     nutritionBreakdown = null;
