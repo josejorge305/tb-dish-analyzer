@@ -15840,6 +15840,209 @@ function buildLikelyRecipe(recipeResult, visionInsights, nutritionBreakdown) {
   return likely;
 }
 
+/**
+ * Build a full cookbook-style recipe using LLM to generate professional instructions.
+ * Combines: recipe data, vision insights, plate components, cooking method analysis.
+ *
+ * @param {Object} env - Environment bindings
+ * @param {Object} context - All available dish analysis data
+ * @returns {Promise<Object>} Full recipe with cookbook-style instructions
+ */
+async function buildFullRecipe(env, context) {
+  const {
+    dishName,
+    likelyRecipe,
+    visionInsights,
+    plateComponents,
+    nutritionSummary,
+    allergenFlags,
+    fodmapFlags,
+    menuDescription
+  } = context;
+
+  // If no OpenAI key, return enhanced likely_recipe without LLM
+  if (!env?.OPENAI_API_KEY) {
+    return {
+      ...likelyRecipe,
+      full_instructions: null,
+      generation_method: "fallback_no_llm"
+    };
+  }
+
+  // Build context for the LLM
+  const ingredients = likelyRecipe?.ingredients || [];
+  const cookingMethod = likelyRecipe?.cooking_method || "unknown";
+  const cookingConfidence = likelyRecipe?.cooking_method_confidence || 0;
+  const visualIngredients = visionInsights?.visual_ingredients || [];
+  const components = plateComponents || [];
+
+  // Format ingredients for prompt
+  const ingredientList = ingredients.map(ing => {
+    let line = "";
+    if (ing.quantity) line += `${ing.quantity} `;
+    if (ing.unit) line += `${ing.unit} `;
+    line += ing.name || "unknown";
+    if (ing.source === "vision") line += " (visually detected)";
+    if (ing.vision_confirmed) line += " (confirmed by vision)";
+    return line.trim();
+  }).filter(Boolean);
+
+  // Format plate components
+  const componentDescriptions = components.map(c => {
+    return `${c.role || "component"}: ${c.label || c.category || "unknown"} (${Math.round((c.area_ratio || 0) * 100)}% of plate)`;
+  });
+
+  // Allergen notes for recipe warnings
+  const allergenWarnings = (allergenFlags || [])
+    .filter(a => a.present === "yes" || a.present === "maybe")
+    .map(a => a.kind);
+
+  // Build the prompt
+  const systemPrompt = `You are a professional chef and cookbook author. Your task is to write a complete, detailed recipe that reads like it belongs in a high-quality cookbook.
+
+STYLE GUIDELINES:
+- Write in a warm, instructive tone as if guiding a home cook through the recipe
+- Include timing estimates for each step
+- Add chef's tips and technique notes where helpful
+- Mention visual and sensory cues (e.g., "until golden brown", "fragrant", "sizzling")
+- Group steps logically: prep, cooking, assembly, plating
+- Include estimated total time and difficulty level
+- Add serving suggestions and variations if appropriate
+
+OUTPUT FORMAT:
+Return a JSON object with this exact structure:
+{
+  "title": "Recipe title",
+  "description": "2-3 sentence appetizing description of the dish",
+  "difficulty": "Easy" | "Medium" | "Hard",
+  "prep_time_minutes": number,
+  "cook_time_minutes": number,
+  "total_time_minutes": number,
+  "servings": number,
+  "ingredients": [
+    {
+      "amount": "1 cup",
+      "item": "ingredient name",
+      "prep_note": "diced" | null
+    }
+  ],
+  "equipment": ["list of required equipment"],
+  "instructions": [
+    {
+      "step": 1,
+      "phase": "prep" | "cook" | "assemble" | "serve",
+      "title": "Brief step title",
+      "detail": "Full detailed instruction paragraph",
+      "time_minutes": number | null,
+      "tip": "Optional chef's tip" | null
+    }
+  ],
+  "chef_notes": ["Array of helpful notes, substitutions, or variations"],
+  "allergen_warnings": ["List of allergens present"],
+  "storage": "How to store leftovers" | null,
+  "wine_pairing": "Suggested wine or beverage pairing" | null
+}`;
+
+  const userPrompt = `Create a complete cookbook-style recipe for: "${dishName}"
+
+AVAILABLE INFORMATION:
+
+Menu Description: ${menuDescription || "Not provided"}
+
+Detected Cooking Method: ${cookingMethod} (${Math.round(cookingConfidence * 100)}% confidence)
+
+Identified Ingredients (${ingredientList.length} total):
+${ingredientList.map((ing, i) => `${i + 1}. ${ing}`).join("\n")}
+
+Plate Components:
+${componentDescriptions.length > 0 ? componentDescriptions.join("\n") : "Single dish"}
+
+Nutrition Context:
+- Calories: ${nutritionSummary?.energyKcal || "unknown"} kcal
+- Protein: ${nutritionSummary?.protein_g || "unknown"}g
+- Carbs: ${nutritionSummary?.carbs_g || "unknown"}g
+- Fat: ${nutritionSummary?.fat_g || "unknown"}g
+
+Known Allergens: ${allergenWarnings.length > 0 ? allergenWarnings.join(", ") : "None identified"}
+
+FODMAP Level: ${fodmapFlags?.level || "unknown"}
+
+Based on this information, write a complete, professional cookbook-style recipe. Ensure the cooking method matches "${cookingMethod}" and the ingredient quantities make sense for the nutrition profile. If ingredient quantities are missing, estimate reasonable amounts for a typical serving.`;
+
+  try {
+    const base = env.OPENAI_API_BASE || "https://api.openai.com";
+    const model = env.OPENAI_MODEL_RECIPE || "gpt-4o-mini";
+
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.7,
+        max_tokens: 2000,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      console.error("Full recipe LLM error:", response.status);
+      return {
+        ...likelyRecipe,
+        full_instructions: null,
+        generation_method: "fallback_llm_error",
+        error: `LLM returned ${response.status}`
+      };
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+
+    if (!content) {
+      return {
+        ...likelyRecipe,
+        full_instructions: null,
+        generation_method: "fallback_empty_response"
+      };
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      console.error("Full recipe JSON parse error:", e);
+      return {
+        ...likelyRecipe,
+        full_instructions: null,
+        generation_method: "fallback_parse_error"
+      };
+    }
+
+    // Return the full recipe with metadata
+    return {
+      ...likelyRecipe,
+      full_recipe: parsed,
+      generation_method: "llm",
+      model_used: model
+    };
+
+  } catch (e) {
+    console.error("Full recipe generation error:", e?.message || e);
+    return {
+      ...likelyRecipe,
+      full_instructions: null,
+      generation_method: "fallback_exception",
+      error: e?.message || String(e)
+    };
+  }
+}
+
 // Simple Levenshtein-based similarity check
 function levenshteinSimilar(a, b, threshold = 0.7) {
   if (!a || !b) return false;
@@ -16390,6 +16593,9 @@ async function runDishAnalysis(env, body, ctx) {
   ).trim();
   const menuSection = body.menuSection || body.section || null;
   const canonicalCategory = body.canonicalCategory || body.category || null;
+
+  // Full recipe generation flag
+  const wantFullRecipe = body.fullRecipe === true || body.full_recipe === true;
 
   // basic validation
   if (!dishName) {
@@ -18390,6 +18596,29 @@ async function runDishAnalysis(env, body, ctx) {
   const visionInsightsForRecipe = debug.vision_insights || null;
   const likely_recipe = buildLikelyRecipe(recipeResult, visionInsightsForRecipe, nutritionBreakdown);
 
+  // Build Full Recipe if requested (cookbook-style with LLM)
+  let full_recipe = null;
+  if (wantFullRecipe) {
+    const tFullRecipeStart = Date.now();
+    try {
+      full_recipe = await buildFullRecipe(env, {
+        dishName,
+        likelyRecipe: likely_recipe,
+        visionInsights: visionInsightsForRecipe,
+        plateComponents,
+        nutritionSummary: finalNutritionSummary,
+        allergenFlags: allergen_flags,
+        fodmapFlags: fodmap_flags,
+        menuDescription
+      });
+      debug.full_recipe_ms = Date.now() - tFullRecipeStart;
+      debug.full_recipe_method = full_recipe?.generation_method || "unknown";
+    } catch (e) {
+      debug.full_recipe_error = String(e?.message || e);
+      debug.full_recipe_ms = Date.now() - tFullRecipeStart;
+    }
+  }
+
   // Extract recipe image from provider (Spoonacular/Edamam)
   const recipeImage = recipeResult?.recipe?.image || null;
 
@@ -18404,6 +18633,7 @@ async function runDishAnalysis(env, body, ctx) {
     summary,
     recipe: recipeResult,
     likely_recipe,
+    full_recipe,
     normalized,
     organs,
     allergen_flags,
