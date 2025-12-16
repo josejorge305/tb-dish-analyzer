@@ -6521,15 +6521,82 @@ async function spoonacularFetch(env, dish, cuisine = "", lang = "en") {
   }
 }
 
+/**
+ * Score an Edamam recipe result against the requested dish name.
+ * Higher score = better match. Used to pick the best result from multiple hits.
+ */
+function scoreEdamamRecipe(recipe, dishName) {
+  if (!recipe || !dishName) return 0;
+
+  const label = String(recipe.label || "").toLowerCase();
+  const dish = String(dishName).toLowerCase();
+  const dishWords = dish.split(/\s+/).filter(w => w.length > 2);
+
+  let score = 0;
+
+  // 1. Word overlap score: +10 per matching word
+  for (const word of dishWords) {
+    if (label.includes(word)) score += 10;
+  }
+
+  // 2. Exact/close label match bonus: +50 if label contains core dish name
+  const coreNameMatch = dishWords.slice(0, 3).join(" ");
+  if (label.includes(coreNameMatch)) score += 50;
+
+  // 3. Yield sanity check: penalize unreasonable yields
+  // Typical main dishes: 1-8 servings. Cookies/snacks often 12-48.
+  const yield_ = typeof recipe.yield === "number" ? recipe.yield : 4;
+  if (yield_ > 12) score -= 30;  // Likely a batch recipe (cookies, etc.)
+  if (yield_ > 24) score -= 30;  // Very likely wrong category
+
+  // 4. Mismatch penalty: if label contains food types NOT in dish name
+  const foodTypeKeywords = [
+    "cookie", "cookies", "cake", "cupcake", "muffin", "brownie", "bar", "bars",
+    "soup", "stew", "salad", "smoothie", "drink", "cocktail", "ice cream"
+  ];
+  for (const keyword of foodTypeKeywords) {
+    // Penalize if label has this food type but dish name doesn't
+    if (label.includes(keyword) && !dish.includes(keyword)) {
+      score -= 40;
+    }
+  }
+
+  // 5. mealType alignment bonus
+  const mealTypes = Array.isArray(recipe.mealType) ? recipe.mealType : [];
+  const dishLower = dish.toLowerCase();
+  // Breakfast dishes should match breakfast mealType
+  if (/pancake|waffle|omelet|breakfast|eggs?\b|bacon|toast/.test(dishLower)) {
+    if (mealTypes.includes("breakfast")) score += 20;
+  }
+  // Lunch/dinner alignment
+  if (/burger|steak|pasta|curry|rice|chicken|salmon|pork/.test(dishLower)) {
+    if (mealTypes.some(m => m.includes("lunch") || m.includes("dinner"))) score += 15;
+  }
+
+  return score;
+}
+
 async function fetchFromEdamam(env, dish, cuisine = "", lang = "en") {
   await recordMetric(env, "provider:edamam:hit");
   try {
     const res = await callEdamam(env, dish, cuisine, lang);
-    const best = Array.isArray(res?.items) ? res.items[0] : null;
-    if (!best) {
+    const items = Array.isArray(res?.items) ? res.items : [];
+    if (!items.length) {
       const reason = res?.error || res?.note || "no_edamam_hits";
       return { ingredients: [], provider: "edamam", reason, _skip: "edamam" };
     }
+
+    // Score and select the best matching recipe (not just first result)
+    let best = items[0];
+    let bestScore = scoreEdamamRecipe(items[0], dish);
+    for (let i = 1; i < Math.min(items.length, 10); i++) {
+      const score = scoreEdamamRecipe(items[i], dish);
+      if (score > bestScore) {
+        best = items[i];
+        bestScore = score;
+      }
+    }
+
     const normalized = normalizeEdamamRecipe(best);
     return normalizeProviderRecipe(
       {
