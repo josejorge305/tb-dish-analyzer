@@ -4799,8 +4799,10 @@ function normalizeProviderRecipe(
     .filter(Boolean);
 
   const recipeSrc = base.recipe || {};
+  const recipeImage = recipeSrc.image || null;
   const recipe = {
     name: recipeSrc.name || recipeSrc.title || fallbackDish || null,
+    image: recipeImage,
     steps: Array.isArray(recipeSrc.steps)
       ? recipeSrc.steps
       : recipeSrc.instructions
@@ -4809,9 +4811,7 @@ function normalizeProviderRecipe(
     notes:
       Array.isArray(recipeSrc.notes) && recipeSrc.notes.length
         ? recipeSrc.notes
-        : recipeSrc.image
-          ? [recipeSrc.image]
-          : null
+        : null
   };
 
   const extras = { ...base };
@@ -18302,6 +18302,9 @@ async function runDishAnalysis(env, body, ctx) {
   const visionInsightsForRecipe = debug.vision_insights || null;
   const likely_recipe = buildLikelyRecipe(recipeResult, visionInsightsForRecipe, nutritionBreakdown);
 
+  // Extract recipe image from provider (Spoonacular/Edamam)
+  const recipeImage = recipeResult?.recipe?.image || null;
+
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -18309,6 +18312,7 @@ async function runDishAnalysis(env, body, ctx) {
     dishName,
     restaurantName,
     imageUrl: dishImageUrl,
+    recipe_image: recipeImage,
     summary,
     recipe: recipeResult,
     likely_recipe,
