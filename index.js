@@ -4736,8 +4736,11 @@ function normalizeEdamamRecipe(rec) {
 
   const steps = lines.length ? [`Combine: ${lines.join("; ")}`] : [];
 
+  // Extract image - Edamam provides 'image' (string) and 'images' (object with sizes)
+  const image = rec?.image || rec?.images?.REGULAR?.url || rec?.images?.SMALL?.url || rec?.images?.THUMBNAIL?.url || null;
+
   return {
-    recipe: { name: name || null, steps, notes: lines.length ? lines : null },
+    recipe: { name: name || null, image, steps, notes: lines.length ? lines : null },
     ingredients
   };
 }
@@ -11948,6 +11951,91 @@ const _worker_impl = {
       }, null, 2), {
         headers: { "content-type": "application/json" }
       });
+    }
+
+    // ========== DISH IMAGE LOOKUP ==========
+    // GET /api/dish-image?dish=Chicken%20Alfredo - Fetch dish image from providers
+    if (pathname === "/api/dish-image" && request.method === "GET") {
+      const dish = searchParams.get("dish") || searchParams.get("dishName") || "";
+      if (!dish.trim()) {
+        return new Response(JSON.stringify({ ok: false, error: "Missing dish parameter" }), {
+          status: 400,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      try {
+        // Race Spoonacular and Edamam in parallel for speed
+        const imagePromises = [];
+
+        // Spoonacular
+        if (env.SPOONACULAR_API_KEY || env.SPOONACULAR_KEY) {
+          imagePromises.push(
+            (async () => {
+              try {
+                const apiKey = (env.SPOONACULAR_API_KEY || env.SPOONACULAR_KEY || "").trim();
+                const searchUrl = `https://api.spoonacular.com/recipes/complexSearch?query=${encodeURIComponent(dish)}&number=1&apiKey=${encodeURIComponent(apiKey)}`;
+                const res = await fetch(searchUrl, { headers: { accept: "application/json" } });
+                if (!res.ok) return null;
+                const data = await res.json();
+                const image = data?.results?.[0]?.image;
+                return image ? { image, provider: "spoonacular" } : null;
+              } catch { return null; }
+            })()
+          );
+        }
+
+        // Edamam
+        if (env.EDAMAM_APP_ID && env.EDAMAM_APP_KEY) {
+          imagePromises.push(
+            (async () => {
+              try {
+                const appId = (env.EDAMAM_APP_ID || "").trim();
+                const appKey = (env.EDAMAM_APP_KEY || "").trim();
+                const url = `https://api.edamam.com/api/recipes/v2?type=public&q=${encodeURIComponent(dish)}&app_id=${encodeURIComponent(appId)}&app_key=${encodeURIComponent(appKey)}`;
+                const res = await fetch(url, { headers: { accept: "application/json" } });
+                if (!res.ok) return null;
+                const data = await res.json();
+                const recipe = data?.hits?.[0]?.recipe;
+                const image = recipe?.image || recipe?.images?.REGULAR?.url || recipe?.images?.SMALL?.url;
+                return image ? { image, provider: "edamam" } : null;
+              } catch { return null; }
+            })()
+          );
+        }
+
+        if (imagePromises.length === 0) {
+          return new Response(JSON.stringify({ ok: false, error: "No image providers configured" }), {
+            status: 503,
+            headers: { "content-type": "application/json" }
+          });
+        }
+
+        // Race - first successful result wins
+        const results = await Promise.all(imagePromises);
+        const winner = results.find(r => r && r.image);
+
+        if (winner) {
+          return new Response(JSON.stringify({
+            ok: true,
+            dish,
+            image: winner.image,
+            provider: winner.provider
+          }), {
+            headers: { "content-type": "application/json" }
+          });
+        }
+
+        return new Response(JSON.stringify({ ok: false, dish, error: "No image found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ ok: false, error: e.message }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      }
     }
 
     // ========== START ASYNC APIFY JOB ==========
