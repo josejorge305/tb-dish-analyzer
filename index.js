@@ -12038,6 +12038,46 @@ const _worker_impl = {
       }
     }
 
+    // ========== DISH AUTOCOMPLETE / SPELL SUGGEST ==========
+    // GET /api/dish-suggest?q=chiken%20parm&limit=10 - Typo-tolerant dish search
+    if (pathname === "/api/dish-suggest" && request.method === "GET") {
+      const query = (searchParams.get("q") || searchParams.get("query") || "").trim();
+      const limit = Math.min(Number(searchParams.get("limit") || 10), 50);
+      const cuisine = searchParams.get("cuisine") || null;
+
+      if (!query || query.length < 2) {
+        return new Response(JSON.stringify({
+          ok: true,
+          query,
+          suggestions: [],
+          message: "Query too short (min 2 characters)"
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const suggestions = await searchDishSuggestions(env, query, { limit, cuisine });
+        return new Response(JSON.stringify({
+          ok: true,
+          query,
+          suggestions,
+          count: suggestions.length
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("dish-suggest error:", e);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: e.message || "Search failed"
+        }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
     // ========== START ASYNC APIFY JOB ==========
     // POST /api/apify-start - Start an async Apify scrape with webhook callback
     if (pathname === "/api/apify-start" && request.method === "POST") {
@@ -16070,6 +16110,179 @@ function levenshteinSimilar(a, b, threshold = 0.7) {
 
   const similarity = (longer.length - costs[longer.length]) / longer.length;
   return similarity >= threshold;
+}
+
+/**
+ * Search for dish suggestions using FTS5 + Levenshtein ranking
+ * @param {Object} env - Environment with D1_DB binding
+ * @param {string} query - User's search query (possibly misspelled)
+ * @param {Object} options - { limit, cuisine }
+ * @returns {Promise<Array>} Array of dish suggestions with scores
+ */
+async function searchDishSuggestions(env, query, options = {}) {
+  const { limit = 10, cuisine = null } = options;
+
+  if (!env?.D1_DB) {
+    console.warn("searchDishSuggestions: D1_DB not available");
+    return [];
+  }
+
+  const normalizedQuery = normalizeText(query);
+  if (!normalizedQuery || normalizedQuery.length < 2) {
+    return [];
+  }
+
+  try {
+    // Strategy 1: FTS5 prefix search (fast, handles partial matches)
+    // Strategy 2: LIKE search as fallback
+    // Strategy 3: Fuzzy search with Levenshtein for typo tolerance
+
+    let ftsResults = [];
+
+    // FTS5 search with prefix matching
+    const ftsQuery = normalizedQuery.split(/\s+/).map(word => `${word}*`).join(' ');
+
+    try {
+      const ftsSql = `
+        SELECT d.id, d.name, d.aliases, d.cuisine, d.category, d.popularity_score
+        FROM dishes_fts fts
+        JOIN dishes d ON d.id = fts.rowid
+        WHERE dishes_fts MATCH ?
+        ${cuisine ? 'AND d.cuisine = ?' : ''}
+        ORDER BY d.popularity_score DESC
+        LIMIT ?
+      `;
+      const ftsParams = cuisine
+        ? [ftsQuery, cuisine, limit * 3]
+        : [ftsQuery, limit * 3];
+
+      const ftsStmt = await env.D1_DB.prepare(ftsSql).bind(...ftsParams);
+      const ftsData = await ftsStmt.all();
+      ftsResults = ftsData?.results || [];
+    } catch (ftsErr) {
+      // FTS table might not exist yet, fall back to LIKE
+      console.warn("FTS search failed, using LIKE fallback:", ftsErr.message);
+    }
+
+    // LIKE fallback search if FTS returned nothing
+    if (ftsResults.length === 0) {
+      const likeSql = `
+        SELECT id, name, aliases, cuisine, category, popularity_score
+        FROM dishes
+        WHERE name_normalized LIKE ? OR aliases LIKE ?
+        ${cuisine ? 'AND cuisine = ?' : ''}
+        ORDER BY popularity_score DESC
+        LIMIT ?
+      `;
+      const likePattern = `%${normalizedQuery}%`;
+      const likeParams = cuisine
+        ? [likePattern, likePattern, cuisine, limit * 3]
+        : [likePattern, likePattern, limit * 3];
+
+      const likeStmt = await env.D1_DB.prepare(likeSql).bind(...likeParams);
+      const likeData = await likeStmt.all();
+      ftsResults = likeData?.results || [];
+    }
+
+    // Strategy 3: If still no results, do fuzzy search across ALL dishes
+    // This handles typos like "chiken" -> "chicken"
+    if (ftsResults.length === 0) {
+      const allSql = `
+        SELECT id, name, aliases, cuisine, category, popularity_score
+        FROM dishes
+        ${cuisine ? 'WHERE cuisine = ?' : ''}
+        ORDER BY popularity_score DESC
+        LIMIT 200
+      `;
+      const allParams = cuisine ? [cuisine] : [];
+      const allStmt = await env.D1_DB.prepare(allSql).bind(...allParams);
+      const allData = await allStmt.all();
+      ftsResults = allData?.results || [];
+    }
+
+    // Score results using Levenshtein distance for better ranking
+    const results = [];
+    const queryWords = normalizedQuery.split(/\s+/);
+
+    for (const row of ftsResults) {
+      const nameNorm = normalizeText(row.name);
+      const nameWords = nameNorm.split(/\s+/);
+
+      // Calculate word-level similarity (handles "chiken parm" matching "chicken parmesan")
+      let wordMatchScore = 0;
+      for (const qWord of queryWords) {
+        let bestWordMatch = 0;
+        for (const nWord of nameWords) {
+          const dist = levenshtein(qWord, nWord);
+          const maxLen = Math.max(qWord.length, nWord.length);
+          const sim = maxLen > 0 ? 1 - (dist / maxLen) : 0;
+          bestWordMatch = Math.max(bestWordMatch, sim);
+        }
+        wordMatchScore += bestWordMatch;
+      }
+      wordMatchScore = queryWords.length > 0 ? wordMatchScore / queryWords.length : 0;
+
+      // Also check full string similarity
+      const fullDist = levenshtein(normalizedQuery, nameNorm);
+      const fullMaxLen = Math.max(normalizedQuery.length, nameNorm.length);
+      const fullSimilarity = fullMaxLen > 0 ? 1 - (fullDist / fullMaxLen) : 0;
+
+      // Check aliases for better matching
+      let aliasSimilarity = 0;
+      if (row.aliases) {
+        const aliasList = row.aliases.split(',').map(a => normalizeText(a.trim()));
+        for (const alias of aliasList) {
+          // Full alias match
+          const aliasDist = levenshtein(normalizedQuery, alias);
+          const aliasMaxLen = Math.max(normalizedQuery.length, alias.length);
+          const aliasScore = aliasMaxLen > 0 ? 1 - (aliasDist / aliasMaxLen) : 0;
+          aliasSimilarity = Math.max(aliasSimilarity, aliasScore);
+
+          // Word-level alias match
+          const aliasWords = alias.split(/\s+/);
+          let aliasWordScore = 0;
+          for (const qWord of queryWords) {
+            let bestAliasWordMatch = 0;
+            for (const aWord of aliasWords) {
+              const dist = levenshtein(qWord, aWord);
+              const maxLen = Math.max(qWord.length, aWord.length);
+              const sim = maxLen > 0 ? 1 - (dist / maxLen) : 0;
+              bestAliasWordMatch = Math.max(bestAliasWordMatch, sim);
+            }
+            aliasWordScore += bestAliasWordMatch;
+          }
+          aliasWordScore = queryWords.length > 0 ? aliasWordScore / queryWords.length : 0;
+          aliasSimilarity = Math.max(aliasSimilarity, aliasWordScore);
+        }
+      }
+
+      // Best similarity from all methods
+      const bestSimilarity = Math.max(fullSimilarity, wordMatchScore, aliasSimilarity);
+
+      // Only include results with decent similarity (> 0.5)
+      if (bestSimilarity < 0.5) continue;
+
+      // Combine similarity with popularity for final score
+      const score = (bestSimilarity * 0.7) + ((row.popularity_score || 0) / 100 * 0.3);
+
+      results.push({
+        id: row.id,
+        name: row.name,
+        cuisine: row.cuisine,
+        category: row.category,
+        similarity: Math.round(bestSimilarity * 100) / 100,
+        score: Math.round(score * 100) / 100
+      });
+    }
+
+    // Sort by score descending and limit
+    results.sort((a, b) => b.score - a.score);
+
+    return results.slice(0, limit);
+  } catch (e) {
+    console.error("searchDishSuggestions error:", e);
+    return [];
+  }
 }
 
 async function getOrganEffectsForIngredients(env, ingredients = []) {
