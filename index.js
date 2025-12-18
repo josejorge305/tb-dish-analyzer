@@ -3351,6 +3351,935 @@ async function loadUserPrefs(env, user_id) {
   }
 }
 
+// ============================================================================
+// USER TRACKING & PERSONALIZATION ENGINE
+// ============================================================================
+
+// Activity level multipliers for TDEE calculation
+const ACTIVITY_MULTIPLIERS = {
+  sedentary: 1.2,      // Little or no exercise
+  light: 1.375,        // Light exercise 1-3 days/week
+  moderate: 1.55,      // Moderate exercise 3-5 days/week
+  active: 1.725,       // Hard exercise 6-7 days/week
+  very_active: 1.9     // Very hard exercise, physical job
+};
+
+// Goal adjustments for calorie and macro targets
+const GOAL_ADJUSTMENTS = {
+  lose_weight: {
+    calorie_adjustment: -500,
+    protein_multiplier: 1.1,
+    fiber_target_override: null
+  },
+  maintain: {
+    calorie_adjustment: 0,
+    protein_multiplier: 1.0,
+    fiber_target_override: null
+  },
+  build_muscle: {
+    calorie_adjustment: 300,
+    protein_multiplier: 1.3,
+    fiber_target_override: null
+  },
+  gut_health: {
+    calorie_adjustment: 0,
+    protein_multiplier: 1.0,
+    fiber_target_override: 35
+  },
+  reduce_inflammation: {
+    calorie_adjustment: 0,
+    protein_multiplier: 1.0,
+    fiber_target_override: null
+  }
+};
+
+// Condition-based threshold overrides
+const CONDITION_OVERRIDES = {
+  hypertension: { sodium_limit_mg: 1500 },
+  prediabetes: { sugar_limit_g: 25, glycemic_emphasis: true },
+  gout: { purine_flag: true },
+  fodmap: { fodmap_limit_g: 12 }
+};
+
+// Age-based organ sensitivity modifiers
+const AGE_SENSITIVITY_MODIFIERS = {
+  heart: { under_30: 1.0, '30_50': 1.1, '50_65': 1.25, over_65: 1.4 },
+  kidneys: { under_30: 1.0, '30_50': 1.05, '50_65': 1.2, over_65: 1.35 },
+  liver: { under_30: 1.0, '30_50': 1.0, '50_65': 1.1, over_65: 1.2 },
+  pancreas: { under_30: 1.0, '30_50': 1.1, '50_65': 1.25, over_65: 1.35 }
+};
+
+// Calculate age from date of birth
+function calculateAge(dateOfBirth) {
+  if (!dateOfBirth) return null;
+  const dob = new Date(dateOfBirth);
+  if (isNaN(dob.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age--;
+  }
+  return age;
+}
+
+// Get age bracket for sensitivity modifiers
+function getAgeBracket(age) {
+  if (age == null) return 'under_30';
+  if (age < 30) return 'under_30';
+  if (age < 50) return '30_50';
+  if (age < 65) return '50_65';
+  return 'over_65';
+}
+
+// Calculate BMR using Mifflin-St Jeor equation
+function calculateBMR(profile) {
+  const { biological_sex, date_of_birth, height_cm, current_weight_kg } = profile;
+  if (!biological_sex || !height_cm || !current_weight_kg) return null;
+
+  const age = calculateAge(date_of_birth);
+  if (age == null) return null;
+
+  // Mifflin-St Jeor Equation
+  if (biological_sex === 'male') {
+    return Math.round((10 * current_weight_kg) + (6.25 * height_cm) - (5 * age) + 5);
+  } else {
+    return Math.round((10 * current_weight_kg) + (6.25 * height_cm) - (5 * age) - 161);
+  }
+}
+
+// Calculate TDEE from BMR and activity level
+function calculateTDEE(bmr, activityLevel) {
+  if (!bmr) return null;
+  const multiplier = ACTIVITY_MULTIPLIERS[activityLevel] || ACTIVITY_MULTIPLIERS.moderate;
+  return Math.round(bmr * multiplier);
+}
+
+// Calculate all macro targets based on profile
+function calculateMacroTargets(profile, tdee) {
+  if (!tdee || !profile.current_weight_kg) return null;
+
+  const weight_kg = profile.current_weight_kg;
+  const goal = profile.primary_goal || 'maintain';
+  const goalConfig = GOAL_ADJUSTMENTS[goal] || GOAL_ADJUSTMENTS.maintain;
+  const adjustedCalories = tdee + (goalConfig.calorie_adjustment || 0);
+
+  // Protein: base 1.0g per kg, adjusted by goal
+  const proteinPerKg = 1.0 * (goalConfig.protein_multiplier || 1.0);
+  const protein_g = Math.round(weight_kg * proteinPerKg);
+
+  // Fiber: 14g per 1000 kcal (Institute of Medicine) or override
+  const fiber_g = goalConfig.fiber_target_override || Math.round((adjustedCalories / 1000) * 14);
+
+  // Fat: 30% of calories
+  const fat_calories = adjustedCalories * 0.30;
+  const fat_g = Math.round(fat_calories / 9);
+
+  // Carbs: remainder after protein and fat
+  const protein_calories = protein_g * 4;
+  const carb_calories = adjustedCalories - protein_calories - fat_calories;
+  const carbs_g = Math.round(carb_calories / 4);
+
+  return {
+    calories_target: adjustedCalories,
+    calories_min: Math.max(1200, adjustedCalories - 300),
+    calories_max: adjustedCalories + 300,
+    protein_target_g: protein_g,
+    protein_min_g: Math.round(weight_kg * 0.8),
+    carbs_target_g: carbs_g,
+    fat_target_g: fat_g,
+    fiber_target_g: fiber_g
+  };
+}
+
+// Calculate limit thresholds based on conditions
+function calculateLimits(conditions, baseCalories) {
+  // Default limits
+  let limits = {
+    sugar_limit_g: Math.round((baseCalories || 2000) * 0.10 / 4), // 10% of calories
+    sodium_limit_mg: 2300,
+    saturated_fat_limit_g: Math.round((baseCalories || 2000) * 0.10 / 9),
+    fodmap_limit_g: null,
+    purine_flag: 0,
+    glycemic_emphasis: 0
+  };
+
+  // Apply condition overrides (most restrictive wins)
+  const conditionCodes = Array.isArray(conditions) ? conditions : [];
+  for (const code of conditionCodes) {
+    const override = CONDITION_OVERRIDES[code];
+    if (override) {
+      if (override.sodium_limit_mg && override.sodium_limit_mg < limits.sodium_limit_mg) {
+        limits.sodium_limit_mg = override.sodium_limit_mg;
+      }
+      if (override.sugar_limit_g && override.sugar_limit_g < limits.sugar_limit_g) {
+        limits.sugar_limit_g = override.sugar_limit_g;
+      }
+      if (override.fodmap_limit_g) {
+        limits.fodmap_limit_g = override.fodmap_limit_g;
+      }
+      if (override.purine_flag) {
+        limits.purine_flag = 1;
+      }
+      if (override.glycemic_emphasis) {
+        limits.glycemic_emphasis = 1;
+      }
+    }
+  }
+
+  return limits;
+}
+
+// Adjust organ score based on age
+function adjustOrganScoreForAge(baseScore, organ, age) {
+  const bracket = getAgeBracket(age);
+  const modifiers = AGE_SENSITIVITY_MODIFIERS[organ];
+  if (!modifiers) return baseScore;
+
+  const modifier = modifiers[bracket] || 1.0;
+  // Amplify negative impacts for sensitive organs
+  if (baseScore < 0) {
+    return Math.round(baseScore * modifier);
+  }
+  return baseScore;
+}
+
+// Infer meal type from hour of day
+function inferMealType(hour) {
+  if (hour == null) hour = new Date().getHours();
+  if (hour < 10) return 'breakfast';
+  if (hour < 14) return 'lunch';
+  if (hour < 17) return 'snack';
+  return 'dinner';
+}
+
+// Get today's date as ISO string (YYYY-MM-DD)
+function getTodayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Population defaults when no profile exists
+function getPopulationDefaults() {
+  return {
+    calories_target: 2000,
+    calories_min: 1500,
+    calories_max: 2500,
+    protein_target_g: 50,
+    protein_min_g: 40,
+    carbs_target_g: 250,
+    fat_target_g: 65,
+    fiber_target_g: 28,
+    sugar_limit_g: 50,
+    sodium_limit_mg: 2300,
+    saturated_fat_limit_g: 22,
+    fodmap_limit_g: null,
+    purine_flag: 0,
+    glycemic_emphasis: 0
+  };
+}
+
+// ---- User Profile D1 Functions ----
+
+async function getUserProfile(env, userId) {
+  if (!env?.D1_DB || !userId) return null;
+  try {
+    const row = await env.D1_DB.prepare(
+      'SELECT * FROM user_profiles WHERE user_id = ?'
+    ).bind(userId).first();
+    return row || null;
+  } catch (e) {
+    console.error('getUserProfile error:', e);
+    return null;
+  }
+}
+
+async function upsertUserProfile(env, userId, profileData) {
+  if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
+
+  const now = Math.floor(Date.now() / 1000);
+  const existing = await getUserProfile(env, userId);
+
+  try {
+    if (existing) {
+      // Update existing profile
+      const fields = [];
+      const values = [];
+
+      const allowedFields = [
+        'biological_sex', 'date_of_birth', 'height_cm', 'current_weight_kg',
+        'activity_level', 'unit_system', 'primary_goal', 'bmr_kcal', 'tdee_kcal'
+      ];
+
+      for (const field of allowedFields) {
+        if (profileData[field] !== undefined) {
+          fields.push(`${field} = ?`);
+          values.push(profileData[field]);
+        }
+      }
+
+      if (fields.length === 0) return { ok: true, message: 'no_changes' };
+
+      fields.push('updated_at = ?');
+      values.push(now);
+
+      // Mark profile as completed if key fields are present
+      if (profileData.biological_sex && profileData.height_cm && profileData.current_weight_kg) {
+        fields.push('profile_completed_at = ?');
+        values.push(existing.profile_completed_at || now);
+      }
+
+      values.push(userId);
+
+      await env.D1_DB.prepare(
+        `UPDATE user_profiles SET ${fields.join(', ')} WHERE user_id = ?`
+      ).bind(...values).run();
+
+    } else {
+      // Insert new profile
+      await env.D1_DB.prepare(`
+        INSERT INTO user_profiles (
+          user_id, biological_sex, date_of_birth, height_cm, current_weight_kg,
+          activity_level, unit_system, primary_goal, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        userId,
+        profileData.biological_sex || null,
+        profileData.date_of_birth || null,
+        profileData.height_cm || null,
+        profileData.current_weight_kg || null,
+        profileData.activity_level || 'moderate',
+        profileData.unit_system || 'imperial',
+        profileData.primary_goal || 'maintain',
+        now,
+        now
+      ).run();
+    }
+
+    return { ok: true };
+  } catch (e) {
+    console.error('upsertUserProfile error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function getUserAllergens(env, userId) {
+  if (!env?.D1_DB || !userId) return [];
+  try {
+    const { results } = await env.D1_DB.prepare(
+      'SELECT allergen_code, severity FROM user_allergens WHERE user_id = ?'
+    ).bind(userId).all();
+    return results || [];
+  } catch (e) {
+    console.error('getUserAllergens error:', e);
+    return [];
+  }
+}
+
+async function setUserAllergens(env, userId, allergens) {
+  if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
+
+  try {
+    // Delete existing allergens
+    await env.D1_DB.prepare(
+      'DELETE FROM user_allergens WHERE user_id = ?'
+    ).bind(userId).run();
+
+    // Insert new allergens
+    const now = Math.floor(Date.now() / 1000);
+    for (const item of (allergens || [])) {
+      const code = typeof item === 'string' ? item : item.allergen_code;
+      const severity = (typeof item === 'object' && item.severity) ? item.severity : 'avoid';
+
+      await env.D1_DB.prepare(`
+        INSERT INTO user_allergens (user_id, allergen_code, severity, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(userId, code, severity, now).run();
+    }
+
+    return { ok: true };
+  } catch (e) {
+    console.error('setUserAllergens error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function getUserOrganPriorities(env, userId) {
+  if (!env?.D1_DB || !userId) return [];
+  try {
+    const { results } = await env.D1_DB.prepare(
+      'SELECT organ_code, priority_rank, is_starred FROM user_organ_priorities WHERE user_id = ? ORDER BY priority_rank ASC'
+    ).bind(userId).all();
+    return results || [];
+  } catch (e) {
+    console.error('getUserOrganPriorities error:', e);
+    return [];
+  }
+}
+
+async function setUserOrganPriorities(env, userId, organs) {
+  if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
+
+  try {
+    // Delete existing priorities
+    await env.D1_DB.prepare(
+      'DELETE FROM user_organ_priorities WHERE user_id = ?'
+    ).bind(userId).run();
+
+    // Insert new priorities
+    const now = Math.floor(Date.now() / 1000);
+    for (const item of (organs || [])) {
+      const code = typeof item === 'string' ? item : item.organ_code;
+      const rank = (typeof item === 'object' && item.priority_rank) ? item.priority_rank : null;
+      const starred = (typeof item === 'object' && item.is_starred) ? 1 : 0;
+
+      await env.D1_DB.prepare(`
+        INSERT INTO user_organ_priorities (user_id, organ_code, priority_rank, is_starred, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(userId, code, rank, starred, now).run();
+    }
+
+    return { ok: true };
+  } catch (e) {
+    console.error('setUserOrganPriorities error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function addWeightEntry(env, userId, weightKg, source = 'manual') {
+  if (!env?.D1_DB || !userId || !weightKg) return { ok: false, error: 'missing_params' };
+
+  try {
+    const now = Math.floor(Date.now() / 1000);
+
+    // Insert weight history entry
+    await env.D1_DB.prepare(`
+      INSERT INTO weight_history (user_id, weight_kg, recorded_at, source)
+      VALUES (?, ?, ?, ?)
+    `).bind(userId, weightKg, now, source).run();
+
+    // Update current weight in profile
+    await env.D1_DB.prepare(`
+      UPDATE user_profiles SET current_weight_kg = ?, updated_at = ? WHERE user_id = ?
+    `).bind(weightKg, now, userId).run();
+
+    return { ok: true };
+  } catch (e) {
+    console.error('addWeightEntry error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function getWeightHistory(env, userId, limit = 30) {
+  if (!env?.D1_DB || !userId) return [];
+  try {
+    const { results } = await env.D1_DB.prepare(
+      'SELECT weight_kg, recorded_at, source FROM weight_history WHERE user_id = ? ORDER BY recorded_at DESC LIMIT ?'
+    ).bind(userId, limit).all();
+    return results || [];
+  } catch (e) {
+    console.error('getWeightHistory error:', e);
+    return [];
+  }
+}
+
+// ---- User Daily Targets ----
+
+async function calculateAndStoreTargets(env, userId) {
+  if (!env?.D1_DB || !userId) return null;
+
+  const profile = await getUserProfile(env, userId);
+  if (!profile) return getPopulationDefaults();
+
+  const allergens = await getUserAllergens(env, userId);
+  const conditionCodes = allergens
+    .filter(a => ['hypertension', 'prediabetes', 'gout', 'fodmap'].includes(a.allergen_code))
+    .map(a => a.allergen_code);
+
+  const bmr = calculateBMR(profile);
+  const tdee = calculateTDEE(bmr, profile.activity_level);
+
+  if (bmr && tdee) {
+    // Update BMR/TDEE in profile
+    await env.D1_DB.prepare(
+      'UPDATE user_profiles SET bmr_kcal = ?, tdee_kcal = ?, updated_at = ? WHERE user_id = ?'
+    ).bind(bmr, tdee, Math.floor(Date.now() / 1000), userId).run();
+  }
+
+  const macros = calculateMacroTargets(profile, tdee) || getPopulationDefaults();
+  const limits = calculateLimits(conditionCodes, macros.calories_target);
+
+  const targets = {
+    ...macros,
+    ...limits,
+    calculation_basis: JSON.stringify({
+      bmr,
+      tdee,
+      weight_kg: profile.current_weight_kg,
+      activity_level: profile.activity_level,
+      goal: profile.primary_goal,
+      conditions: conditionCodes
+    })
+  };
+
+  // Upsert targets
+  try {
+    const existing = await env.D1_DB.prepare(
+      'SELECT user_id FROM user_daily_targets WHERE user_id = ?'
+    ).bind(userId).first();
+
+    const now = Math.floor(Date.now() / 1000);
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE user_daily_targets SET
+          calories_target = ?, calories_min = ?, calories_max = ?,
+          protein_target_g = ?, protein_min_g = ?, carbs_target_g = ?,
+          fat_target_g = ?, fiber_target_g = ?, sugar_limit_g = ?,
+          sodium_limit_mg = ?, saturated_fat_limit_g = ?, fodmap_limit_g = ?,
+          purine_flag = ?, glycemic_emphasis = ?, calculation_basis = ?, calculated_at = ?
+        WHERE user_id = ?
+      `).bind(
+        targets.calories_target, targets.calories_min, targets.calories_max,
+        targets.protein_target_g, targets.protein_min_g, targets.carbs_target_g,
+        targets.fat_target_g, targets.fiber_target_g, targets.sugar_limit_g,
+        targets.sodium_limit_mg, targets.saturated_fat_limit_g, targets.fodmap_limit_g,
+        targets.purine_flag, targets.glycemic_emphasis, targets.calculation_basis, now,
+        userId
+      ).run();
+    } else {
+      await env.D1_DB.prepare(`
+        INSERT INTO user_daily_targets (
+          user_id, calories_target, calories_min, calories_max,
+          protein_target_g, protein_min_g, carbs_target_g, fat_target_g,
+          fiber_target_g, sugar_limit_g, sodium_limit_mg, saturated_fat_limit_g,
+          fodmap_limit_g, purine_flag, glycemic_emphasis, calculation_basis, calculated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        userId,
+        targets.calories_target, targets.calories_min, targets.calories_max,
+        targets.protein_target_g, targets.protein_min_g, targets.carbs_target_g,
+        targets.fat_target_g, targets.fiber_target_g, targets.sugar_limit_g,
+        targets.sodium_limit_mg, targets.saturated_fat_limit_g, targets.fodmap_limit_g,
+        targets.purine_flag, targets.glycemic_emphasis, targets.calculation_basis, now
+      ).run();
+    }
+  } catch (e) {
+    console.error('calculateAndStoreTargets error:', e);
+  }
+
+  return targets;
+}
+
+async function getUserTargets(env, userId) {
+  if (!env?.D1_DB || !userId) return getPopulationDefaults();
+
+  try {
+    const row = await env.D1_DB.prepare(
+      'SELECT * FROM user_daily_targets WHERE user_id = ?'
+    ).bind(userId).first();
+
+    if (row) return row;
+
+    // Calculate and store if not exists
+    return await calculateAndStoreTargets(env, userId);
+  } catch (e) {
+    console.error('getUserTargets error:', e);
+    return getPopulationDefaults();
+  }
+}
+
+// ---- Meal Logging ----
+
+async function logMeal(env, userId, mealData) {
+  if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
+
+  const now = Math.floor(Date.now() / 1000);
+  const mealDate = mealData.meal_date || getTodayISO();
+  const hour = new Date().getHours();
+  const mealType = mealData.meal_type || inferMealType(hour);
+
+  try {
+    // Check for duplicate logging within 2 minutes
+    const recentMeal = await env.D1_DB.prepare(`
+      SELECT id FROM logged_meals
+      WHERE user_id = ? AND dish_name = ? AND logged_at > ?
+    `).bind(userId, mealData.dish_name, now - 120).first();
+
+    if (recentMeal) {
+      return { ok: false, error: 'duplicate_log', message: 'Already logged recently' };
+    }
+
+    // Insert the meal
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO logged_meals (
+        user_id, dish_id, dish_name, restaurant_name, logged_at, meal_date,
+        meal_type, portion_factor, calories, protein_g, carbs_g, fat_g,
+        fiber_g, sugar_g, sodium_mg, organ_impacts, risk_flags,
+        analysis_confidence, analysis_version, full_analysis
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      userId,
+      mealData.dish_id || null,
+      mealData.dish_name,
+      mealData.restaurant_name || null,
+      now,
+      mealDate,
+      mealType,
+      mealData.portion_factor || 1.0,
+      mealData.calories || null,
+      mealData.protein_g || null,
+      mealData.carbs_g || null,
+      mealData.fat_g || null,
+      mealData.fiber_g || null,
+      mealData.sugar_g || null,
+      mealData.sodium_mg || null,
+      mealData.organ_impacts ? JSON.stringify(mealData.organ_impacts) : null,
+      mealData.risk_flags ? JSON.stringify(mealData.risk_flags) : null,
+      mealData.analysis_confidence || null,
+      mealData.analysis_version || PIPELINE_VERSION,
+      mealData.full_analysis ? JSON.stringify(mealData.full_analysis) : null
+    ).run();
+
+    // Update daily summary
+    await updateDailySummary(env, userId, mealDate);
+
+    // Update saved dish stats if this dish is saved
+    if (mealData.dish_id) {
+      await env.D1_DB.prepare(`
+        UPDATE saved_dishes
+        SET last_logged_at = ?, times_logged = times_logged + 1
+        WHERE user_id = ? AND dish_id = ?
+      `).bind(now, userId, mealData.dish_id).run();
+    }
+
+    return { ok: true, meal_id: result.meta?.last_row_id };
+  } catch (e) {
+    console.error('logMeal error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function getMealsForDate(env, userId, date) {
+  if (!env?.D1_DB || !userId) return [];
+  const targetDate = date || getTodayISO();
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT * FROM logged_meals
+      WHERE user_id = ? AND meal_date = ?
+      ORDER BY logged_at ASC
+    `).bind(userId, targetDate).all();
+
+    return (results || []).map(row => ({
+      ...row,
+      organ_impacts: row.organ_impacts ? JSON.parse(row.organ_impacts) : null,
+      risk_flags: row.risk_flags ? JSON.parse(row.risk_flags) : []
+    }));
+  } catch (e) {
+    console.error('getMealsForDate error:', e);
+    return [];
+  }
+}
+
+async function deleteMeal(env, userId, mealId) {
+  if (!env?.D1_DB || !userId || !mealId) return { ok: false, error: 'missing_params' };
+
+  try {
+    // Get meal date before deletion for summary update
+    const meal = await env.D1_DB.prepare(
+      'SELECT meal_date FROM logged_meals WHERE id = ? AND user_id = ?'
+    ).bind(mealId, userId).first();
+
+    if (!meal) return { ok: false, error: 'meal_not_found' };
+
+    await env.D1_DB.prepare(
+      'DELETE FROM logged_meals WHERE id = ? AND user_id = ?'
+    ).bind(mealId, userId).run();
+
+    // Update daily summary
+    await updateDailySummary(env, userId, meal.meal_date);
+
+    return { ok: true };
+  } catch (e) {
+    console.error('deleteMeal error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+// ---- Daily Summary ----
+
+async function updateDailySummary(env, userId, date) {
+  if (!env?.D1_DB || !userId) return;
+
+  const targetDate = date || getTodayISO();
+
+  try {
+    // Aggregate meals for the day
+    const meals = await getMealsForDate(env, userId, targetDate);
+
+    const totals = {
+      total_calories: 0,
+      total_protein_g: 0,
+      total_carbs_g: 0,
+      total_fat_g: 0,
+      total_fiber_g: 0,
+      total_sugar_g: 0,
+      total_sodium_mg: 0,
+      meals_logged: meals.length
+    };
+
+    const organImpactsNet = {};
+    const allFlags = new Set();
+
+    for (const meal of meals) {
+      totals.total_calories += meal.calories || 0;
+      totals.total_protein_g += meal.protein_g || 0;
+      totals.total_carbs_g += meal.carbs_g || 0;
+      totals.total_fat_g += meal.fat_g || 0;
+      totals.total_fiber_g += meal.fiber_g || 0;
+      totals.total_sugar_g += meal.sugar_g || 0;
+      totals.total_sodium_mg += meal.sodium_mg || 0;
+
+      // Aggregate organ impacts
+      if (meal.organ_impacts) {
+        for (const [organ, score] of Object.entries(meal.organ_impacts)) {
+          organImpactsNet[organ] = (organImpactsNet[organ] || 0) + score;
+        }
+      }
+
+      // Collect flags
+      if (Array.isArray(meal.risk_flags)) {
+        meal.risk_flags.forEach(f => allFlags.add(f));
+      }
+    }
+
+    // Generate insight
+    const targets = await getUserTargets(env, userId);
+    const insight = generateDailyInsight(totals, targets);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Check for exceeded limits and add flags
+    if (totals.total_sugar_g > (targets.sugar_limit_g || 50)) {
+      allFlags.add('exceeded_sugar');
+    }
+    if (totals.total_sodium_mg > (targets.sodium_limit_mg || 2300)) {
+      allFlags.add('exceeded_sodium');
+    }
+
+    // Upsert summary
+    const existing = await env.D1_DB.prepare(
+      'SELECT user_id FROM daily_summaries WHERE user_id = ? AND summary_date = ?'
+    ).bind(userId, targetDate).first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE daily_summaries SET
+          total_calories = ?, total_protein_g = ?, total_carbs_g = ?, total_fat_g = ?,
+          total_fiber_g = ?, total_sugar_g = ?, total_sodium_mg = ?, meals_logged = ?,
+          organ_impacts_net = ?, flags_triggered = ?, daily_insight = ?, last_updated_at = ?
+        WHERE user_id = ? AND summary_date = ?
+      `).bind(
+        totals.total_calories, totals.total_protein_g, totals.total_carbs_g, totals.total_fat_g,
+        totals.total_fiber_g, totals.total_sugar_g, totals.total_sodium_mg, totals.meals_logged,
+        JSON.stringify(organImpactsNet), JSON.stringify([...allFlags]), insight, now,
+        userId, targetDate
+      ).run();
+    } else {
+      await env.D1_DB.prepare(`
+        INSERT INTO daily_summaries (
+          user_id, summary_date, total_calories, total_protein_g, total_carbs_g,
+          total_fat_g, total_fiber_g, total_sugar_g, total_sodium_mg, meals_logged,
+          organ_impacts_net, flags_triggered, daily_insight, last_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        userId, targetDate,
+        totals.total_calories, totals.total_protein_g, totals.total_carbs_g,
+        totals.total_fat_g, totals.total_fiber_g, totals.total_sugar_g, totals.total_sodium_mg,
+        totals.meals_logged, JSON.stringify(organImpactsNet), JSON.stringify([...allFlags]),
+        insight, now
+      ).run();
+    }
+  } catch (e) {
+    console.error('updateDailySummary error:', e);
+  }
+}
+
+function generateDailyInsight(totals, targets) {
+  const parts = [];
+
+  // Check fiber
+  if (totals.total_fiber_g >= (targets.fiber_target_g || 28)) {
+    parts.push(`Fiber intake on track (${Math.round(totals.total_fiber_g)}g).`);
+  } else if (totals.total_fiber_g < (targets.fiber_target_g || 28) * 0.5) {
+    parts.push(`Fiber intake low (${Math.round(totals.total_fiber_g)}g) — consider adding vegetables or whole grains.`);
+  }
+
+  // Check sugar
+  const sugarLimit = targets.sugar_limit_g || 50;
+  if (totals.total_sugar_g > sugarLimit) {
+    const excess = Math.round(totals.total_sugar_g - sugarLimit);
+    parts.push(`Sugar exceeded limit by ${excess}g — consider protein-focused option for next meal.`);
+  }
+
+  // Check sodium
+  const sodiumLimit = targets.sodium_limit_mg || 2300;
+  if (totals.total_sodium_mg > sodiumLimit) {
+    parts.push(`Sodium intake elevated — consider lower-sodium options.`);
+  }
+
+  // Check protein
+  if (totals.total_protein_g >= (targets.protein_target_g || 50)) {
+    parts.push(`Protein target met (${Math.round(totals.total_protein_g)}g).`);
+  }
+
+  if (parts.length === 0) {
+    return 'Nutrition intake within targets.';
+  }
+
+  return parts.join(' ');
+}
+
+async function getDailySummary(env, userId, date) {
+  if (!env?.D1_DB || !userId) return null;
+  const targetDate = date || getTodayISO();
+
+  try {
+    const row = await env.D1_DB.prepare(
+      'SELECT * FROM daily_summaries WHERE user_id = ? AND summary_date = ?'
+    ).bind(userId, targetDate).first();
+
+    if (!row) {
+      // Generate fresh summary
+      await updateDailySummary(env, userId, targetDate);
+      return await env.D1_DB.prepare(
+        'SELECT * FROM daily_summaries WHERE user_id = ? AND summary_date = ?'
+      ).bind(userId, targetDate).first();
+    }
+
+    return {
+      ...row,
+      organ_impacts_net: row.organ_impacts_net ? JSON.parse(row.organ_impacts_net) : {},
+      flags_triggered: row.flags_triggered ? JSON.parse(row.flags_triggered) : []
+    };
+  } catch (e) {
+    console.error('getDailySummary error:', e);
+    return null;
+  }
+}
+
+async function getWeeklySummaries(env, userId, days = 7) {
+  if (!env?.D1_DB || !userId) return [];
+
+  try {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const startISO = startDate.toISOString().slice(0, 10);
+
+    const { results } = await env.D1_DB.prepare(`
+      SELECT * FROM daily_summaries
+      WHERE user_id = ? AND summary_date >= ?
+      ORDER BY summary_date ASC
+    `).bind(userId, startISO).all();
+
+    return (results || []).map(row => ({
+      ...row,
+      organ_impacts_net: row.organ_impacts_net ? JSON.parse(row.organ_impacts_net) : {},
+      flags_triggered: row.flags_triggered ? JSON.parse(row.flags_triggered) : []
+    }));
+  } catch (e) {
+    console.error('getWeeklySummaries error:', e);
+    return [];
+  }
+}
+
+// ---- Saved Dishes ----
+
+async function saveDish(env, userId, dishData) {
+  if (!env?.D1_DB || !userId || !dishData.dish_id) {
+    return { ok: false, error: 'missing_params' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    await env.D1_DB.prepare(`
+      INSERT OR REPLACE INTO saved_dishes (
+        user_id, dish_id, dish_name, restaurant_name, avg_calories,
+        nutrition_snapshot, organ_impacts_snapshot, risk_flags,
+        personal_notes, saved_at, times_logged
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    `).bind(
+      userId,
+      dishData.dish_id,
+      dishData.dish_name,
+      dishData.restaurant_name || null,
+      dishData.avg_calories || null,
+      dishData.nutrition_snapshot ? JSON.stringify(dishData.nutrition_snapshot) : null,
+      dishData.organ_impacts_snapshot ? JSON.stringify(dishData.organ_impacts_snapshot) : null,
+      dishData.risk_flags ? JSON.stringify(dishData.risk_flags) : null,
+      dishData.personal_notes || null,
+      now
+    ).run();
+
+    return { ok: true };
+  } catch (e) {
+    console.error('saveDish error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function getSavedDishes(env, userId) {
+  if (!env?.D1_DB || !userId) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT * FROM saved_dishes WHERE user_id = ? ORDER BY saved_at DESC
+    `).bind(userId).all();
+
+    return (results || []).map(row => ({
+      ...row,
+      nutrition_snapshot: row.nutrition_snapshot ? JSON.parse(row.nutrition_snapshot) : null,
+      organ_impacts_snapshot: row.organ_impacts_snapshot ? JSON.parse(row.organ_impacts_snapshot) : null,
+      risk_flags: row.risk_flags ? JSON.parse(row.risk_flags) : []
+    }));
+  } catch (e) {
+    console.error('getSavedDishes error:', e);
+    return [];
+  }
+}
+
+async function removeSavedDish(env, userId, dishId) {
+  if (!env?.D1_DB || !userId || !dishId) return { ok: false, error: 'missing_params' };
+
+  try {
+    await env.D1_DB.prepare(
+      'DELETE FROM saved_dishes WHERE user_id = ? AND dish_id = ?'
+    ).bind(userId, dishId).run();
+
+    return { ok: true };
+  } catch (e) {
+    console.error('removeSavedDish error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+// ---- Allergen Definitions ----
+
+async function getAllergenDefinitions(env) {
+  if (!env?.D1_DB) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(
+      'SELECT * FROM allergen_definitions ORDER BY category, display_name'
+    ).all();
+    return results || [];
+  } catch (e) {
+    console.error('getAllergenDefinitions error:', e);
+    return [];
+  }
+}
+
 function derivePillsForUser(hits = [], prefs = { allergens: [], fodmap: {} }) {
   const safeHits = Array.isArray(hits) ? hits : [];
   const safePrefs =
@@ -12078,6 +13007,398 @@ const _worker_impl = {
       }
     }
 
+    // ========== USER TRACKING API ENDPOINTS ==========
+
+    // GET /api/profile - Get user profile
+    if (pathname === "/api/profile" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const profile = await getUserProfile(env, userId);
+      const targets = await getUserTargets(env, userId);
+      const allergens = await getUserAllergens(env, userId);
+      const organs = await getUserOrganPriorities(env, userId);
+
+      return new Response(JSON.stringify({
+        ok: true,
+        profile: profile || {},
+        targets,
+        allergens,
+        organ_priorities: organs
+      }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // PUT /api/profile - Update user profile
+    if (pathname === "/api/profile" && request.method === "PUT") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await upsertUserProfile(env, userId, body);
+      if (result.ok) {
+        // Recalculate targets after profile update
+        await calculateAndStoreTargets(env, userId);
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // POST /api/profile - Create user profile (alias for PUT)
+    if (pathname === "/api/profile" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await upsertUserProfile(env, userId, body);
+      if (result.ok) {
+        await calculateAndStoreTargets(env, userId);
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // PUT /api/profile/allergens - Update user allergens
+    if (pathname === "/api/profile/allergens" && request.method === "PUT") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await setUserAllergens(env, userId, body?.allergens || []);
+      if (result.ok) {
+        // Recalculate targets (conditions may have changed)
+        await calculateAndStoreTargets(env, userId);
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // PUT /api/profile/organs - Update user organ priorities
+    if (pathname === "/api/profile/organs" && request.method === "PUT") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await setUserOrganPriorities(env, userId, body?.organs || []);
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // POST /api/profile/weight - Add weight entry
+    if (pathname === "/api/profile/weight" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId || !body?.weight_kg) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id_or_weight" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await addWeightEntry(env, userId, body.weight_kg, body.source || "manual");
+      if (result.ok) {
+        // Recalculate targets with new weight
+        await calculateAndStoreTargets(env, userId);
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/profile/weight/history - Get weight history
+    if (pathname === "/api/profile/weight/history" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      const limit = parseInt(url.searchParams.get("limit") || "30", 10);
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const history = await getWeightHistory(env, userId, limit);
+
+      return new Response(JSON.stringify({ ok: true, history }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/allergens - Get allergen definitions
+    if (pathname === "/api/allergens" && request.method === "GET") {
+      const definitions = await getAllergenDefinitions(env);
+
+      return new Response(JSON.stringify({ ok: true, allergens: definitions }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // POST /api/meals/log - Log a meal
+    if (pathname === "/api/meals/log" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId || !body?.dish_name) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id_or_dish_name" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await logMeal(env, userId, body);
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : (result.error === "duplicate_log" ? 409 : 400),
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/meals - Get meals for a date
+    if (pathname === "/api/meals" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      const date = url.searchParams.get("date") || getTodayISO();
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const meals = await getMealsForDate(env, userId, date);
+
+      return new Response(JSON.stringify({ ok: true, date, meals }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // DELETE /api/meals/:id - Delete a meal
+    if (pathname.startsWith("/api/meals/") && request.method === "DELETE") {
+      const mealId = pathname.split("/").pop();
+      const userId = url.searchParams.get("user_id");
+
+      if (!userId || !mealId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id_or_meal_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await deleteMeal(env, userId, parseInt(mealId, 10));
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 404,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/tracker/daily - Get daily tracker summary
+    if (pathname === "/api/tracker/daily" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      const date = url.searchParams.get("date") || getTodayISO();
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const [summary, targets, meals, organPriorities] = await Promise.all([
+        getDailySummary(env, userId, date),
+        getUserTargets(env, userId),
+        getMealsForDate(env, userId, date),
+        getUserOrganPriorities(env, userId)
+      ]);
+
+      // Sort organ impacts by user priority
+      let sortedOrganImpacts = [];
+      if (summary?.organ_impacts_net) {
+        const priorityMap = {};
+        organPriorities.forEach((o, i) => { priorityMap[o.organ_code] = i; });
+
+        sortedOrganImpacts = Object.entries(summary.organ_impacts_net)
+          .map(([organ, score]) => ({
+            organ,
+            score,
+            is_starred: organPriorities.find(o => o.organ_code === organ)?.is_starred || false
+          }))
+          .sort((a, b) => {
+            const aIdx = priorityMap[a.organ] ?? 999;
+            const bIdx = priorityMap[b.organ] ?? 999;
+            return aIdx - bIdx;
+          });
+      }
+
+      return new Response(JSON.stringify({
+        ok: true,
+        date,
+        summary: summary || { meals_logged: 0 },
+        targets,
+        meals,
+        organ_impacts: sortedOrganImpacts
+      }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/tracker/weekly - Get weekly tracker summary
+    if (pathname === "/api/tracker/weekly" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      const days = parseInt(url.searchParams.get("days") || "7", 10);
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const [summaries, targets] = await Promise.all([
+        getWeeklySummaries(env, userId, days),
+        getUserTargets(env, userId)
+      ]);
+
+      // Calculate averages
+      const totals = { calories: 0, protein: 0, fiber: 0, sugar: 0, sodium: 0 };
+      let daysWithData = 0;
+
+      for (const s of summaries) {
+        if (s.meals_logged > 0) {
+          daysWithData++;
+          totals.calories += s.total_calories || 0;
+          totals.protein += s.total_protein_g || 0;
+          totals.fiber += s.total_fiber_g || 0;
+          totals.sugar += s.total_sugar_g || 0;
+          totals.sodium += s.total_sodium_mg || 0;
+        }
+      }
+
+      const averages = daysWithData > 0 ? {
+        avg_calories: Math.round(totals.calories / daysWithData),
+        avg_protein_g: Math.round(totals.protein / daysWithData),
+        avg_fiber_g: Math.round(totals.fiber / daysWithData),
+        avg_sugar_g: Math.round(totals.sugar / daysWithData),
+        avg_sodium_mg: Math.round(totals.sodium / daysWithData)
+      } : null;
+
+      return new Response(JSON.stringify({
+        ok: true,
+        days_requested: days,
+        days_with_data: daysWithData,
+        targets,
+        averages,
+        daily_summaries: summaries
+      }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // POST /api/dishes/save - Save a dish to favorites
+    if (pathname === "/api/dishes/save" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+
+      if (!userId || !body?.dish_id || !body?.dish_name) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_required_fields" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await saveDish(env, userId, body);
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/dishes/saved - Get saved dishes
+    if (pathname === "/api/dishes/saved" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const dishes = await getSavedDishes(env, userId);
+
+      return new Response(JSON.stringify({ ok: true, dishes }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // DELETE /api/dishes/saved/:dish_id - Remove saved dish
+    if (pathname.startsWith("/api/dishes/saved/") && request.method === "DELETE") {
+      const dishId = pathname.split("/").pop();
+      const userId = url.searchParams.get("user_id");
+
+      if (!userId || !dishId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id_or_dish_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await removeSavedDish(env, userId, dishId);
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 404,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // ========== END USER TRACKING API ENDPOINTS ==========
+
     // ========== START ASYNC APIFY JOB ==========
     // POST /api/apify-start - Start an async Apify scrape with webhook callback
     if (pathname === "/api/apify-start" && request.method === "POST") {
@@ -18835,6 +20156,169 @@ async function runDishAnalysis(env, body, ctx) {
   // Extract recipe image from provider (Spoonacular/Edamam)
   const recipeImage = recipeResult?.recipe?.image || null;
 
+  // ---- User Personalization (if user_id provided) ----
+  let personalization = null;
+  const userId = body.user_id || body.userId || null;
+
+  if (userId && env?.D1_DB) {
+    try {
+      const tPersonalizationStart = Date.now();
+
+      // Fetch user data in parallel
+      const [userProfile, userTargets, userAllergens, userOrganPriorities] = await Promise.all([
+        getUserProfile(env, userId),
+        getUserTargets(env, userId),
+        getUserAllergens(env, userId),
+        getUserOrganPriorities(env, userId)
+      ]);
+
+      // Calculate age for organ sensitivity adjustment
+      const userAge = userProfile?.date_of_birth ? calculateAge(userProfile.date_of_birth) : null;
+
+      // Personalize organ scores based on age
+      let personalizedOrgans = null;
+      if (organs && typeof organs === 'object') {
+        personalizedOrgans = {};
+        for (const [organName, organData] of Object.entries(organs)) {
+          // Calculate net score for this organ
+          let netScore = 0;
+          if (Array.isArray(organData)) {
+            for (const item of organData) {
+              const strength = item.strength || 0;
+              if (item.effect === 'benefit') netScore += strength;
+              else if (item.effect === 'risk') netScore -= strength;
+            }
+          }
+
+          // Adjust for age if applicable
+          const adjustedScore = userAge ? adjustOrganScoreForAge(netScore, organName, userAge) : netScore;
+
+          personalizedOrgans[organName] = {
+            score: adjustedScore,
+            raw_score: netScore,
+            details: organData,
+            is_priority: userOrganPriorities.some(p => p.organ_code === organName && p.is_starred)
+          };
+        }
+      }
+
+      // Check for personal risk flags based on user allergens
+      const personalRiskFlags = [];
+      const userAllergenCodes = userAllergens.map(a => a.allergen_code);
+
+      // Check allergen flags against user's allergens
+      if (Array.isArray(allergen_flags)) {
+        for (const flag of allergen_flags) {
+          const flagKind = (flag.kind || flag.allergen || '').toLowerCase();
+          if (userAllergenCodes.includes(flagKind) && (flag.present === 'yes' || flag.present === true)) {
+            personalRiskFlags.push({
+              type: 'allergen',
+              allergen: flagKind,
+              severity: userAllergens.find(a => a.allergen_code === flagKind)?.severity || 'avoid',
+              message: `Contains ${flagKind} - in your avoid list`
+            });
+          }
+        }
+      }
+
+      // Check lactose for lactose intolerant users
+      if (userAllergenCodes.includes('lactose') && lactose_flags) {
+        if (lactose_flags.lactose_present === 'yes' || lactose_flags.has_lactose) {
+          personalRiskFlags.push({
+            type: 'sensitivity',
+            sensitivity: 'lactose',
+            message: 'Contains lactose - may cause digestive discomfort'
+          });
+        }
+      }
+
+      // Check FODMAP for IBS/FODMAP sensitive users
+      if (userAllergenCodes.includes('fodmap') && fodmap_flags) {
+        const fodmapLevel = fodmap_flags.overall_fodmap_level || fodmap_flags.level || '';
+        if (fodmapLevel === 'high' || fodmapLevel === 'moderate') {
+          personalRiskFlags.push({
+            type: 'sensitivity',
+            sensitivity: 'fodmap',
+            level: fodmapLevel,
+            message: `${fodmapLevel.charAt(0).toUpperCase() + fodmapLevel.slice(1)} FODMAP - may trigger IBS symptoms`
+          });
+        }
+      }
+
+      // Check nutrition against personal limits
+      if (finalNutritionSummary && userTargets) {
+        const sugar = finalNutritionSummary.sugar_g || finalNutritionSummary.sugars_g || 0;
+        const sodium = finalNutritionSummary.sodium_mg || 0;
+
+        // Adjust for portion
+        const portionMult = body.portionFactor || 1.0;
+        const adjustedSugar = sugar * portionMult;
+        const adjustedSodium = sodium * portionMult;
+
+        if (userTargets.sugar_limit_g && adjustedSugar > userTargets.sugar_limit_g * 0.5) {
+          personalRiskFlags.push({
+            type: 'nutrition',
+            nutrient: 'sugar',
+            amount: Math.round(adjustedSugar),
+            limit: userTargets.sugar_limit_g,
+            message: adjustedSugar > userTargets.sugar_limit_g
+              ? `Sugar (${Math.round(adjustedSugar)}g) exceeds your daily limit`
+              : `High sugar content (${Math.round(adjustedSugar)}g) - over 50% of your limit`
+          });
+        }
+
+        if (userTargets.sodium_limit_mg && adjustedSodium > userTargets.sodium_limit_mg * 0.5) {
+          personalRiskFlags.push({
+            type: 'nutrition',
+            nutrient: 'sodium',
+            amount: Math.round(adjustedSodium),
+            limit: userTargets.sodium_limit_mg,
+            message: adjustedSodium > userTargets.sodium_limit_mg
+              ? `Sodium (${Math.round(adjustedSodium)}mg) exceeds your daily limit`
+              : `High sodium content (${Math.round(adjustedSodium)}mg) - over 50% of your limit`
+          });
+        }
+      }
+
+      // Sort organs by user priority
+      let sortedOrganImpacts = [];
+      if (personalizedOrgans) {
+        const priorityMap = {};
+        userOrganPriorities.forEach((o, i) => { priorityMap[o.organ_code] = i; });
+
+        sortedOrganImpacts = Object.entries(personalizedOrgans)
+          .map(([organ, data]) => ({
+            organ,
+            ...data
+          }))
+          .sort((a, b) => {
+            // Starred organs first, then by priority rank, then by absolute score
+            if (a.is_priority && !b.is_priority) return -1;
+            if (!a.is_priority && b.is_priority) return 1;
+            const aIdx = priorityMap[a.organ] ?? 999;
+            const bIdx = priorityMap[b.organ] ?? 999;
+            if (aIdx !== bIdx) return aIdx - bIdx;
+            return Math.abs(b.score) - Math.abs(a.score);
+          });
+      }
+
+      personalization = {
+        user_id: userId,
+        profile_complete: !!userProfile?.profile_completed_at,
+        targets: userTargets,
+        personal_risk_flags: personalRiskFlags,
+        organ_impacts: sortedOrganImpacts.slice(0, 3), // Top 3 for display
+        organ_impacts_full: sortedOrganImpacts,
+        allergen_codes: userAllergenCodes,
+        organ_priorities: userOrganPriorities.map(o => o.organ_code)
+      };
+
+      debug.t_personalization_ms = Date.now() - tPersonalizationStart;
+    } catch (e) {
+      debug.personalization_error = String(e?.message || e);
+    }
+  }
+
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -18867,6 +20351,7 @@ async function runDishAnalysis(env, body, ctx) {
     selection_default,
     selection_components,
     selection_custom: selection_custom || undefined,
+    personalization,
     debug
   };
 
