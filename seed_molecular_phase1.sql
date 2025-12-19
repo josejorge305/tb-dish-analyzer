@@ -1,12 +1,18 @@
 -- �� Phase 1 seed: organs + a few well-known compounds
 
--- Organ lookup (simple names used by the app)
+-- Organ lookup (simple names used by the app) - all 11 organs
 INSERT OR IGNORE INTO organ_systems (organ, system, description) VALUES
 ('gut','Digestive','Intestinal tract and microbiome'),
 ('liver','Digestive','Hepatic metabolism and detox'),
 ('heart','Cardiovascular','Cardiac muscle and vessels'),
 ('brain','Nervous','Central nervous system'),
-('immune','Immune','Innate/adaptive immune responses');
+('immune','Immune','Innate/adaptive immune responses'),
+('metabolic','Endocrine','Metabolic and blood sugar regulation'),
+('kidney','Urinary','Renal filtration and fluid balance'),
+('eyes','Sensory','Vision and ocular health'),
+('skin','Integumentary','Skin barrier and appearance'),
+('bones','Skeletal','Bone density and joint health'),
+('thyroid','Endocrine','Thyroid hormone regulation');
 
 -- A few common food compounds (name, common_name, formula, cid, description)
 INSERT OR IGNORE INTO compounds (name, common_name, formula, cid, description) VALUES

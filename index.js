@@ -3846,20 +3846,62 @@ function calculateTDEE(bmr, activityLevel) {
 }
 
 // Calculate all macro targets based on profile
+// Now supports multiple goals - combines adjustments from all selected goals
 function calculateMacroTargets(profile, tdee) {
   if (!tdee || !profile.current_weight_kg) return null;
 
   const weight_kg = profile.current_weight_kg;
-  const goal = profile.primary_goal || 'maintain';
-  const goalConfig = GOAL_ADJUSTMENTS[goal] || GOAL_ADJUSTMENTS.maintain;
-  const adjustedCalories = tdee + (goalConfig.calorie_adjustment || 0);
 
-  // Protein: base 1.0g per kg, adjusted by goal
-  const proteinPerKg = 1.0 * (goalConfig.protein_multiplier || 1.0);
+  // Parse goals - support both new goals array (JSON) and legacy primary_goal
+  let goals = [];
+  if (profile.goals) {
+    try {
+      goals = typeof profile.goals === 'string' ? JSON.parse(profile.goals) : profile.goals;
+    } catch (e) {
+      console.error('Failed to parse goals:', e);
+    }
+  }
+  if (!Array.isArray(goals) || goals.length === 0) {
+    goals = [profile.primary_goal || 'maintain'];
+  }
+
+  // Combine adjustments from all goals
+  // For calorie_adjustment: sum them (e.g., lose_weight -500 + build_muscle +300 = -200)
+  // For protein_multiplier: use the highest value (most protein-focused goal wins)
+  // For fiber_target_override: use the highest override if any goal specifies one
+  let totalCalorieAdjustment = 0;
+  let maxProteinMultiplier = 1.0;
+  let fiberOverride = null;
+
+  for (const goal of goals) {
+    const goalConfig = GOAL_ADJUSTMENTS[goal] || GOAL_ADJUSTMENTS.maintain;
+    totalCalorieAdjustment += goalConfig.calorie_adjustment || 0;
+    if ((goalConfig.protein_multiplier || 1.0) > maxProteinMultiplier) {
+      maxProteinMultiplier = goalConfig.protein_multiplier;
+    }
+    if (goalConfig.fiber_target_override && (!fiberOverride || goalConfig.fiber_target_override > fiberOverride)) {
+      fiberOverride = goalConfig.fiber_target_override;
+    }
+  }
+
+  // Handle conflicting goals: if both lose_weight and build_muscle, moderate the adjustment
+  // This prevents extreme calorie deficits/surpluses from stacking
+  const hasLoseWeight = goals.includes('lose_weight');
+  const hasBuildMuscle = goals.includes('build_muscle');
+  if (hasLoseWeight && hasBuildMuscle) {
+    // Recomposition mode: slight deficit with high protein
+    totalCalorieAdjustment = -200; // Moderate deficit
+    maxProteinMultiplier = Math.max(maxProteinMultiplier, 1.2); // Ensure adequate protein
+  }
+
+  const adjustedCalories = tdee + totalCalorieAdjustment;
+
+  // Protein: base 1.0g per kg, adjusted by highest goal multiplier
+  const proteinPerKg = 1.0 * maxProteinMultiplier;
   const protein_g = Math.round(weight_kg * proteinPerKg);
 
-  // Fiber: 14g per 1000 kcal (Institute of Medicine) or override
-  const fiber_g = goalConfig.fiber_target_override || Math.round((adjustedCalories / 1000) * 14);
+  // Fiber: 14g per 1000 kcal (Institute of Medicine) or override from goals
+  const fiber_g = fiberOverride || Math.round((adjustedCalories / 1000) * 14);
 
   // Fat: 30% of calories
   const fat_calories = adjustedCalories * 0.30;
@@ -3878,7 +3920,8 @@ function calculateMacroTargets(profile, tdee) {
     protein_min_g: Math.round(weight_kg * 0.8),
     carbs_target_g: carbs_g,
     fat_target_g: fat_g,
-    fiber_target_g: fiber_g
+    fiber_target_g: fiber_g,
+    goals_applied: goals // Include which goals were used for transparency
   };
 }
 
@@ -3997,13 +4040,23 @@ async function upsertUserProfile(env, userId, profileData) {
 
       const allowedFields = [
         'biological_sex', 'date_of_birth', 'height_cm', 'current_weight_kg',
-        'activity_level', 'unit_system', 'primary_goal', 'bmr_kcal', 'tdee_kcal'
+        'activity_level', 'unit_system', 'primary_goal', 'goals', 'bmr_kcal', 'tdee_kcal'
       ];
 
       for (const field of allowedFields) {
         if (profileData[field] !== undefined) {
           fields.push(`${field} = ?`);
-          values.push(profileData[field]);
+          // Store goals array as JSON string
+          if (field === 'goals' && Array.isArray(profileData[field])) {
+            values.push(JSON.stringify(profileData[field]));
+            // Also update primary_goal to first goal for backwards compatibility
+            if (profileData[field].length > 0) {
+              fields.push('primary_goal = ?');
+              values.push(profileData[field][0]);
+            }
+          } else {
+            values.push(profileData[field]);
+          }
         }
       }
 
@@ -4026,11 +4079,16 @@ async function upsertUserProfile(env, userId, profileData) {
 
     } else {
       // Insert new profile
+      // Handle goals array - store as JSON and set primary_goal for backwards compat
+      const goalsArray = Array.isArray(profileData.goals) ? profileData.goals : ['maintain'];
+      const goalsJson = JSON.stringify(goalsArray);
+      const primaryGoal = goalsArray[0] || profileData.primary_goal || 'maintain';
+
       await env.D1_DB.prepare(`
         INSERT INTO user_profiles (
           user_id, biological_sex, date_of_birth, height_cm, current_weight_kg,
-          activity_level, unit_system, primary_goal, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          activity_level, unit_system, primary_goal, goals, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         userId,
         profileData.biological_sex || null,
@@ -4039,7 +4097,8 @@ async function upsertUserProfile(env, userId, profileData) {
         profileData.current_weight_kg || null,
         profileData.activity_level || 'moderate',
         profileData.unit_system || 'imperial',
-        profileData.primary_goal || 'maintain',
+        primaryGoal,
+        goalsJson,
         now,
         now
       ).run();
@@ -13692,9 +13751,26 @@ const _worker_impl = {
       const allergens = await getUserAllergens(env, userId);
       const organs = await getUserOrganPriorities(env, userId);
 
+      // Parse goals JSON string to array for frontend
+      let profileWithParsedGoals = profile || {};
+      if (profileWithParsedGoals.goals) {
+        try {
+          profileWithParsedGoals = {
+            ...profileWithParsedGoals,
+            goals: typeof profileWithParsedGoals.goals === 'string'
+              ? JSON.parse(profileWithParsedGoals.goals)
+              : profileWithParsedGoals.goals
+          };
+        } catch (e) {
+          console.error('Failed to parse goals:', e);
+          // Fall back to primary_goal as array
+          profileWithParsedGoals.goals = [profileWithParsedGoals.primary_goal || 'maintain'];
+        }
+      }
+
       return new Response(JSON.stringify({
         ok: true,
-        profile: profile || {},
+        profile: profileWithParsedGoals,
         targets,
         allergens,
         organ_priorities: organs
