@@ -19606,6 +19606,8 @@ async function runDishAnalysis(env, body, ctx) {
 
   const tLLMsStart = Date.now();
   let combinedHits = []; // Will be populated after FatSecret completes
+  let fatsecretResult = null; // Declared here so it's accessible after the if/else block
+  let fatsecretHits = []; // Declared here so it's accessible after the if/else block
 
   if (useParallel) {
     const nutritionInput = finalNutritionSummary
@@ -19673,8 +19675,8 @@ async function runDishAnalysis(env, body, ctx) {
     }
 
     // Process FatSecret result
-    const fatsecretResult = fatsecretSettled.status === "fulfilled" ? fatsecretSettled.value : null;
-    const fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
+    fatsecretResult = fatsecretSettled.status === "fulfilled" ? fatsecretSettled.value : null;
+    fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
     combinedHits = [
       ...fatsecretHits,
       ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
@@ -19712,8 +19714,8 @@ async function runDishAnalysis(env, body, ctx) {
     }
 
     // Await FatSecret in non-parallel mode
-    const fatsecretResult = await fatsecretPromise;
-    const fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
+    fatsecretResult = await fatsecretPromise;
+    fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
     combinedHits = [
       ...fatsecretHits,
       ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
