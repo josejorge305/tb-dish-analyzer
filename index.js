@@ -8532,19 +8532,29 @@ async function callUSDAFDC(env, name) {
 
   foods.sort((a, b) => qualityScore(b) - qualityScore(a));
 
+  // LATENCY OPTIMIZATION: Fetch all food details in parallel
+  const detailResults = await Promise.all(
+    foods.map(async (food) => {
+      try {
+        const detail = await fetch(
+          `https://${host}/fdc/v1/food/${food.fdcId}?api_key=${key}`,
+          { headers: { accept: "application/json" } }
+        );
+        if (!detail.ok) return null;
+        return await detail.json();
+      } catch {
+        return null;
+      }
+    })
+  );
+
   let bestMatchEvenIfProcessed = null;
   let bestWithMacros = null;
   let firstPayload = null;
 
-  for (const food of foods) {
-    const detail = await fetch(
-      `https://${host}/fdc/v1/food/${food.fdcId}?api_key=${key}`,
-      {
-        headers: { accept: "application/json" }
-      }
-    );
-    if (!detail.ok) continue;
-    const full = await detail.json();
+  // Process results in sorted order (same logic as before)
+  for (const full of detailResults) {
+    if (!full) continue;
     const macros = extractMacrosFromFDC(full);
     const nutrients = macros?.perServing
       ? { ...macros.perServing }
