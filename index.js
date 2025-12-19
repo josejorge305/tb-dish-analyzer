@@ -2495,6 +2495,396 @@ function classifyBySectionFallback(item) {
   return null;
 }
 
+// ========== Combo/Platter Dish Detection & Decomposition ==========
+
+// Regex patterns that indicate a combo/platter dish
+const COMBO_PATTERNS = [
+  /\bgrand slam\b/i,
+  /\blumberjack slam\b/i,
+  /\bsuper slam\b/i,
+  /\bbreakfast combo\b/i,
+  /\bbreakfast platter\b/i,
+  /\bfull english\b/i,
+  /\bfull breakfast\b/i,
+  /\bfry up\b/i,
+  /\bsampler\b/i,
+  /\bplatter\b/i,
+  /\bmeze\b/i,
+  /\bmezze\b/i,
+  /\bdim sum\b/i,
+  /\bappetizer combo\b/i,
+  /\bsushi combo\b/i,
+  /\btaco combo\b/i,
+  /\bcombo meal\b/i,
+  /\bfeast\b/i,
+  /\bspread\b/i,
+  /\bdinner for \d/i,
+  /\bfamily meal\b/i,
+  /\bparty pack\b/i
+];
+
+/**
+ * Detects if a dish name matches combo/platter patterns
+ * @param {string} dishName
+ * @returns {boolean}
+ */
+function isComboPlatterDish(dishName) {
+  if (!dishName) return false;
+  const normalized = dishName.toLowerCase().trim();
+  return COMBO_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+/**
+ * Normalizes restaurant name for DB lookup
+ * @param {string} restaurantName
+ * @returns {string|null}
+ */
+function normalizeRestaurantChain(restaurantName) {
+  if (!restaurantName) return null;
+  const n = restaurantName.toLowerCase().trim();
+  if (n.includes("denny")) return "dennys";
+  if (n.includes("ihop")) return "ihop";
+  if (n.includes("waffle house")) return "waffle_house";
+  if (n.includes("cracker barrel")) return "cracker_barrel";
+  if (n.includes("applebee")) return "applebees";
+  if (n.includes("chili")) return "chilis";
+  if (n.includes("tgi") || n.includes("friday")) return "tgi_fridays";
+  return null;
+}
+
+/**
+ * Looks up pre-computed combo dish components from D1
+ * @param {object} env - Worker env with D1_DB binding
+ * @param {string} dishName
+ * @param {string} restaurantName
+ * @returns {Promise<{found: boolean, combo: object|null, components: array}>}
+ */
+async function lookupComboFromDB(env, dishName, restaurantName) {
+  if (!env || !env.D1_DB) {
+    return { found: false, combo: null, components: [] };
+  }
+
+  const normalizedDish = dishName.toLowerCase().trim();
+  const chain = normalizeRestaurantChain(restaurantName);
+
+  try {
+    // First try exact match with restaurant chain
+    let combo = null;
+    if (chain) {
+      const exactResult = await env.D1_DB.prepare(
+        `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain = ?`
+      )
+        .bind(normalizedDish, chain)
+        .first();
+      combo = exactResult;
+    }
+
+    // If not found, try generic (no chain)
+    if (!combo) {
+      const genericResult = await env.D1_DB.prepare(
+        `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain IS NULL`
+      )
+        .bind(normalizedDish)
+        .first();
+      combo = genericResult;
+    }
+
+    // If still not found, try alias search
+    if (!combo) {
+      const aliasResult = await env.D1_DB.prepare(
+        `SELECT * FROM combo_dishes WHERE aliases_json LIKE ?`
+      )
+        .bind(`%"${normalizedDish}"%`)
+        .first();
+      combo = aliasResult;
+    }
+
+    if (!combo) {
+      return { found: false, combo: null, components: [] };
+    }
+
+    // Fetch components
+    const componentsResult = await env.D1_DB.prepare(
+      `SELECT * FROM combo_components WHERE combo_id = ? ORDER BY sort_order`
+    )
+      .bind(combo.id)
+      .all();
+
+    return {
+      found: true,
+      combo,
+      components: componentsResult.results || []
+    };
+  } catch (e) {
+    console.error("lookupComboFromDB error:", e);
+    return { found: false, combo: null, components: [], error: String(e) };
+  }
+}
+
+/**
+ * Uses LLM to decompose an unknown combo/platter dish into components
+ * @param {object} env - Worker env
+ * @param {string} dishName
+ * @param {string} restaurantName
+ * @returns {Promise<{components: array, source: string}>}
+ */
+async function decomposeComboWithLLM(env, dishName, restaurantName) {
+  const prompt = `You are a food expert. The dish "${dishName}"${restaurantName ? ` from "${restaurantName}"` : ""} is a combo/platter meal.
+
+List the individual food items that come with this meal. Return ONLY a JSON array of objects with this format:
+[
+  {"name": "Component Name", "role": "main" or "side", "quantity": 2, "unit": "pieces"}
+]
+
+Rules:
+- role should be "main" for the primary protein or carb, "side" for accompaniments
+- quantity and unit describe the typical serving (e.g., 2 strips of bacon)
+- Be specific (e.g., "Buttermilk Pancakes" not just "Pancakes")
+- Include ALL items that typically come with this meal
+- Return valid JSON only, no explanation`;
+
+  try {
+    // Try OpenAI first
+    if (env.OPENAI_API_KEY) {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.3,
+          max_tokens: 500
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content || "";
+        const jsonMatch = content.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const components = JSON.parse(jsonMatch[0]);
+          return { components, source: "openai" };
+        }
+      }
+    }
+
+    // Fallback to Cloudflare AI
+    if (env.AI) {
+      const aiResult = await env.AI.run("@cf/meta/llama-3-8b-instruct", {
+        messages: [{ role: "user", content: prompt }]
+      });
+      const content = aiResult?.response || "";
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const components = JSON.parse(jsonMatch[0]);
+        return { components, source: "cloudflare" };
+      }
+    }
+
+    return { components: [], source: "none" };
+  } catch (e) {
+    console.error("decomposeComboWithLLM error:", e);
+    return { components: [], source: "error", error: String(e) };
+  }
+}
+
+/**
+ * Fetches nutrition for a single component using FatSecret text search
+ * @param {object} env
+ * @param {string} componentName
+ * @param {number} quantity
+ * @returns {Promise<object>}
+ */
+async function fetchComponentNutrition(env, componentName, quantity = 1) {
+  // Use existing FatSecret search if available
+  if (!env.FATSECRET_CLIENT_ID || !env.FATSECRET_CLIENT_SECRET) {
+    return null;
+  }
+
+  try {
+    // Get FatSecret OAuth token (reuse existing helper if available)
+    const tokenResponse = await fetch("https://oauth.fatsecret.com/connect/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${btoa(`${env.FATSECRET_CLIENT_ID}:${env.FATSECRET_CLIENT_SECRET}`)}`
+      },
+      body: "grant_type=client_credentials&scope=basic"
+    });
+
+    if (!tokenResponse.ok) return null;
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+
+    // Search for the food
+    const searchUrl = `https://platform.fatsecret.com/rest/server.api?method=foods.search&search_expression=${encodeURIComponent(componentName)}&format=json&max_results=1`;
+    const searchResponse = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    if (!searchResponse.ok) return null;
+    const searchData = await searchResponse.json();
+    const food = searchData?.foods?.food?.[0] || searchData?.foods?.food;
+
+    if (!food) return null;
+
+    // Parse nutrition from food description
+    const desc = food.food_description || "";
+    const calMatch = desc.match(/Calories:\s*([\d.]+)/i);
+    const fatMatch = desc.match(/Fat:\s*([\d.]+)g/i);
+    const carbMatch = desc.match(/Carbs:\s*([\d.]+)g/i);
+    const protMatch = desc.match(/Protein:\s*([\d.]+)g/i);
+
+    return {
+      food_id: food.food_id,
+      food_name: food.food_name,
+      brand: food.brand_name || null,
+      energyKcal: calMatch ? parseFloat(calMatch[1]) * quantity : null,
+      fat_g: fatMatch ? parseFloat(fatMatch[1]) * quantity : null,
+      carbs_g: carbMatch ? parseFloat(carbMatch[1]) * quantity : null,
+      protein_g: protMatch ? parseFloat(protMatch[1]) * quantity : null
+    };
+  } catch (e) {
+    console.error("fetchComponentNutrition error:", e);
+    return null;
+  }
+}
+
+/**
+ * Main combo decomposition function - orchestrates DB lookup + LLM fallback + nutrition fetch
+ * @param {object} env
+ * @param {string} dishName
+ * @param {string} restaurantName
+ * @returns {Promise<{isCombo: boolean, plate_components: array, nutrition_breakdown: array, debug: object}>}
+ */
+async function resolveComboComponents(env, dishName, restaurantName) {
+  const debug = { combo_detection: {} };
+
+  // Step 1: Check if this looks like a combo dish
+  const matchesPattern = isComboPlatterDish(dishName);
+  debug.combo_detection.matches_pattern = matchesPattern;
+
+  if (!matchesPattern) {
+    return { isCombo: false, plate_components: [], nutrition_breakdown: [], debug };
+  }
+
+  // Step 2: Try DB lookup first (fast path)
+  const dbResult = await lookupComboFromDB(env, dishName, restaurantName);
+  debug.combo_detection.db_lookup = {
+    found: dbResult.found,
+    combo_id: dbResult.combo?.id,
+    component_count: dbResult.components.length
+  };
+
+  let components = [];
+  let source = "none";
+
+  if (dbResult.found && dbResult.components.length > 0) {
+    components = dbResult.components.map((c) => ({
+      name: c.component_name,
+      role: c.role || "side",
+      quantity: c.default_quantity || 1,
+      unit: c.default_unit || "serving",
+      cached_nutrition: {
+        energyKcal: c.calories_per_unit,
+        protein_g: c.protein_g,
+        fat_g: c.fat_g,
+        carbs_g: c.carbs_g
+      },
+      allergens_json: c.allergens_json,
+      fodmap_level: c.fodmap_level,
+      lactose_level: c.lactose_level
+    }));
+    source = "database";
+  } else {
+    // Step 3: LLM decomposition fallback
+    const llmResult = await decomposeComboWithLLM(env, dishName, restaurantName);
+    debug.combo_detection.llm_decomposition = {
+      source: llmResult.source,
+      component_count: llmResult.components.length
+    };
+
+    if (llmResult.components.length > 0) {
+      components = llmResult.components;
+      source = `llm_${llmResult.source}`;
+    }
+  }
+
+  debug.combo_detection.source = source;
+  debug.combo_detection.final_component_count = components.length;
+
+  if (components.length === 0) {
+    return { isCombo: false, plate_components: [], nutrition_breakdown: [], debug };
+  }
+
+  // Step 4: Fetch nutrition for each component (parallel)
+  const nutritionPromises = components.map(async (comp, idx) => {
+    // Skip if we have cached nutrition from DB
+    if (comp.cached_nutrition && comp.cached_nutrition.energyKcal) {
+      return {
+        component_id: `combo_c${idx}`,
+        component: comp.name,
+        role: comp.role,
+        category: "combo_component",
+        quantity: comp.quantity,
+        unit: comp.unit,
+        ...comp.cached_nutrition
+      };
+    }
+
+    // Fetch from FatSecret
+    const nutrition = await fetchComponentNutrition(env, comp.name, comp.quantity || 1);
+    return {
+      component_id: `combo_c${idx}`,
+      component: comp.name,
+      role: comp.role,
+      category: "combo_component",
+      quantity: comp.quantity,
+      unit: comp.unit,
+      energyKcal: nutrition?.energyKcal || null,
+      protein_g: nutrition?.protein_g || null,
+      fat_g: nutrition?.fat_g || null,
+      carbs_g: nutrition?.carbs_g || null,
+      fs_food_id: nutrition?.food_id || null
+    };
+  });
+
+  const nutritionBreakdown = await Promise.all(nutritionPromises);
+
+  // Calculate totals and share ratios
+  const totalCalories = nutritionBreakdown.reduce(
+    (sum, n) => sum + (n.energyKcal || 0),
+    0
+  );
+
+  const nutrition_breakdown = nutritionBreakdown.map((n) => ({
+    ...n,
+    share_ratio: totalCalories > 0 ? (n.energyKcal || 0) / totalCalories : 1 / nutritionBreakdown.length
+  }));
+
+  // Build plate_components array
+  const plate_components = components.map((comp, idx) => ({
+    component_id: `combo_c${idx}`,
+    role: comp.role,
+    category: "combo_component",
+    label: comp.name,
+    confidence: source === "database" ? 1 : 0.85,
+    area_ratio: nutrition_breakdown[idx]?.share_ratio || 1 / components.length
+  }));
+
+  return {
+    isCombo: true,
+    plate_components,
+    nutrition_breakdown,
+    total_calories: totalCalories,
+    source,
+    debug
+  };
+}
+
 // Canonical ordering for menu sections
 const CANONICAL_ORDER = [
   "Appetizers",
@@ -7503,6 +7893,147 @@ function scoreEdamamRecipe(recipe, dishName) {
   // Lunch/dinner alignment
   if (/burger|steak|pasta|curry|rice|chicken|salmon|pork/.test(dishLower)) {
     if (mealTypes.some(m => m.includes("lunch") || m.includes("dinner"))) score += 15;
+  }
+
+  // 6. CUISINE MISMATCH PENALTY: Penalize if recipe cuisine doesn't match dish cuisine
+  // This prevents "Tiramisu" from matching "Thai Sweet Potato Dessert"
+  const cuisineLabels = Array.isArray(recipe.cuisineType) ? recipe.cuisineType.map(c => c.toLowerCase()) : [];
+
+  const cuisineMap = {
+    italian: ["tiramisu", "pasta", "risotto", "pizza", "lasagna", "alfredo", "parmigiana", "gnocchi", "ravioli", "carbonara", "bolognese", "pesto", "caprese", "prosciutto", "bruschetta", "cannoli", "panna cotta", "gelato"],
+    thai: ["pad thai", "tom yum", "green curry", "red curry", "massaman", "panang", "papaya salad", "sticky rice", "khao", "pad see ew", "larb", "satay"],
+    mexican: ["taco", "burrito", "enchilada", "quesadilla", "guacamole", "salsa", "fajita", "tamale", "mole", "pozole", "carnitas", "al pastor", "ceviche"],
+    japanese: ["sushi", "sashimi", "ramen", "udon", "tempura", "teriyaki", "miso", "edamame", "gyoza", "katsu", "yakitori", "okonomiyaki"],
+    indian: ["curry", "tikka", "masala", "biryani", "samosa", "naan", "dal", "paneer", "tandoori", "korma", "vindaloo", "butter chicken", "murgh makhani"],
+    french: ["croissant", "baguette", "crepe", "souffle", "quiche", "ratatouille", "bouillabaisse", "coq au vin", "escargot", "moules", "frites", "bisque", "bearnaise", "bechamel"],
+    chinese: ["kung pao", "lo mein", "chow mein", "fried rice", "dim sum", "dumpling", "wonton", "mapo tofu", "peking duck", "sweet and sour", "general tso", "orange chicken"],
+    vietnamese: ["pho", "banh mi", "spring roll", "bun", "vermicelli", "nuoc mam"],
+    korean: ["bibimbap", "bulgogi", "kimchi", "japchae", "gochujang", "korean bbq", "tteokbokki"],
+    spanish: ["paella", "tapas", "gazpacho", "churros", "tortilla espanola", "gambas", "jamon"],
+    portuguese: ["bacalhau", "pastel de nata", "caldo verde", "piri piri"],
+    mediterranean: ["falafel", "hummus", "shawarma", "kebab", "tabbouleh", "baba ganoush", "gyro", "souvlaki"]
+  };
+
+  // Detect dish cuisine from keywords
+  let detectedCuisine = null;
+  for (const [cuisine, keywords] of Object.entries(cuisineMap)) {
+    if (keywords.some(kw => dish.includes(kw))) {
+      detectedCuisine = cuisine;
+      break;
+    }
+  }
+
+  // If we detected a cuisine, penalize recipes from wrong cuisines
+  if (detectedCuisine && cuisineLabels.length > 0) {
+    const cuisineMatches = cuisineLabels.some(c => c.includes(detectedCuisine) || detectedCuisine.includes(c));
+    if (!cuisineMatches) {
+      // Heavy penalty for cuisine mismatch
+      score -= 100;
+    } else {
+      // Bonus for cuisine match
+      score += 30;
+    }
+  }
+
+  // 7. KEY INGREDIENT SANITY CHECK: Penalize if expected key ingredients are missing
+  const ingredients = Array.isArray(recipe.ingredientLines) ? recipe.ingredientLines.join(" ").toLowerCase() : "";
+
+  // Classic dishes with required ingredients
+  const requiredIngredients = {
+    tiramisu: ["mascarpone", "ladyfinger", "espresso", "coffee", "cocoa"],
+    "lobster bisque": ["cream", "butter", "lobster"],
+    "butter chicken": ["cream", "butter", "chicken", "tomato"],
+    "chicken alfredo": ["cream", "parmesan", "butter", "pasta", "fettuccine"],
+    croissant: ["butter", "flour"],
+    "mango sticky rice": ["mango", "coconut", "sticky rice", "glutinous rice"],
+    "margherita pizza": ["mozzarella", "tomato", "basil", "flour", "dough"],
+    "pizza": ["flour", "dough", "mozzarella", "tomato"],
+    "burrito": ["tortilla", "beans", "rice"],
+    "super burrito": ["tortilla", "beans", "rice", "guacamole", "sour cream"]
+  };
+
+  for (const [dishKey, required] of Object.entries(requiredIngredients)) {
+    if (dish.includes(dishKey)) {
+      const matches = required.filter(ing => ingredients.includes(ing));
+      if (matches.length < Math.ceil(required.length / 2)) {
+        // Missing too many key ingredients - likely wrong recipe
+        score -= 80;
+      } else if (matches.length >= required.length - 1) {
+        // Has most key ingredients - bonus
+        score += 25;
+      }
+    }
+  }
+
+  // 8. FORBIDDEN INGREDIENTS CHECK: Penalize keto/low-carb variants and protein mismatches
+  const forbiddenIngredients = {
+    "margherita pizza": ["almond flour", "cauliflower", "fathead", "keto"],
+    "pizza": ["almond flour", "cauliflower", "fathead", "keto"],
+    "croissant": ["almond flour", "coconut flour", "keto"],
+    "pasta": ["zucchini noodle", "shirataki", "konjac", "cauliflower"],
+    "bread": ["almond flour", "coconut flour", "keto", "cloud bread"],
+    "tiramisu": ["sweet potato", "yam", "coconut cream"],
+    "super burrito": ["fish", "fish stick", "salmon", "tuna", "shrimp", "cod", "tilapia", "seafood"],
+    "burrito": ["fish stick", "fish fillet"],
+    "carne asada": ["fish", "shrimp", "salmon", "seafood"],
+    "carnitas": ["fish", "shrimp", "salmon", "seafood"],
+    "al pastor": ["fish", "shrimp", "salmon", "seafood"]
+  };
+
+  for (const [dishKey, forbidden] of Object.entries(forbiddenIngredients)) {
+    if (dish.includes(dishKey)) {
+      const hasForbidden = forbidden.some(f => ingredients.includes(f));
+      if (hasForbidden) {
+        // Heavy penalty for keto/variant recipes when user asked for traditional dish
+        score -= 150;
+      }
+    }
+  }
+
+  // 9. HEALTH LABEL PROTEIN MISMATCH CHECK
+  const healthLabels = Array.isArray(recipe.healthLabels)
+    ? recipe.healthLabels.map(h => h.toLowerCase())
+    : [];
+
+  // Dishes that expect meat (beef, pork, chicken) - should NOT be Pescatarian
+  const meatDishKeywords = [
+    "burrito", "taco", "enchilada", "quesadilla", "fajita", "carnitas", "al pastor", "carne asada",
+    "burger", "steak", "beef", "pork", "chicken", "lamb", "bacon", "sausage", "ham",
+    "meatball", "bolognese", "lasagna", "gyro", "kebab", "shawarma",
+    "pulled pork", "ribs", "brisket", "roast", "chop"
+  ];
+
+  const dishExpectsMeat = meatDishKeywords.some(kw => dish.includes(kw));
+
+  // Pescatarian = has fish but no meat. If dish expects meat, this is wrong recipe
+  if (dishExpectsMeat && healthLabels.includes("pescatarian")) {
+    score -= 200;
+  }
+
+  // Red-Meat-Free check for beef dishes specifically
+  const beefDishKeywords = ["steak", "beef", "burger", "brisket", "carne asada"];
+  const dishExpectsBeef = beefDishKeywords.some(kw => dish.includes(kw));
+  if (dishExpectsBeef && healthLabels.includes("red-meat-free")) {
+    score -= 200;
+  }
+
+  // Pork-Free check for pork dishes
+  const porkDishKeywords = ["carnitas", "pulled pork", "bacon", "ham", "pork", "al pastor"];
+  const dishExpectsPork = porkDishKeywords.some(kw => dish.includes(kw));
+  if (dishExpectsPork && healthLabels.includes("pork-free")) {
+    score -= 200;
+  }
+
+  // Vegetarian recipe should not match meat dishes
+  if (dishExpectsMeat && healthLabels.includes("vegetarian")) {
+    score -= 250;
+  }
+
+  // Vegan recipe should not match dishes with dairy/eggs/meat
+  const dairyDishKeywords = ["cheese", "cream", "alfredo", "mac and cheese", "queso"];
+  const dishExpectsDairy = dairyDishKeywords.some(kw => dish.includes(kw));
+  if ((dishExpectsMeat || dishExpectsDairy) && healthLabels.includes("vegan")) {
+    score -= 250;
   }
 
   return score;
@@ -18225,6 +18756,27 @@ async function runDishAnalysis(env, body, ctx) {
   });
   debug.t_recipe_ms = Date.now() - tRecipeStart;
 
+  // ========== Combo/Platter Decomposition ==========
+  // Check if this is a combo dish and decompose into components
+  let comboResult = null;
+  let isComboPlate = false;
+  const tComboStart = Date.now();
+  try {
+    comboResult = await resolveComboComponents(env, dishName, restaurantName);
+    isComboPlate = comboResult?.isCombo === true;
+    if (comboResult?.debug) {
+      debug.combo = comboResult.debug;
+    }
+    if (isComboPlate && comboResult.plate_components?.length > 0) {
+      plateComponents = comboResult.plate_components;
+      debug.combo_source = comboResult.source;
+      debug.combo_components_count = comboResult.plate_components.length;
+    }
+  } catch (comboErr) {
+    debug.combo_error = String(comboErr);
+  }
+  debug.t_combo_ms = Date.now() - tComboStart;
+
   devFlag =
     devFlag || recipeResult?.devFlag || recipeResult?.out?.devFlag || false;
 
@@ -18365,6 +18917,37 @@ async function runDishAnalysis(env, body, ctx) {
       }
     } catch (e) {
       // non-fatal; leave nutrition summary null
+    }
+  }
+
+  // Tier 4 fallback: Sum combo component nutrition if available
+  if (
+    !finalNutritionSummary &&
+    isComboPlate &&
+    comboResult?.nutrition_breakdown &&
+    Array.isArray(comboResult.nutrition_breakdown) &&
+    comboResult.nutrition_breakdown.length > 0
+  ) {
+    try {
+      const comboSummary = comboResult.nutrition_breakdown.reduce(
+        (acc, comp) => {
+          acc.energyKcal += comp.energyKcal || 0;
+          acc.protein_g += comp.protein_g || 0;
+          acc.fat_g += comp.fat_g || 0;
+          acc.carbs_g += comp.carbs_g || 0;
+          acc.sugar_g += comp.sugar_g || 0;
+          acc.fiber_g += comp.fiber_g || 0;
+          acc.sodium_mg += comp.sodium_mg || 0;
+          return acc;
+        },
+        { energyKcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, sugar_g: 0, fiber_g: 0, sodium_mg: 0 }
+      );
+      if (comboSummary.energyKcal > 0) {
+        finalNutritionSummary = comboSummary;
+        nutrition_source = "combo_decomposition";
+      }
+    } catch (e) {
+      // non-fatal
     }
   }
 
