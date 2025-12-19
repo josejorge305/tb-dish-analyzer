@@ -9361,6 +9361,8 @@ async function resolveRecipeWithCache(
   let cacheHit = false;
   let attempts = [];
 
+  // LATENCY OPTIMIZATION: Run primary providers (edamam, spoonacular) in parallel
+  // OpenAI is kept as final fallback since it's typically slower
   async function resolveFromProviders() {
     let selected = null;
     let candidateOut = null;
@@ -9368,29 +9370,58 @@ async function resolveRecipeWithCache(
     const providerList = Array.isArray(providersOverride)
       ? providersOverride
       : providerOrder(env);
-    for (const p of providerList) {
-      const fn = recipeProviderFns[p];
-      if (!fn) continue;
-      let candidate = null;
-      try {
-        candidate = await fn(env, dish, cuisine, lang);
-      } catch (err) {
-        console.warn(`[provider:${p}]`, err?.message || err);
-        continue;
-      }
-      if (candidate) {
-        lastAttempt = candidate;
-      }
-      if (
-        candidate &&
-        Array.isArray(candidate.ingredients) &&
-        candidate.ingredients.length
-      ) {
-        candidateOut = candidate;
-        selected = candidate.provider || p;
-        break;
+
+    // Separate primary providers from OpenAI fallback
+    const primaryProviders = providerList.filter(p => p !== 'openai' && recipeProviderFns[p]);
+    const hasOpenAIFallback = providerList.includes('openai') && recipeProviderFns.openai;
+
+    if (primaryProviders.length > 0) {
+      // Run primary providers in parallel
+      const results = await Promise.allSettled(
+        primaryProviders.map(async (p) => {
+          try {
+            const result = await recipeProviderFns[p](env, dish, cuisine, lang);
+            return { provider: p, result };
+          } catch (err) {
+            console.warn(`[provider:${p}]`, err?.message || err);
+            return { provider: p, result: null, error: err };
+          }
+        })
+      );
+
+      // Find first successful result in order of preference (maintains configured priority)
+      for (const p of primaryProviders) {
+        const settledResult = results.find(r =>
+          r.status === 'fulfilled' && r.value.provider === p
+        );
+        if (settledResult?.value?.result) {
+          const candidate = settledResult.value.result;
+          lastAttempt = candidate;
+          if (Array.isArray(candidate.ingredients) && candidate.ingredients.length) {
+            candidateOut = candidate;
+            selected = candidate.provider || p;
+            break;
+          }
+        }
       }
     }
+
+    // OpenAI fallback only if no primary provider succeeded
+    if (!candidateOut && hasOpenAIFallback) {
+      try {
+        const candidate = await recipeProviderFns.openai(env, dish, cuisine, lang);
+        if (candidate) {
+          lastAttempt = candidate;
+          if (Array.isArray(candidate.ingredients) && candidate.ingredients.length) {
+            candidateOut = candidate;
+            selected = candidate.provider || 'openai';
+          }
+        }
+      } catch (err) {
+        console.warn('[provider:openai]', err?.message || err);
+      }
+    }
+
     if (!candidateOut && lastAttempt) {
       candidateOut = lastAttempt;
       if (!selected) selected = lastAttempt.provider || null;
@@ -9477,16 +9508,18 @@ async function resolveRecipeWithCache(
   const kv = env.MENUS_CACHE;
   const dailyCap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
 
+  // LATENCY OPTIMIZATION: Batch KV lookups in parallel instead of sequential
   if (wantParse && ingLines.length && env.ZESTFUL_RAPID_KEY) {
     const cachedParsed = [];
     const missingIdx = [];
     if (kv) {
-      for (let i = 0; i < ingLines.length; i++) {
-        const k = `zestful:${ingLines[i].toLowerCase()}`;
-        let row = null;
-        try {
-          row = await kv.get(k, "json");
-        } catch {}
+      // Parallel KV reads instead of sequential loop
+      const kvPromises = ingLines.map((line, i) => {
+        const k = `zestful:${line.toLowerCase()}`;
+        return kv.get(k, "json").then(row => ({ i, row })).catch(() => ({ i, row: null }));
+      });
+      const kvResults = await Promise.all(kvPromises);
+      for (const { i, row } of kvResults) {
         if (row) cachedParsed[i] = row;
         else missingIdx.push(i);
       }
@@ -9513,14 +9546,13 @@ async function resolveRecipeWithCache(
       if (Array.isArray(zest) && zest.length) {
         filled = zest;
         if (kv) {
-          for (let i = 0; i < linesToParse.length; i++) {
-            const k = `zestful:${linesToParse[i].toLowerCase()}`;
-            if (zest[i]) {
-              await kv.put(k, JSON.stringify(zest[i]), {
-                expirationTtl: 60 * 60 * 24 * 30
-              });
-            }
-          }
+          // Parallel KV writes instead of sequential loop
+          const putPromises = linesToParse.map((line, i) => {
+            if (!zest[i]) return Promise.resolve();
+            const k = `zestful:${line.toLowerCase()}`;
+            return kv.put(k, JSON.stringify(zest[i]), { expirationTtl: 60 * 60 * 24 * 30 });
+          });
+          await Promise.all(putPromises);
         }
         await incZestfulCount(env, toParse);
       }
@@ -9542,16 +9574,17 @@ async function resolveRecipeWithCache(
       }
       const zest = await callZestful(env, linesToParse);
       if (Array.isArray(zest) && zest.length) {
+        // Parallel filling and KV writes
+        const putPromises = [];
         for (let j = 0; j < linesToParse.length; j++) {
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
             const k = `zestful:${ingLines[i].toLowerCase()}`;
-            await kv.put(k, JSON.stringify(zest[j]), {
-              expirationTtl: 60 * 60 * 24 * 30
-            });
+            putPromises.push(kv.put(k, JSON.stringify(zest[j]), { expirationTtl: 60 * 60 * 24 * 30 }));
           }
         }
+        if (putPromises.length) await Promise.all(putPromises);
         await incZestfulCount(env, toParse);
       }
     }
@@ -18738,31 +18771,53 @@ async function runDishAnalysis(env, body, ctx) {
   let fatsecretNutritionBreakdown = null;
   let fsComponentAllergens = null;
 
-  const tRecipeStart = Date.now();
-  const recipeResult = await resolveRecipeWithCache(env, {
-    dishTitle: dishName,
-    placeId: body.placeId || body.place_id || "",
-    cuisine: body.cuisine || "",
-    lang: body.lang || "en",
-    forceReanalyze: forceReanalyze,
-    classify: true,
-    shape: "recipe_card",
-    providersOverride: Array.isArray(body.providers)
-      ? body.providers.map((p) => String(p || "").toLowerCase())
-      : null,
-    parse: true,
-    userId: body.user_id || body.userId || "",
-    devFlag
-  });
-  debug.t_recipe_ms = Date.now() - tRecipeStart;
+  // ========== LATENCY OPTIMIZATION: Run recipe + combo in parallel ==========
+  // Combo detection only needs dishName/restaurantName, not recipe result
+  const tParallelStart = Date.now();
 
-  // ========== Combo/Platter Decomposition ==========
-  // Check if this is a combo dish and decompose into components
+  const recipePromise = (async () => {
+    const t0 = Date.now();
+    const result = await resolveRecipeWithCache(env, {
+      dishTitle: dishName,
+      placeId: body.placeId || body.place_id || "",
+      cuisine: body.cuisine || "",
+      lang: body.lang || "en",
+      forceReanalyze: forceReanalyze,
+      classify: true,
+      shape: "recipe_card",
+      providersOverride: Array.isArray(body.providers)
+        ? body.providers.map((p) => String(p || "").toLowerCase())
+        : null,
+      parse: true,
+      userId: body.user_id || body.userId || "",
+      devFlag
+    });
+    debug.t_recipe_ms = Date.now() - t0;
+    return result;
+  })();
+
+  const comboPromise = (async () => {
+    const t0 = Date.now();
+    try {
+      const result = await resolveComboComponents(env, dishName, restaurantName);
+      debug.t_combo_ms = Date.now() - t0;
+      return { ok: true, result };
+    } catch (comboErr) {
+      debug.t_combo_ms = Date.now() - t0;
+      debug.combo_error = String(comboErr);
+      return { ok: false, error: comboErr };
+    }
+  })();
+
+  // Wait for both in parallel
+  const [recipeResult, comboSettled] = await Promise.all([recipePromise, comboPromise]);
+  debug.t_parallel_recipe_combo_ms = Date.now() - tParallelStart;
+
+  // Process combo result
   let comboResult = null;
   let isComboPlate = false;
-  const tComboStart = Date.now();
-  try {
-    comboResult = await resolveComboComponents(env, dishName, restaurantName);
+  if (comboSettled.ok) {
+    comboResult = comboSettled.result;
     isComboPlate = comboResult?.isCombo === true;
     if (comboResult?.debug) {
       debug.combo = comboResult.debug;
@@ -18772,10 +18827,7 @@ async function runDishAnalysis(env, body, ctx) {
       debug.combo_source = comboResult.source;
       debug.combo_components_count = comboResult.plate_components.length;
     }
-  } catch (comboErr) {
-    debug.combo_error = String(comboErr);
   }
-  debug.t_combo_ms = Date.now() - tComboStart;
 
   devFlag =
     devFlag || recipeResult?.devFlag || recipeResult?.out?.devFlag || false;
@@ -19131,28 +19183,23 @@ async function runDishAnalysis(env, body, ctx) {
     return parts.length ? parts : [];
   })();
 
+  // LATENCY OPTIMIZATION: Start FatSecret as a promise to run parallel with LLMs
   const tFatsecretStart = Date.now();
-  const fatsecretResult = await classifyIngredientsWithFatSecret(
-    env,
-    ingredientsForLex,
-    "en"
-  );
-  debug.t_fatsecret_ms = Date.now() - tFatsecretStart;
-  const fatsecretHits =
-    fatsecretResult && fatsecretResult.ok
-      ? fatsecretResult.allIngredientHits || []
-      : [];
+  const fatsecretPromise = (async () => {
+    const result = await classifyIngredientsWithFatSecret(env, ingredientsForLex, "en");
+    debug.t_fatsecret_ms = Date.now() - tFatsecretStart;
+    return result;
+  })();
+
+  // These can be computed now (don't depend on FatSecret)
   const inferredTextHits = inferHitsFromText(dishName, menuDescription);
   const inferredIngredientHits = inferHitsFromIngredients(
     Array.isArray(ingredients) && ingredients.length
       ? ingredients
       : normalized.items || []
   );
-  const combinedHits = [
-    ...fatsecretHits,
-    ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
-    ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
-  ];
+  // Note: combinedHits will be computed after awaiting fatsecretPromise
+  // This allows FatSecret to run in parallel with LLM calls
 
   const user_flags = body.user_flags || body.userFlags || {};
 
@@ -19352,6 +19399,7 @@ async function runDishAnalysis(env, body, ctx) {
   let organsLLMResult = null;
 
   const tLLMsStart = Date.now();
+  let combinedHits = []; // Will be populated after FatSecret completes
 
   if (useParallel) {
     const nutritionInput = finalNutritionSummary
@@ -19388,9 +19436,10 @@ async function runDishAnalysis(env, body, ctx) {
         })()
       : null;
 
-    const promises = [allergenPromise, organsPromise, nutritionPromise];
+    // LATENCY OPTIMIZATION: Include FatSecret in parallel with LLMs
+    const promises = [allergenPromise, organsPromise, nutritionPromise, fatsecretPromise];
 
-    const [allergenSettled, organsSettled, nutritionSettled] =
+    const [allergenSettled, organsSettled, nutritionSettled, fatsecretSettled] =
       await Promise.allSettled(promises);
 
     if (allergenSettled.status === "fulfilled") {
@@ -19416,6 +19465,15 @@ async function runDishAnalysis(env, body, ctx) {
     } else {
       nutrition_insights = null;
     }
+
+    // Process FatSecret result
+    const fatsecretResult = fatsecretSettled.status === "fulfilled" ? fatsecretSettled.value : null;
+    const fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
+    combinedHits = [
+      ...fatsecretHits,
+      ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
+      ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
+    ];
   } else {
     allergenMiniResult = await (async () => {
       const t0 = Date.now();
@@ -19446,6 +19504,15 @@ async function runDishAnalysis(env, body, ctx) {
         return res;
       })();
     }
+
+    // Await FatSecret in non-parallel mode
+    const fatsecretResult = await fatsecretPromise;
+    const fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
+    combinedHits = [
+      ...fatsecretHits,
+      ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
+      ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
+    ];
   }
 
   const tLLMsEnd = Date.now();
