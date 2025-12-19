@@ -2568,36 +2568,36 @@ async function lookupComboFromDB(env, dishName, restaurantName) {
   const chain = normalizeRestaurantChain(restaurantName);
 
   try {
-    // First try exact match with restaurant chain
-    let combo = null;
-    if (chain) {
-      const exactResult = await env.D1_DB.prepare(
-        `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain = ?`
-      )
-        .bind(normalizedDish, chain)
-        .first();
-      combo = exactResult;
-    }
-
-    // If not found, try generic (no chain)
-    if (!combo) {
-      const genericResult = await env.D1_DB.prepare(
+    // LATENCY OPTIMIZATION: Run all combo lookups in parallel
+    // Then pick result in preference order: exact > generic > alias
+    const [exactResult, genericResult, aliasResult] = await Promise.all([
+      // Exact match with restaurant chain
+      chain
+        ? env.D1_DB.prepare(
+            `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain = ?`
+          )
+            .bind(normalizedDish, chain)
+            .first()
+            .catch(() => null)
+        : Promise.resolve(null),
+      // Generic match (no chain)
+      env.D1_DB.prepare(
         `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain IS NULL`
       )
         .bind(normalizedDish)
-        .first();
-      combo = genericResult;
-    }
-
-    // If still not found, try alias search
-    if (!combo) {
-      const aliasResult = await env.D1_DB.prepare(
+        .first()
+        .catch(() => null),
+      // Alias search
+      env.D1_DB.prepare(
         `SELECT * FROM combo_dishes WHERE aliases_json LIKE ?`
       )
         .bind(`%"${normalizedDish}"%`)
-        .first();
-      combo = aliasResult;
-    }
+        .first()
+        .catch(() => null)
+    ]);
+
+    // Pick first match in preference order
+    const combo = exactResult || genericResult || aliasResult;
 
     if (!combo) {
       return { found: false, combo: null, components: [] };
@@ -5803,10 +5803,11 @@ async function putCachedNutrition(env, name, data) {
   return payload;
 }
 
+// LATENCY OPTIMIZATION: Process all ingredients in parallel instead of sequential
 async function enrichWithNutrition(env, rows = []) {
-  for (const row of rows) {
+  await Promise.all(rows.map(async (row) => {
     const q = (row?.name || row?.original || "").trim();
-    if (!q) continue;
+    if (!q) return;
     let hit = await getCachedNutrition(env, q);
     if (!hit) {
       hit = await callUSDAFDC(env, q);
@@ -5826,7 +5827,7 @@ async function enrichWithNutrition(env, rows = []) {
         source: hit.source || "USDA_FDC"
       };
     }
-  }
+  }));
   return rows;
 }
 
@@ -9896,54 +9897,84 @@ async function handleRecipeResolve(env, request, url, ctx) {
           nutmeg: ["myristicin"]
         };
         const seenCompounds = new Set();
+
+        // LATENCY OPTIMIZATION: Parallelize compound lookups
+        // Step 1: Gather all search terms with their ingredient context
+        const searchTasks = [];
         for (const ing of ingredients) {
           const term = (ing?.name || "").toLowerCase().trim();
           if (!term) continue;
-
-          // Use ingredient term + any bridged compound hints
           const searchTerms = [term, ...(BRIDGE[term] || [])];
           for (const sTerm of searchTerms) {
-            const cRes = await env.D1_DB.prepare(
-              `SELECT id, name, common_name, cid
-                        FROM compounds
-                        WHERE LOWER(name) = ? OR LOWER(common_name) = ?
-                           OR LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
-                        ORDER BY name LIMIT 5`
-            )
-              .bind(sTerm, sTerm, `%${sTerm}%`, `%${sTerm}%`)
-              .all();
+            searchTasks.push({ sTerm, ingName: ing.name });
+          }
+        }
 
-            const comps = cRes?.results || [];
-            for (const c of comps) {
-              const key = (c.name || "").toLowerCase();
-              if (seenCompounds.has(key)) continue;
-              seenCompounds.add(key);
+        // Step 2: Run all compound lookups in parallel
+        const compoundResults = await Promise.all(
+          searchTasks.map(async ({ sTerm, ingName }) => {
+            try {
+              const cRes = await env.D1_DB.prepare(
+                `SELECT id, name, common_name, cid
+                 FROM compounds
+                 WHERE LOWER(name) = ? OR LOWER(common_name) = ?
+                    OR LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+                 ORDER BY name LIMIT 5`
+              )
+                .bind(sTerm, sTerm, `%${sTerm}%`, `%${sTerm}%`)
+                .all();
+              return { comps: cRes?.results || [], ingName };
+            } catch {
+              return { comps: [], ingName };
+            }
+          })
+        );
 
+        // Step 3: Collect unique compounds needing organ effect lookup
+        const uniqueCompounds = new Map(); // id -> { compound, ingName }
+        for (const { comps, ingName } of compoundResults) {
+          for (const c of comps) {
+            const key = (c.name || "").toLowerCase();
+            if (seenCompounds.has(key)) continue;
+            seenCompounds.add(key);
+            uniqueCompounds.set(c.id, { compound: c, ingName });
+          }
+        }
+
+        // Step 4: Run all organ effect lookups in parallel
+        const effectResults = await Promise.all(
+          Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingName }]) => {
+            try {
               const eRes = await env.D1_DB.prepare(
                 `SELECT organ, effect, strength, notes
-                          FROM compound_organ_effects
-                          WHERE compound_id = ?`
+                 FROM compound_organ_effects
+                 WHERE compound_id = ?`
               )
-                .bind(c.id)
+                .bind(compId)
                 .all();
-              const effs = eRes?.results || [];
-
-              foundCompounds.push({
-                name: c.name,
-                from_ingredient: ing.name,
-                cid: c.cid || null
-              });
-              for (const e of effs) {
-                const k = e.organ || "unknown";
-                if (!organMap[k]) organMap[k] = [];
-                organMap[k].push({
-                  compound: c.name,
-                  effect: e.effect,
-                  strength: e.strength,
-                  notes: e.notes || null
-                });
-              }
+              return { compound, ingName, effects: eRes?.results || [] };
+            } catch {
+              return { compound, ingName, effects: [] };
             }
+          })
+        );
+
+        // Step 5: Build results from parallel lookups
+        for (const { compound: c, ingName, effects } of effectResults) {
+          foundCompounds.push({
+            name: c.name,
+            from_ingredient: ingName,
+            cid: c.cid || null
+          });
+          for (const e of effects) {
+            const k = e.organ || "unknown";
+            if (!organMap[k]) organMap[k] = [];
+            organMap[k].push({
+              compound: c.name,
+              effect: e.effect,
+              strength: e.strength,
+              notes: e.notes || null
+            });
           }
         }
         // De-duplicate organ effects (ignore notes)
@@ -10625,45 +10656,79 @@ async function handleRecipeResolve(env, request, url, ctx) {
         nutmeg: ["myristicin"]
       };
       const seenCompounds = new Set();
+
+      // LATENCY OPTIMIZATION: Parallelize compound lookups
+      // Step 1: Gather all ingredient terms
+      const searchTasks = [];
       for (const ing of ingredients) {
         const term = (ing?.name || "").toLowerCase().trim();
         if (!term) continue;
+        searchTasks.push({ term, ingName: ing.name });
+      }
 
-        const cRes = await env.D1_DB.prepare(
-          `SELECT id, name, common_name, cid
-           FROM compounds
-           WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
-           ORDER BY name LIMIT 5`
-        )
-          .bind(`%${term}%`, `%${term}%`)
-          .all();
-
-        const comps = cRes?.results || [];
-        for (const c of comps) {
-          const eRes = await env.D1_DB.prepare(
-            `SELECT organ, effect, strength, notes
-             FROM compound_organ_effects
-             WHERE compound_id = ?`
-          )
-            .bind(c.id)
-            .all();
-          const effs = eRes?.results || [];
-
-          foundCompounds.push({
-            name: c.name,
-            from_ingredient: ing.name,
-            cid: c.cid || null
-          });
-          for (const e of effs) {
-            const k = e.organ || "unknown";
-            if (!organMap[k]) organMap[k] = [];
-            organMap[k].push({
-              compound: c.name,
-              effect: e.effect,
-              strength: e.strength,
-              notes: e.notes || null
-            });
+      // Step 2: Run all compound lookups in parallel
+      const compoundResults = await Promise.all(
+        searchTasks.map(async ({ term, ingName }) => {
+          try {
+            const cRes = await env.D1_DB.prepare(
+              `SELECT id, name, common_name, cid
+               FROM compounds
+               WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+               ORDER BY name LIMIT 5`
+            )
+              .bind(`%${term}%`, `%${term}%`)
+              .all();
+            return { comps: cRes?.results || [], ingName };
+          } catch {
+            return { comps: [], ingName };
           }
+        })
+      );
+
+      // Step 3: Collect unique compounds needing organ effect lookup
+      const uniqueCompounds = new Map(); // id -> { compound, ingName }
+      for (const { comps, ingName } of compoundResults) {
+        for (const c of comps) {
+          if (!uniqueCompounds.has(c.id)) {
+            uniqueCompounds.set(c.id, { compound: c, ingName });
+          }
+        }
+      }
+
+      // Step 4: Run all organ effect lookups in parallel
+      const effectResults = await Promise.all(
+        Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingName }]) => {
+          try {
+            const eRes = await env.D1_DB.prepare(
+              `SELECT organ, effect, strength, notes
+               FROM compound_organ_effects
+               WHERE compound_id = ?`
+            )
+              .bind(compId)
+              .all();
+            return { compound, ingName, effects: eRes?.results || [] };
+          } catch {
+            return { compound, ingName, effects: [] };
+          }
+        })
+      );
+
+      // Step 5: Build results from parallel lookups
+      for (const { compound: c, ingName, effects } of effectResults) {
+        foundCompounds.push({
+          name: c.name,
+          from_ingredient: ingName,
+          cid: c.cid || null
+        });
+        for (const e of effects) {
+          const k = e.organ || "unknown";
+          if (!organMap[k]) organMap[k] = [];
+          organMap[k].push({
+            compound: c.name,
+            effect: e.effect,
+            strength: e.strength,
+            notes: e.notes || null
+          });
         }
       }
 
@@ -18196,43 +18261,69 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
   const organs = {};
   const compoundsByOrgan = {};
 
-  for (const name of names) {
-    try {
-      const like = `%${name}%`;
-      const compRes = await env.D1_DB.prepare(
-        `SELECT id, name, common_name, cid
-         FROM compounds
-         WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
-         ORDER BY name LIMIT 3`
-      )
-        .bind(like, like)
-        .all();
-      const comps = compRes?.results || [];
-      for (const c of comps) {
+  // LATENCY OPTIMIZATION: Parallelize compound lookups
+  // Step 1: Run all compound lookups in parallel
+  const compoundResults = await Promise.all(
+    names.map(async (name) => {
+      try {
+        const like = `%${name}%`;
+        const compRes = await env.D1_DB.prepare(
+          `SELECT id, name, common_name, cid
+           FROM compounds
+           WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+           ORDER BY name LIMIT 3`
+        )
+          .bind(like, like)
+          .all();
+        return { name, comps: compRes?.results || [] };
+      } catch {
+        return { name, comps: [] };
+      }
+    })
+  );
+
+  // Step 2: Collect unique compound IDs for organ effect lookup
+  const uniqueCompounds = new Map(); // id -> { compound, ingredientName }
+  for (const { name, comps } of compoundResults) {
+    for (const c of comps) {
+      if (!uniqueCompounds.has(c.id)) {
+        uniqueCompounds.set(c.id, { compound: c, ingredientName: name });
+      }
+    }
+  }
+
+  // Step 3: Run all organ effect lookups in parallel
+  const effectResults = await Promise.all(
+    Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingredientName }]) => {
+      try {
         const effRes = await env.D1_DB.prepare(
           `SELECT organ, effect, strength
            FROM compound_organ_effects
            WHERE compound_id = ?`
         )
-          .bind(c.id)
+          .bind(compId)
           .all();
-        const effs = effRes?.results || [];
-        for (const e of effs) {
-          const organKey = (e.organ || "unknown").toLowerCase().trim();
-          if (!organKey) continue;
-          if (!organs[organKey]) {
-            organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
-            compoundsByOrgan[organKey] = new Set();
-          }
-          if (e.effect === "benefit") organs[organKey].plus++;
-          else if (e.effect === "risk") organs[organKey].minus++;
-          else organs[organKey].neutral++;
-
-          compoundsByOrgan[organKey].add(c.name || c.common_name || name);
-        }
+        return { compound, ingredientName, effects: effRes?.results || [] };
+      } catch {
+        return { compound, ingredientName, effects: [] };
       }
-    } catch {
-      // ignore individual ingredient failures
+    })
+  );
+
+  // Step 4: Build results from parallel lookups
+  for (const { compound: c, ingredientName, effects } of effectResults) {
+    for (const e of effects) {
+      const organKey = (e.organ || "unknown").toLowerCase().trim();
+      if (!organKey) continue;
+      if (!organs[organKey]) {
+        organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
+        compoundsByOrgan[organKey] = new Set();
+      }
+      if (e.effect === "benefit") organs[organKey].plus++;
+      else if (e.effect === "risk") organs[organKey].minus++;
+      else organs[organKey].neutral++;
+
+      compoundsByOrgan[organKey].add(c.name || c.common_name || ingredientName);
     }
   }
 
