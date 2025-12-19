@@ -4069,6 +4069,16 @@ async function setUserAllergens(env, userId, allergens) {
   if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
 
   try {
+    // Ensure user profile exists (foreign key requirement)
+    const existing = await getUserProfile(env, userId);
+    if (!existing) {
+      const now = Math.floor(Date.now() / 1000);
+      await env.D1_DB.prepare(`
+        INSERT INTO user_profiles (user_id, created_at, updated_at)
+        VALUES (?, ?, ?)
+      `).bind(userId, now, now).run();
+    }
+
     // Delete existing allergens
     await env.D1_DB.prepare(
       'DELETE FROM user_allergens WHERE user_id = ?'
@@ -4110,6 +4120,16 @@ async function setUserOrganPriorities(env, userId, organs) {
   if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
 
   try {
+    // Ensure user profile exists (foreign key requirement)
+    const existing = await getUserProfile(env, userId);
+    if (!existing) {
+      const now = Math.floor(Date.now() / 1000);
+      await env.D1_DB.prepare(`
+        INSERT INTO user_profiles (user_id, created_at, updated_at)
+        VALUES (?, ?, ?)
+      `).bind(userId, now, now).run();
+    }
+
     // Delete existing priorities
     await env.D1_DB.prepare(
       'DELETE FROM user_organ_priorities WHERE user_id = ?'
@@ -4289,6 +4309,15 @@ async function logMeal(env, userId, mealData) {
   const mealType = mealData.meal_type || inferMealType(hour);
 
   try {
+    // Ensure user profile exists (foreign key requirement)
+    const existing = await getUserProfile(env, userId);
+    if (!existing) {
+      await env.D1_DB.prepare(`
+        INSERT INTO user_profiles (user_id, created_at, updated_at)
+        VALUES (?, ?, ?)
+      `).bind(userId, now, now).run();
+    }
+
     // Check for duplicate logging within 2 minutes
     const recentMeal = await env.D1_DB.prepare(`
       SELECT id FROM logged_meals
