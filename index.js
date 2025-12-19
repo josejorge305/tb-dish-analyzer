@@ -2568,36 +2568,36 @@ async function lookupComboFromDB(env, dishName, restaurantName) {
   const chain = normalizeRestaurantChain(restaurantName);
 
   try {
-    // First try exact match with restaurant chain
-    let combo = null;
-    if (chain) {
-      const exactResult = await env.D1_DB.prepare(
-        `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain = ?`
-      )
-        .bind(normalizedDish, chain)
-        .first();
-      combo = exactResult;
-    }
-
-    // If not found, try generic (no chain)
-    if (!combo) {
-      const genericResult = await env.D1_DB.prepare(
+    // LATENCY OPTIMIZATION: Run all combo lookups in parallel
+    // Then pick result in preference order: exact > generic > alias
+    const [exactResult, genericResult, aliasResult] = await Promise.all([
+      // Exact match with restaurant chain
+      chain
+        ? env.D1_DB.prepare(
+            `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain = ?`
+          )
+            .bind(normalizedDish, chain)
+            .first()
+            .catch(() => null)
+        : Promise.resolve(null),
+      // Generic match (no chain)
+      env.D1_DB.prepare(
         `SELECT * FROM combo_dishes WHERE dish_name = ? AND restaurant_chain IS NULL`
       )
         .bind(normalizedDish)
-        .first();
-      combo = genericResult;
-    }
-
-    // If still not found, try alias search
-    if (!combo) {
-      const aliasResult = await env.D1_DB.prepare(
+        .first()
+        .catch(() => null),
+      // Alias search
+      env.D1_DB.prepare(
         `SELECT * FROM combo_dishes WHERE aliases_json LIKE ?`
       )
         .bind(`%"${normalizedDish}"%`)
-        .first();
-      combo = aliasResult;
-    }
+        .first()
+        .catch(() => null)
+    ]);
+
+    // Pick first match in preference order
+    const combo = exactResult || genericResult || aliasResult;
 
     if (!combo) {
       return { found: false, combo: null, components: [] };
@@ -5832,10 +5832,11 @@ async function putCachedNutrition(env, name, data) {
   return payload;
 }
 
+// LATENCY OPTIMIZATION: Process all ingredients in parallel instead of sequential
 async function enrichWithNutrition(env, rows = []) {
-  for (const row of rows) {
+  await Promise.all(rows.map(async (row) => {
     const q = (row?.name || row?.original || "").trim();
-    if (!q) continue;
+    if (!q) return;
     let hit = await getCachedNutrition(env, q);
     if (!hit) {
       hit = await callUSDAFDC(env, q);
@@ -5855,7 +5856,7 @@ async function enrichWithNutrition(env, rows = []) {
         source: hit.source || "USDA_FDC"
       };
     }
-  }
+  }));
   return rows;
 }
 
@@ -8560,19 +8561,29 @@ async function callUSDAFDC(env, name) {
 
   foods.sort((a, b) => qualityScore(b) - qualityScore(a));
 
+  // LATENCY OPTIMIZATION: Fetch all food details in parallel
+  const detailResults = await Promise.all(
+    foods.map(async (food) => {
+      try {
+        const detail = await fetch(
+          `https://${host}/fdc/v1/food/${food.fdcId}?api_key=${key}`,
+          { headers: { accept: "application/json" } }
+        );
+        if (!detail.ok) return null;
+        return await detail.json();
+      } catch {
+        return null;
+      }
+    })
+  );
+
   let bestMatchEvenIfProcessed = null;
   let bestWithMacros = null;
   let firstPayload = null;
 
-  for (const food of foods) {
-    const detail = await fetch(
-      `https://${host}/fdc/v1/food/${food.fdcId}?api_key=${key}`,
-      {
-        headers: { accept: "application/json" }
-      }
-    );
-    if (!detail.ok) continue;
-    const full = await detail.json();
+  // Process results in sorted order (same logic as before)
+  for (const full of detailResults) {
+    if (!full) continue;
     const macros = extractMacrosFromFDC(full);
     const nutrients = macros?.perServing
       ? { ...macros.perServing }
@@ -9390,6 +9401,8 @@ async function resolveRecipeWithCache(
   let cacheHit = false;
   let attempts = [];
 
+  // LATENCY OPTIMIZATION: Run primary providers (edamam, spoonacular) in parallel
+  // OpenAI is kept as final fallback since it's typically slower
   async function resolveFromProviders() {
     let selected = null;
     let candidateOut = null;
@@ -9397,29 +9410,58 @@ async function resolveRecipeWithCache(
     const providerList = Array.isArray(providersOverride)
       ? providersOverride
       : providerOrder(env);
-    for (const p of providerList) {
-      const fn = recipeProviderFns[p];
-      if (!fn) continue;
-      let candidate = null;
-      try {
-        candidate = await fn(env, dish, cuisine, lang);
-      } catch (err) {
-        console.warn(`[provider:${p}]`, err?.message || err);
-        continue;
-      }
-      if (candidate) {
-        lastAttempt = candidate;
-      }
-      if (
-        candidate &&
-        Array.isArray(candidate.ingredients) &&
-        candidate.ingredients.length
-      ) {
-        candidateOut = candidate;
-        selected = candidate.provider || p;
-        break;
+
+    // Separate primary providers from OpenAI fallback
+    const primaryProviders = providerList.filter(p => p !== 'openai' && recipeProviderFns[p]);
+    const hasOpenAIFallback = providerList.includes('openai') && recipeProviderFns.openai;
+
+    if (primaryProviders.length > 0) {
+      // Run primary providers in parallel
+      const results = await Promise.allSettled(
+        primaryProviders.map(async (p) => {
+          try {
+            const result = await recipeProviderFns[p](env, dish, cuisine, lang);
+            return { provider: p, result };
+          } catch (err) {
+            console.warn(`[provider:${p}]`, err?.message || err);
+            return { provider: p, result: null, error: err };
+          }
+        })
+      );
+
+      // Find first successful result in order of preference (maintains configured priority)
+      for (const p of primaryProviders) {
+        const settledResult = results.find(r =>
+          r.status === 'fulfilled' && r.value.provider === p
+        );
+        if (settledResult?.value?.result) {
+          const candidate = settledResult.value.result;
+          lastAttempt = candidate;
+          if (Array.isArray(candidate.ingredients) && candidate.ingredients.length) {
+            candidateOut = candidate;
+            selected = candidate.provider || p;
+            break;
+          }
+        }
       }
     }
+
+    // OpenAI fallback only if no primary provider succeeded
+    if (!candidateOut && hasOpenAIFallback) {
+      try {
+        const candidate = await recipeProviderFns.openai(env, dish, cuisine, lang);
+        if (candidate) {
+          lastAttempt = candidate;
+          if (Array.isArray(candidate.ingredients) && candidate.ingredients.length) {
+            candidateOut = candidate;
+            selected = candidate.provider || 'openai';
+          }
+        }
+      } catch (err) {
+        console.warn('[provider:openai]', err?.message || err);
+      }
+    }
+
     if (!candidateOut && lastAttempt) {
       candidateOut = lastAttempt;
       if (!selected) selected = lastAttempt.provider || null;
@@ -9506,16 +9548,18 @@ async function resolveRecipeWithCache(
   const kv = env.MENUS_CACHE;
   const dailyCap = parseInt(env.ZESTFUL_DAILY_CAP || "0", 10);
 
+  // LATENCY OPTIMIZATION: Batch KV lookups in parallel instead of sequential
   if (wantParse && ingLines.length && env.ZESTFUL_RAPID_KEY) {
     const cachedParsed = [];
     const missingIdx = [];
     if (kv) {
-      for (let i = 0; i < ingLines.length; i++) {
-        const k = `zestful:${ingLines[i].toLowerCase()}`;
-        let row = null;
-        try {
-          row = await kv.get(k, "json");
-        } catch {}
+      // Parallel KV reads instead of sequential loop
+      const kvPromises = ingLines.map((line, i) => {
+        const k = `zestful:${line.toLowerCase()}`;
+        return kv.get(k, "json").then(row => ({ i, row })).catch(() => ({ i, row: null }));
+      });
+      const kvResults = await Promise.all(kvPromises);
+      for (const { i, row } of kvResults) {
         if (row) cachedParsed[i] = row;
         else missingIdx.push(i);
       }
@@ -9542,14 +9586,13 @@ async function resolveRecipeWithCache(
       if (Array.isArray(zest) && zest.length) {
         filled = zest;
         if (kv) {
-          for (let i = 0; i < linesToParse.length; i++) {
-            const k = `zestful:${linesToParse[i].toLowerCase()}`;
-            if (zest[i]) {
-              await kv.put(k, JSON.stringify(zest[i]), {
-                expirationTtl: 60 * 60 * 24 * 30
-              });
-            }
-          }
+          // Parallel KV writes instead of sequential loop
+          const putPromises = linesToParse.map((line, i) => {
+            if (!zest[i]) return Promise.resolve();
+            const k = `zestful:${line.toLowerCase()}`;
+            return kv.put(k, JSON.stringify(zest[i]), { expirationTtl: 60 * 60 * 24 * 30 });
+          });
+          await Promise.all(putPromises);
         }
         await incZestfulCount(env, toParse);
       }
@@ -9571,16 +9614,17 @@ async function resolveRecipeWithCache(
       }
       const zest = await callZestful(env, linesToParse);
       if (Array.isArray(zest) && zest.length) {
+        // Parallel filling and KV writes
+        const putPromises = [];
         for (let j = 0; j < linesToParse.length; j++) {
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
             const k = `zestful:${ingLines[i].toLowerCase()}`;
-            await kv.put(k, JSON.stringify(zest[j]), {
-              expirationTtl: 60 * 60 * 24 * 30
-            });
+            putPromises.push(kv.put(k, JSON.stringify(zest[j]), { expirationTtl: 60 * 60 * 24 * 30 }));
           }
         }
+        if (putPromises.length) await Promise.all(putPromises);
         await incZestfulCount(env, toParse);
       }
     }
@@ -9892,54 +9936,84 @@ async function handleRecipeResolve(env, request, url, ctx) {
           nutmeg: ["myristicin"]
         };
         const seenCompounds = new Set();
+
+        // LATENCY OPTIMIZATION: Parallelize compound lookups
+        // Step 1: Gather all search terms with their ingredient context
+        const searchTasks = [];
         for (const ing of ingredients) {
           const term = (ing?.name || "").toLowerCase().trim();
           if (!term) continue;
-
-          // Use ingredient term + any bridged compound hints
           const searchTerms = [term, ...(BRIDGE[term] || [])];
           for (const sTerm of searchTerms) {
-            const cRes = await env.D1_DB.prepare(
-              `SELECT id, name, common_name, cid
-                        FROM compounds
-                        WHERE LOWER(name) = ? OR LOWER(common_name) = ?
-                           OR LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
-                        ORDER BY name LIMIT 5`
-            )
-              .bind(sTerm, sTerm, `%${sTerm}%`, `%${sTerm}%`)
-              .all();
+            searchTasks.push({ sTerm, ingName: ing.name });
+          }
+        }
 
-            const comps = cRes?.results || [];
-            for (const c of comps) {
-              const key = (c.name || "").toLowerCase();
-              if (seenCompounds.has(key)) continue;
-              seenCompounds.add(key);
+        // Step 2: Run all compound lookups in parallel
+        const compoundResults = await Promise.all(
+          searchTasks.map(async ({ sTerm, ingName }) => {
+            try {
+              const cRes = await env.D1_DB.prepare(
+                `SELECT id, name, common_name, cid
+                 FROM compounds
+                 WHERE LOWER(name) = ? OR LOWER(common_name) = ?
+                    OR LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+                 ORDER BY name LIMIT 5`
+              )
+                .bind(sTerm, sTerm, `%${sTerm}%`, `%${sTerm}%`)
+                .all();
+              return { comps: cRes?.results || [], ingName };
+            } catch {
+              return { comps: [], ingName };
+            }
+          })
+        );
 
+        // Step 3: Collect unique compounds needing organ effect lookup
+        const uniqueCompounds = new Map(); // id -> { compound, ingName }
+        for (const { comps, ingName } of compoundResults) {
+          for (const c of comps) {
+            const key = (c.name || "").toLowerCase();
+            if (seenCompounds.has(key)) continue;
+            seenCompounds.add(key);
+            uniqueCompounds.set(c.id, { compound: c, ingName });
+          }
+        }
+
+        // Step 4: Run all organ effect lookups in parallel
+        const effectResults = await Promise.all(
+          Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingName }]) => {
+            try {
               const eRes = await env.D1_DB.prepare(
                 `SELECT organ, effect, strength, notes
-                          FROM compound_organ_effects
-                          WHERE compound_id = ?`
+                 FROM compound_organ_effects
+                 WHERE compound_id = ?`
               )
-                .bind(c.id)
+                .bind(compId)
                 .all();
-              const effs = eRes?.results || [];
-
-              foundCompounds.push({
-                name: c.name,
-                from_ingredient: ing.name,
-                cid: c.cid || null
-              });
-              for (const e of effs) {
-                const k = e.organ || "unknown";
-                if (!organMap[k]) organMap[k] = [];
-                organMap[k].push({
-                  compound: c.name,
-                  effect: e.effect,
-                  strength: e.strength,
-                  notes: e.notes || null
-                });
-              }
+              return { compound, ingName, effects: eRes?.results || [] };
+            } catch {
+              return { compound, ingName, effects: [] };
             }
+          })
+        );
+
+        // Step 5: Build results from parallel lookups
+        for (const { compound: c, ingName, effects } of effectResults) {
+          foundCompounds.push({
+            name: c.name,
+            from_ingredient: ingName,
+            cid: c.cid || null
+          });
+          for (const e of effects) {
+            const k = e.organ || "unknown";
+            if (!organMap[k]) organMap[k] = [];
+            organMap[k].push({
+              compound: c.name,
+              effect: e.effect,
+              strength: e.strength,
+              notes: e.notes || null
+            });
           }
         }
         // De-duplicate organ effects (ignore notes)
@@ -10621,45 +10695,79 @@ async function handleRecipeResolve(env, request, url, ctx) {
         nutmeg: ["myristicin"]
       };
       const seenCompounds = new Set();
+
+      // LATENCY OPTIMIZATION: Parallelize compound lookups
+      // Step 1: Gather all ingredient terms
+      const searchTasks = [];
       for (const ing of ingredients) {
         const term = (ing?.name || "").toLowerCase().trim();
         if (!term) continue;
+        searchTasks.push({ term, ingName: ing.name });
+      }
 
-        const cRes = await env.D1_DB.prepare(
-          `SELECT id, name, common_name, cid
-           FROM compounds
-           WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
-           ORDER BY name LIMIT 5`
-        )
-          .bind(`%${term}%`, `%${term}%`)
-          .all();
-
-        const comps = cRes?.results || [];
-        for (const c of comps) {
-          const eRes = await env.D1_DB.prepare(
-            `SELECT organ, effect, strength, notes
-             FROM compound_organ_effects
-             WHERE compound_id = ?`
-          )
-            .bind(c.id)
-            .all();
-          const effs = eRes?.results || [];
-
-          foundCompounds.push({
-            name: c.name,
-            from_ingredient: ing.name,
-            cid: c.cid || null
-          });
-          for (const e of effs) {
-            const k = e.organ || "unknown";
-            if (!organMap[k]) organMap[k] = [];
-            organMap[k].push({
-              compound: c.name,
-              effect: e.effect,
-              strength: e.strength,
-              notes: e.notes || null
-            });
+      // Step 2: Run all compound lookups in parallel
+      const compoundResults = await Promise.all(
+        searchTasks.map(async ({ term, ingName }) => {
+          try {
+            const cRes = await env.D1_DB.prepare(
+              `SELECT id, name, common_name, cid
+               FROM compounds
+               WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+               ORDER BY name LIMIT 5`
+            )
+              .bind(`%${term}%`, `%${term}%`)
+              .all();
+            return { comps: cRes?.results || [], ingName };
+          } catch {
+            return { comps: [], ingName };
           }
+        })
+      );
+
+      // Step 3: Collect unique compounds needing organ effect lookup
+      const uniqueCompounds = new Map(); // id -> { compound, ingName }
+      for (const { comps, ingName } of compoundResults) {
+        for (const c of comps) {
+          if (!uniqueCompounds.has(c.id)) {
+            uniqueCompounds.set(c.id, { compound: c, ingName });
+          }
+        }
+      }
+
+      // Step 4: Run all organ effect lookups in parallel
+      const effectResults = await Promise.all(
+        Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingName }]) => {
+          try {
+            const eRes = await env.D1_DB.prepare(
+              `SELECT organ, effect, strength, notes
+               FROM compound_organ_effects
+               WHERE compound_id = ?`
+            )
+              .bind(compId)
+              .all();
+            return { compound, ingName, effects: eRes?.results || [] };
+          } catch {
+            return { compound, ingName, effects: [] };
+          }
+        })
+      );
+
+      // Step 5: Build results from parallel lookups
+      for (const { compound: c, ingName, effects } of effectResults) {
+        foundCompounds.push({
+          name: c.name,
+          from_ingredient: ingName,
+          cid: c.cid || null
+        });
+        for (const e of effects) {
+          const k = e.organ || "unknown";
+          if (!organMap[k]) organMap[k] = [];
+          organMap[k].push({
+            compound: c.name,
+            effect: e.effect,
+            strength: e.strength,
+            notes: e.notes || null
+          });
         }
       }
 
@@ -18192,43 +18300,69 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
   const organs = {};
   const compoundsByOrgan = {};
 
-  for (const name of names) {
-    try {
-      const like = `%${name}%`;
-      const compRes = await env.D1_DB.prepare(
-        `SELECT id, name, common_name, cid
-         FROM compounds
-         WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
-         ORDER BY name LIMIT 3`
-      )
-        .bind(like, like)
-        .all();
-      const comps = compRes?.results || [];
-      for (const c of comps) {
+  // LATENCY OPTIMIZATION: Parallelize compound lookups
+  // Step 1: Run all compound lookups in parallel
+  const compoundResults = await Promise.all(
+    names.map(async (name) => {
+      try {
+        const like = `%${name}%`;
+        const compRes = await env.D1_DB.prepare(
+          `SELECT id, name, common_name, cid
+           FROM compounds
+           WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
+           ORDER BY name LIMIT 3`
+        )
+          .bind(like, like)
+          .all();
+        return { name, comps: compRes?.results || [] };
+      } catch {
+        return { name, comps: [] };
+      }
+    })
+  );
+
+  // Step 2: Collect unique compound IDs for organ effect lookup
+  const uniqueCompounds = new Map(); // id -> { compound, ingredientName }
+  for (const { name, comps } of compoundResults) {
+    for (const c of comps) {
+      if (!uniqueCompounds.has(c.id)) {
+        uniqueCompounds.set(c.id, { compound: c, ingredientName: name });
+      }
+    }
+  }
+
+  // Step 3: Run all organ effect lookups in parallel
+  const effectResults = await Promise.all(
+    Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingredientName }]) => {
+      try {
         const effRes = await env.D1_DB.prepare(
           `SELECT organ, effect, strength
            FROM compound_organ_effects
            WHERE compound_id = ?`
         )
-          .bind(c.id)
+          .bind(compId)
           .all();
-        const effs = effRes?.results || [];
-        for (const e of effs) {
-          const organKey = (e.organ || "unknown").toLowerCase().trim();
-          if (!organKey) continue;
-          if (!organs[organKey]) {
-            organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
-            compoundsByOrgan[organKey] = new Set();
-          }
-          if (e.effect === "benefit") organs[organKey].plus++;
-          else if (e.effect === "risk") organs[organKey].minus++;
-          else organs[organKey].neutral++;
-
-          compoundsByOrgan[organKey].add(c.name || c.common_name || name);
-        }
+        return { compound, ingredientName, effects: effRes?.results || [] };
+      } catch {
+        return { compound, ingredientName, effects: [] };
       }
-    } catch {
-      // ignore individual ingredient failures
+    })
+  );
+
+  // Step 4: Build results from parallel lookups
+  for (const { compound: c, ingredientName, effects } of effectResults) {
+    for (const e of effects) {
+      const organKey = (e.organ || "unknown").toLowerCase().trim();
+      if (!organKey) continue;
+      if (!organs[organKey]) {
+        organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
+        compoundsByOrgan[organKey] = new Set();
+      }
+      if (e.effect === "benefit") organs[organKey].plus++;
+      else if (e.effect === "risk") organs[organKey].minus++;
+      else organs[organKey].neutral++;
+
+      compoundsByOrgan[organKey].add(c.name || c.common_name || ingredientName);
     }
   }
 
@@ -18767,31 +18901,53 @@ async function runDishAnalysis(env, body, ctx) {
   let fatsecretNutritionBreakdown = null;
   let fsComponentAllergens = null;
 
-  const tRecipeStart = Date.now();
-  const recipeResult = await resolveRecipeWithCache(env, {
-    dishTitle: dishName,
-    placeId: body.placeId || body.place_id || "",
-    cuisine: body.cuisine || "",
-    lang: body.lang || "en",
-    forceReanalyze: forceReanalyze,
-    classify: true,
-    shape: "recipe_card",
-    providersOverride: Array.isArray(body.providers)
-      ? body.providers.map((p) => String(p || "").toLowerCase())
-      : null,
-    parse: true,
-    userId: body.user_id || body.userId || "",
-    devFlag
-  });
-  debug.t_recipe_ms = Date.now() - tRecipeStart;
+  // ========== LATENCY OPTIMIZATION: Run recipe + combo in parallel ==========
+  // Combo detection only needs dishName/restaurantName, not recipe result
+  const tParallelStart = Date.now();
 
-  // ========== Combo/Platter Decomposition ==========
-  // Check if this is a combo dish and decompose into components
+  const recipePromise = (async () => {
+    const t0 = Date.now();
+    const result = await resolveRecipeWithCache(env, {
+      dishTitle: dishName,
+      placeId: body.placeId || body.place_id || "",
+      cuisine: body.cuisine || "",
+      lang: body.lang || "en",
+      forceReanalyze: forceReanalyze,
+      classify: true,
+      shape: "recipe_card",
+      providersOverride: Array.isArray(body.providers)
+        ? body.providers.map((p) => String(p || "").toLowerCase())
+        : null,
+      parse: true,
+      userId: body.user_id || body.userId || "",
+      devFlag
+    });
+    debug.t_recipe_ms = Date.now() - t0;
+    return result;
+  })();
+
+  const comboPromise = (async () => {
+    const t0 = Date.now();
+    try {
+      const result = await resolveComboComponents(env, dishName, restaurantName);
+      debug.t_combo_ms = Date.now() - t0;
+      return { ok: true, result };
+    } catch (comboErr) {
+      debug.t_combo_ms = Date.now() - t0;
+      debug.combo_error = String(comboErr);
+      return { ok: false, error: comboErr };
+    }
+  })();
+
+  // Wait for both in parallel
+  const [recipeResult, comboSettled] = await Promise.all([recipePromise, comboPromise]);
+  debug.t_parallel_recipe_combo_ms = Date.now() - tParallelStart;
+
+  // Process combo result
   let comboResult = null;
   let isComboPlate = false;
-  const tComboStart = Date.now();
-  try {
-    comboResult = await resolveComboComponents(env, dishName, restaurantName);
+  if (comboSettled.ok) {
+    comboResult = comboSettled.result;
     isComboPlate = comboResult?.isCombo === true;
     if (comboResult?.debug) {
       debug.combo = comboResult.debug;
@@ -18801,10 +18957,7 @@ async function runDishAnalysis(env, body, ctx) {
       debug.combo_source = comboResult.source;
       debug.combo_components_count = comboResult.plate_components.length;
     }
-  } catch (comboErr) {
-    debug.combo_error = String(comboErr);
   }
-  debug.t_combo_ms = Date.now() - tComboStart;
 
   devFlag =
     devFlag || recipeResult?.devFlag || recipeResult?.out?.devFlag || false;
@@ -19160,28 +19313,23 @@ async function runDishAnalysis(env, body, ctx) {
     return parts.length ? parts : [];
   })();
 
+  // LATENCY OPTIMIZATION: Start FatSecret as a promise to run parallel with LLMs
   const tFatsecretStart = Date.now();
-  const fatsecretResult = await classifyIngredientsWithFatSecret(
-    env,
-    ingredientsForLex,
-    "en"
-  );
-  debug.t_fatsecret_ms = Date.now() - tFatsecretStart;
-  const fatsecretHits =
-    fatsecretResult && fatsecretResult.ok
-      ? fatsecretResult.allIngredientHits || []
-      : [];
+  const fatsecretPromise = (async () => {
+    const result = await classifyIngredientsWithFatSecret(env, ingredientsForLex, "en");
+    debug.t_fatsecret_ms = Date.now() - tFatsecretStart;
+    return result;
+  })();
+
+  // These can be computed now (don't depend on FatSecret)
   const inferredTextHits = inferHitsFromText(dishName, menuDescription);
   const inferredIngredientHits = inferHitsFromIngredients(
     Array.isArray(ingredients) && ingredients.length
       ? ingredients
       : normalized.items || []
   );
-  const combinedHits = [
-    ...fatsecretHits,
-    ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
-    ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
-  ];
+  // Note: combinedHits will be computed after awaiting fatsecretPromise
+  // This allows FatSecret to run in parallel with LLM calls
 
   const user_flags = body.user_flags || body.userFlags || {};
 
@@ -19381,6 +19529,7 @@ async function runDishAnalysis(env, body, ctx) {
   let organsLLMResult = null;
 
   const tLLMsStart = Date.now();
+  let combinedHits = []; // Will be populated after FatSecret completes
 
   if (useParallel) {
     const nutritionInput = finalNutritionSummary
@@ -19417,9 +19566,10 @@ async function runDishAnalysis(env, body, ctx) {
         })()
       : null;
 
-    const promises = [allergenPromise, organsPromise, nutritionPromise];
+    // LATENCY OPTIMIZATION: Include FatSecret in parallel with LLMs
+    const promises = [allergenPromise, organsPromise, nutritionPromise, fatsecretPromise];
 
-    const [allergenSettled, organsSettled, nutritionSettled] =
+    const [allergenSettled, organsSettled, nutritionSettled, fatsecretSettled] =
       await Promise.allSettled(promises);
 
     if (allergenSettled.status === "fulfilled") {
@@ -19445,6 +19595,15 @@ async function runDishAnalysis(env, body, ctx) {
     } else {
       nutrition_insights = null;
     }
+
+    // Process FatSecret result
+    const fatsecretResult = fatsecretSettled.status === "fulfilled" ? fatsecretSettled.value : null;
+    const fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
+    combinedHits = [
+      ...fatsecretHits,
+      ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
+      ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
+    ];
   } else {
     allergenMiniResult = await (async () => {
       const t0 = Date.now();
@@ -19475,6 +19634,15 @@ async function runDishAnalysis(env, body, ctx) {
         return res;
       })();
     }
+
+    // Await FatSecret in non-parallel mode
+    const fatsecretResult = await fatsecretPromise;
+    const fatsecretHits = fatsecretResult?.ok ? fatsecretResult.allIngredientHits || [] : [];
+    combinedHits = [
+      ...fatsecretHits,
+      ...(Array.isArray(inferredTextHits) ? inferredTextHits : []),
+      ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
+    ];
   }
 
   const tLLMsEnd = Date.now();
