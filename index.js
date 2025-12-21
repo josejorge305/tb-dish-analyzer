@@ -13660,6 +13660,19 @@ const _worker_impl = {
       return handleHealthz(env);
     }
 
+    // OPTIONS preflight for /api/analyze/image (CORS)
+    if (pathname === "/api/analyze/image" && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
     // POST /api/analyze/image - Image recognition for food photos
     if (pathname === "/api/analyze/image" && request.method === "POST") {
       try {
