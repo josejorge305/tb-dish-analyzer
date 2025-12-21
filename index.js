@@ -14071,6 +14071,19 @@ const _worker_impl = {
 
     // ========== USER TRACKING API ENDPOINTS ==========
 
+    // OPTIONS preflight for /api/profile/* (CORS)
+    if (pathname.startsWith("/api/profile") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
     // GET /api/profile - Get user profile
     if (pathname === "/api/profile" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
@@ -14130,6 +14143,17 @@ const _worker_impl = {
       if (result.ok) {
         // Recalculate targets after profile update
         await calculateAndStoreTargets(env, userId);
+        // Fetch updated profile and targets to return to frontend
+        const updatedProfile = await getUserProfile(env, userId);
+        const updatedTargets = await getUserTargets(env, userId);
+        return new Response(JSON.stringify({
+          ok: true,
+          profile: updatedProfile,
+          targets: updatedTargets
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
       }
 
       return new Response(JSON.stringify(result), {
@@ -14153,6 +14177,17 @@ const _worker_impl = {
       const result = await upsertUserProfile(env, userId, body);
       if (result.ok) {
         await calculateAndStoreTargets(env, userId);
+        // Fetch updated profile and targets to return to frontend
+        const updatedProfile = await getUserProfile(env, userId);
+        const updatedTargets = await getUserTargets(env, userId);
+        return new Response(JSON.stringify({
+          ok: true,
+          profile: updatedProfile,
+          targets: updatedTargets
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
       }
 
       return new Response(JSON.stringify(result), {
@@ -14257,6 +14292,19 @@ const _worker_impl = {
       });
     }
 
+    // OPTIONS preflight for /api/meals/* (CORS)
+    if (pathname.startsWith("/api/meals") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
     // POST /api/meals/log - Log a meal
     if (pathname === "/api/meals/log" && request.method === "POST") {
       const body = await readJsonSafe(request);
@@ -14313,6 +14361,19 @@ const _worker_impl = {
       return new Response(JSON.stringify(result), {
         status: result.ok ? 200 : 404,
         headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // OPTIONS preflight for /api/tracker/* (CORS)
+    if (pathname.startsWith("/api/tracker") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
       });
     }
 
