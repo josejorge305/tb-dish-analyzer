@@ -12712,6 +12712,204 @@ const _worker_impl = {
       return handleHealthz(env);
     }
 
+    // POST /api/analyze/image - Image recognition for food photos
+    if (pathname === "/api/analyze/image" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const imageUrl = body.imageUrl || body.image_url || null;
+        const imageB64 = body.imageB64 || body.image_b64 || null;
+
+        // Validate input
+        if (!imageUrl && !imageB64) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_image",
+              hint: "Provide imageUrl or imageB64 in the request body."
+            }),
+            {
+              status: 400,
+              headers: { "Content-Type": "application/json", ...CORS_ALL }
+            }
+          );
+        }
+
+        let fsResult;
+
+        if (imageB64) {
+          // Direct base64 image - call FatSecret API directly
+          const token = await getFatSecretAccessToken(env);
+          if (!token) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: "fatsecret_token_unavailable",
+                hint: "FatSecret credentials are not configured."
+              }),
+              {
+                status: 503,
+                headers: { "Content-Type": "application/json", ...CORS_ALL }
+              }
+            );
+          }
+
+          const region = env.FATSECRET_REGION || "US";
+          const language = env.FATSECRET_LANGUAGE || "en";
+
+          const fsBody = {
+            image_b64: imageB64,
+            include_food_data: true,
+            region,
+            language
+          };
+
+          let resp;
+          try {
+            resp = await fetch(
+              "https://platform.fatsecret.com/rest/image-recognition/v2",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify(fsBody)
+              }
+            );
+          } catch (e) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: "fatsecret_fetch_error",
+                details: String(e && e.message ? e.message : e)
+              }),
+              {
+                status: 502,
+                headers: { "Content-Type": "application/json", ...CORS_ALL }
+              }
+            );
+          }
+
+          if (!resp.ok) {
+            const errorText = await resp.text().catch(() => "");
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: "fatsecret_http_error",
+                status: resp.status,
+                details: errorText.slice(0, 500)
+              }),
+              {
+                status: 502,
+                headers: { "Content-Type": "application/json", ...CORS_ALL }
+              }
+            );
+          }
+
+          let data;
+          try {
+            data = await resp.json();
+          } catch (e) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: "fatsecret_json_error",
+                details: String(e && e.message ? e.message : e)
+              }),
+              {
+                status: 502,
+                headers: { "Content-Type": "application/json", ...CORS_ALL }
+              }
+            );
+          }
+
+          fsResult = { ok: true, raw: data };
+        } else {
+          // Use existing image URL function
+          fsResult = await callFatSecretImageRecognition(env, imageUrl);
+        }
+
+        if (!fsResult.ok) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: fsResult.error || "image_recognition_failed",
+              hint: "Failed to analyze image. Please try again with a clearer photo."
+            }),
+            {
+              status: 400,
+              headers: { "Content-Type": "application/json", ...CORS_ALL }
+            }
+          );
+        }
+
+        // Normalize the FatSecret response
+        const normalized = normalizeFatSecretImageResult(fsResult.raw);
+
+        // Calculate total nutrition from components
+        let totalNutrition = {
+          energyKcal: 0,
+          protein_g: 0,
+          fat_g: 0,
+          carbs_g: 0,
+          sugar_g: 0,
+          fiber_g: 0,
+          sodium_mg: 0
+        };
+
+        if (Array.isArray(normalized.nutrition_breakdown)) {
+          for (const comp of normalized.nutrition_breakdown) {
+            totalNutrition.energyKcal += comp.energyKcal || 0;
+            totalNutrition.protein_g += comp.protein_g || 0;
+            totalNutrition.fat_g += comp.fat_g || 0;
+            totalNutrition.carbs_g += comp.carbs_g || 0;
+            totalNutrition.sugar_g += comp.sugar_g || 0;
+            totalNutrition.fiber_g += comp.fiber_g || 0;
+            totalNutrition.sodium_mg += comp.sodium_mg || 0;
+          }
+        }
+
+        // Round values
+        totalNutrition = {
+          energyKcal: Math.round(totalNutrition.energyKcal),
+          protein_g: Math.round(totalNutrition.protein_g * 10) / 10,
+          fat_g: Math.round(totalNutrition.fat_g * 10) / 10,
+          carbs_g: Math.round(totalNutrition.carbs_g * 10) / 10,
+          sugar_g: Math.round(totalNutrition.sugar_g * 10) / 10,
+          fiber_g: Math.round(totalNutrition.fiber_g * 10) / 10,
+          sodium_mg: Math.round(totalNutrition.sodium_mg)
+        };
+
+        // Build response
+        const result = {
+          ok: true,
+          source: "fatsecret_image_recognition",
+          foods_detected: normalized.plate_components.length,
+          plate_components: normalized.plate_components,
+          nutrition_breakdown: normalized.nutrition_breakdown,
+          nutrition_summary: totalNutrition,
+          component_allergens: normalized.component_allergens || {}
+        };
+
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...CORS_ALL }
+        });
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "analyze_image_exception",
+            details: err && err.message ? String(err.message) : String(err)
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json", ...CORS_ALL }
+          }
+        );
+      }
+    }
+
     if (pathname === "/analyze/allergens-mini" && request.method === "POST") {
       return handleAllergenMini(request, env, ctx);
     }
