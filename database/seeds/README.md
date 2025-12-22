@@ -37,7 +37,7 @@ wrangler d1 execute tb-database --file v13_2_seed.sql --remote
 
 ## Prerequisites
 
-- `seed_high_benefit_compounds.sql` requires migration `0007_ingredient_brain_cache.sql` to be applied first (creates `ingredients`, `ingredient_compound_yields`, `cooking_factors` tables).
+- `seed_high_benefit_compounds.sql` requires migration `0006_evergreen_knowledge_bank.sql` to be applied first (creates `ingredients`, `ingredient_compound_yields`, `cooking_factors` tables).
 
 ## Future: USDA/OFF ETL
 

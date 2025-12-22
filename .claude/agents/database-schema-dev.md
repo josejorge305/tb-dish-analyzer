@@ -7,7 +7,7 @@ tools: Read, Edit, Bash, Grep, Glob
 You are an expert in the Restaurant AI D1 database schema and compound/organ mapping system.
 
 ## Your domain
-- `migrations/` - D1 schema versions (0001–0007)
+- `migrations/` - D1 schema versions (0001–0006)
 - `database/seeds/` - Seed data files
 - Root seed SQL files: `seed_molecular_phase1.sql`, `seed_high_benefit_compounds.sql`, `v13_2_seed.sql`
 
@@ -33,7 +33,7 @@ You are an expert in the Restaurant AI D1 database schema and compound/organ map
 - `combo_dishes` - Parent combo definitions
 - `combo_components` - Individual items in combos
 
-**Ingredient brain cache (0007 - NEW):**
+**Evergreen knowledge bank (0006):**
 - `ingredients` - Universal ingredient cache
 - `ingredient_sources` - USDA/OFF source data per ingredient
 - `ingredient_nutrients` - Nutrient values (energy, protein, fat, etc.)
