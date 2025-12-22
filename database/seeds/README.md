@@ -43,32 +43,47 @@ wrangler d1 execute tb-database --file v13_2_seed.sql --remote
 
 ETL scripts for seeding ingredient data from free sources are located in `database/etl/`.
 
-### Running ETL v1
+### Running ETL v1 in Production
 
-The ETL runs as a Cloudflare Worker and uses the same D1 bindings as the main worker.
+The ETL runs as a standalone Cloudflare Worker. It does **not** affect the runtime dish analysis pipeline.
+
+**Safety checklist before running:**
+1. Ensure `USDA_FDC_API_KEY` is set in wrangler.toml or secrets
+2. Verify migration `0006_evergreen_knowledge_bank.sql` is applied
+3. Test locally first (`--local`) before running against production
 
 ```bash
-# 1. Run against LOCAL D1 (for testing)
-wrangler dev database/etl/etl_usda_off_v1.js --local
-
-# Then visit: http://localhost:8787/run
-# Or use curl:
-curl http://localhost:8787/run | jq .
-
-# 2. Run against REMOTE D1 (production seeding)
+# Start the ETL worker against REMOTE D1 (production)
 wrangler dev database/etl/etl_usda_off_v1.js --remote
 
-# Then visit: http://localhost:8787/run
+# Trigger the ETL (in another terminal)
+curl http://localhost:8787/run | jq .
+
+# Or visit http://localhost:8787/run in browser
 ```
 
 ### What ETL v1 Does
 
-- Processes 5 test ingredients: apple, milk, butter, garlic, shrimp
-- Fetches data from USDA FDC (primary) and Open Food Facts (fallback)
-- UPSERTs into `ingredients` and `ingredient_synonyms` tables
-- Logs skipped tables (ingredient_nutrients, ingredient_sources don't exist)
+For each ingredient (currently: apple, milk, butter, garlic, shrimp):
+
+1. **Fetches data** from USDA FDC (primary) or Open Food Facts (fallback)
+2. **UPSERTs** into `ingredients` table (canonical_name, category)
+3. **Adds synonyms** to `ingredient_synonyms` (ingredient name + USDA description)
+4. **Sets allergen flags** in `ingredient_allergen_flags`:
+   - milk, butter → dairy, lactose
+   - shrimp → shellfish
+5. **Updates FTS index** in `ingredients_fts` for search
+6. **Skips** `ingredient_vectors` (requires ML, not implemented in v1)
+
+### Idempotency
+
+Re-running ETL is safe:
+- Existing ingredients are updated (not duplicated)
+- Existing synonyms are ignored (INSERT OR IGNORE)
+- Existing allergen flags are preserved
 
 ### Requirements
 
-- `USDA_FDC_API_KEY` must be set (via `wrangler secret` or wrangler.toml)
-- Migration `0006_evergreen_knowledge_bank.sql` must be applied first
+- `USDA_FDC_API_KEY` must be configured
+- Migration `0006_evergreen_knowledge_bank.sql` must be applied
+- Migration `0003_user_tracking.sql` (for `allergen_definitions`) must be applied
