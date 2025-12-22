@@ -8,8 +8,13 @@
  * USAGE:
  *   node seed_data/scripts/split_sql.js
  *
- * INPUT:  seed_data/out/usda_*.sql
- * OUTPUT: seed_data/out/batches/usda_*_batch_NNN.sql
+ * INPUT:  seed_data/out/*.sql (auto-detects all SQL files)
+ * OUTPUT: seed_data/out/batches/*_batch_NNN.sql
+ *
+ * Handles files from:
+ *   - USDA FoodData Central (usda_*.sql)
+ *   - Open Food Facts (off_*.sql)
+ *   - FoodOn/LanguaL (foodon_*.sql, langual_*.sql)
  */
 
 import fs from 'fs';
@@ -93,12 +98,26 @@ async function main() {
   console.log('=== SQL File Splitter for D1 ===\n');
   console.log(`Batch size: ${BATCH_SIZE} statements per file\n`);
 
-  const files = [
-    'usda_ingredients.sql',
-    'usda_synonyms.sql',
-    'usda_sources.sql',
-    'usda_nutrients.sql'
+  // Auto-detect all SQL files in the output directory
+  const allFiles = fs.readdirSync(OUT_DIR).filter(f => f.endsWith('.sql'));
+
+  // Define import order (ingredients first, then dependent tables)
+  const importOrder = [
+    'ingredients',    // Must be first - creates base records
+    'synonyms',       // References ingredients
+    'sources',        // References ingredients
+    'allergen_flags', // References ingredients
+    'nutrients'       // References ingredients
   ];
+
+  // Sort files by import order
+  const files = allFiles.sort((a, b) => {
+    const aOrder = importOrder.findIndex(o => a.includes(o));
+    const bOrder = importOrder.findIndex(o => b.includes(o));
+    return (aOrder === -1 ? 999 : aOrder) - (bOrder === -1 ? 999 : bOrder);
+  });
+
+  console.log(`Found ${files.length} SQL files to split\n`);
 
   const results = [];
 
@@ -144,7 +163,7 @@ const files = fs.readdirSync(BATCH_DIR)
   .sort();
 
 // Group by type and import in correct order
-const order = ['ingredients', 'synonyms', 'sources', 'nutrients'];
+const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'nutrients'];
 const grouped = {};
 
 for (const file of files) {
