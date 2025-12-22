@@ -18,9 +18,14 @@
  * 3. Output batched INSERT statements (D1-friendly)
  */
 
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
+import fs from 'fs';
+import path from 'path';
+import readline from 'readline';
+import { fileURLToPath } from 'url';
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Paths
 const RAW_DIR = path.join(__dirname, '..', 'raw', 'usda');
@@ -295,10 +300,10 @@ async function main() {
     sourcesSql.write(`INSERT OR IGNORE INTO ingredient_sources (ingredient_id, source, source_id, source_name, is_primary, contributed_fields) SELECT id, 'usda_fdc', ${sqlEscape(fdcId)}, ${sqlEscape(description)}, 1, '["nutrients","category"]' FROM ingredients WHERE canonical_name = ${sqlEscape(canonicalName)};\n`);
 
     // INSERT nutrients
-    const nutrients = foodNutrients[fdcId] || {};
-    for (const [nutrientId, amount] of Object.entries(nutrients)) {
-      const nutrientInfo = nutrientMap[nutrientId] || { name: 'Unknown', unit: '' };
-      nutrientsSql.write(`INSERT OR IGNORE INTO ingredient_nutrients (ingredient_id, nutrient_id, nutrient_name, amount, unit, source, source_id) SELECT id, ${nutrientId}, ${sqlEscape(nutrientInfo.name)}, ${amount}, ${sqlEscape(nutrientInfo.unit)}, 'usda_fdc', ${sqlEscape(fdcId)} FROM ingredients WHERE canonical_name = ${sqlEscape(canonicalName)};\n`);
+    const foodNuts = foodNutrients[fdcId] || {};
+    for (const [nutId, amount] of Object.entries(foodNuts)) {
+      const nutrientInfo = nutrientMap[nutId] || { name: 'Unknown', unit: '' };
+      nutrientsSql.write(`INSERT OR IGNORE INTO ingredient_nutrients (ingredient_id, nutrient_id, nutrient_name, amount, unit, source, source_id) SELECT id, ${nutId}, ${sqlEscape(nutrientInfo.name)}, ${amount}, ${sqlEscape(nutrientInfo.unit)}, 'usda_fdc', ${sqlEscape(fdcId)} FROM ingredients WHERE canonical_name = ${sqlEscape(canonicalName)};\n`);
       nutrientInsertCount++;
     }
 
