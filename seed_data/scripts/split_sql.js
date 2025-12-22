@@ -103,11 +103,14 @@ async function main() {
 
   // Define import order (ingredients first, then dependent tables)
   const importOrder = [
-    'ingredients',    // Must be first - creates base records
-    'synonyms',       // References ingredients
-    'sources',        // References ingredients
-    'allergen_flags', // References ingredients
-    'nutrients'       // References ingredients
+    'ingredients',     // Must be first - creates base records
+    'synonyms',        // References ingredients
+    'sources',         // References ingredients
+    'allergen_flags',  // References ingredients
+    'quality_scores',  // References ingredients (NOVA, Nutri-Score)
+    'additives',       // References ingredients
+    'micronutrients',  // References ingredients
+    'nutrients'        // References ingredients (USDA basic nutrients)
   ];
 
   // Sort files by import order
@@ -163,7 +166,7 @@ const files = fs.readdirSync(BATCH_DIR)
   .sort();
 
 // Group by type and import in correct order
-const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'nutrients'];
+const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'quality_scores', 'additives', 'micronutrients', 'nutrients'];
 const grouped = {};
 
 for (const file of files) {
