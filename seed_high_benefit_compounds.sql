@@ -1,5 +1,5 @@
 -- High-impact benefit seed (Omega-3, Polyphenols, Vitamin C)
--- REQUIRES: migration 0006_ingredient_brain_cache.sql to be applied first
+-- REQUIRES: migration 0007_ingredient_brain_cache.sql to be applied first
 
 -- === Compounds ===
 INSERT OR IGNORE INTO compounds (id, name, description) VALUES
