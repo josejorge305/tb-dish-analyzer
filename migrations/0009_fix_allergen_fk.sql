@@ -21,6 +21,4 @@ CREATE TABLE IF NOT EXISTS ingredient_allergen_flags (
 CREATE INDEX IF NOT EXISTS idx_allergen_flags_ingredient ON ingredient_allergen_flags(ingredient_id);
 CREATE INDEX IF NOT EXISTS idx_allergen_flags_allergen ON ingredient_allergen_flags(allergen_code);
 
--- Record migration
-INSERT OR IGNORE INTO schema_metadata (key, value, type, metadata)
-VALUES ('MIGRATION_0009', NULL, 'migration', '{"description": "Fix allergen foreign key - use allergen_code TEXT instead of integer id"}');
+-- Migration complete: 0009_fix_allergen_fk

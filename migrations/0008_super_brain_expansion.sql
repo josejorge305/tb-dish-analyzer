@@ -172,6 +172,4 @@ INSERT OR IGNORE INTO additive_definitions (additive_code, additive_name, additi
 ('E412', 'Guar Gum', 'thickener', 'safe', NULL),
 ('E415', 'Xanthan Gum', 'thickener', 'safe', NULL);
 
--- Record migration
-INSERT OR IGNORE INTO schema_metadata (key, value, type, metadata)
-VALUES ('MIGRATION_0008', NULL, 'migration', '{"description": "Super Brain Expansion - quality scores, glycemic data, additives, bioactives, micronutrients", "tables_created": ["ingredient_quality_scores", "ingredient_glycemic", "ingredient_additives", "ingredient_bioactives", "ingredient_micronutrients", "additive_definitions"]}');
+-- Migration complete: 0008_super_brain_expansion
