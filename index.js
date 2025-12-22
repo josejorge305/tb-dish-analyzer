@@ -22291,6 +22291,9 @@ function normPathname(u) {
   return p;
 }
 
+// Named exports for ETL and external use
+export { callUSDAFDC, callOFF };
+
 export default {
   fetch: async (request, env, ctx) => {
     const response = await handleFetch(request, env, ctx);
