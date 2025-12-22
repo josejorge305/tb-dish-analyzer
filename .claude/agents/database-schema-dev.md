@@ -34,12 +34,27 @@ You are an expert in the Restaurant AI D1 database schema and compound/organ map
 - `combo_components` - Individual items in combos
 
 **Evergreen knowledge bank (0006):**
-- `ingredients` - Universal ingredient cache
-- `ingredient_sources` - USDA/OFF source data per ingredient
-- `ingredient_nutrients` - Nutrient values (energy, protein, fat, etc.)
-- `ingredient_aliases` - Alternative names for fuzzy matching
-- `ingredient_compound_yields` - Compound yields per ingredient (mg/100g)
-- `cooking_factors` - Retention factors by cooking method
+
+*Layer A: Universal Knowledge Bank (append-only, versioned)*
+- `ingredients` - Core ingredients (canonical_name, category, subcategory, data_version, model_version, is_deleted)
+- `ingredient_synonyms` - Typo-tolerant matching (ingredient_id, synonym, locale)
+- `ingredients_fts` - FTS5 virtual table for ingredient search
+- `ingredient_allergen_flags` - FDA top 9+ allergens (ingredient_id, allergen_id, confidence, source)
+- `ingredient_fodmap_profile` - Monash-style FODMAP data (fructose, lactose, fructan, gos, polyol, safe_serving_g)
+- `kb_ingredient_compound_yields` - Compound yields (ingredient_id, compound_id, yield_mg_per_100g, bioavailability_factor)
+- `kb_cooking_profiles` - Cooking methods (name, default_vitamin/mineral/antioxidant_retention)
+- `kb_cooking_factors` - Specific compound retention per cooking method
+
+*Layer B: Derived Building Blocks Cache*
+- `ingredient_vectors` - Pre-computed ingredient vectors (allergen_bits, fodmap scores, organ_vector JSON)
+- `dish_vectors` - Pre-computed dish vectors (normalized_recipe_hash, aggregated scores)
+
+*Audit:*
+- `audit_log` - Track resets and major operations
+
+*Schema extensions (added to existing tables):*
+- `compounds` - Added: data_version, is_deleted
+- `compound_organ_effects` - Added: data_version, strength_0_1, evidence_tier, is_deleted
 
 ### Schema evolution rules
 1. Never break existing queries without migrating code
