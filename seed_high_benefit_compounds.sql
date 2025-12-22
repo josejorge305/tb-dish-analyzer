@@ -1,4 +1,5 @@
 -- High-impact benefit seed (Omega-3, Polyphenols, Vitamin C)
+-- REQUIRES: migration 0006_ingredient_brain_cache.sql to be applied first
 
 -- === Compounds ===
 INSERT OR IGNORE INTO compounds (id, name, description) VALUES
@@ -14,26 +15,38 @@ INSERT OR IGNORE INTO organ_systems (organ, system, description) VALUES
   ('liver', 'Digestive', 'Hepatic metabolism and detox'),
   ('kidney', 'Renal', 'Renal filtration and regulation');
 
--- === Compound → organ edges ===
-INSERT OR REPLACE INTO compound_organ_edges (compound_id, organ_id, sign, strength, evidence) VALUES
-  (101, (SELECT id FROM organ_systems WHERE organ = 'heart'), +1, 0.8, 'A'),
-  (101, (SELECT id FROM organ_systems WHERE organ = 'brain'), +1, 0.6, 'B'),
-  (102, (SELECT id FROM organ_systems WHERE organ = 'heart'), +1, 0.5, 'B'),
-  (102, (SELECT id FROM organ_systems WHERE organ = 'liver'), +1, 0.4, 'B'),
-  (103, (SELECT id FROM organ_systems WHERE organ = 'gut'),   +1, 0.5, 'B'),
-  (103, (SELECT id FROM organ_systems WHERE organ = 'heart'), +1, 0.3, 'B');
+-- === Compound → organ effects (uses compound_organ_effects table, NOT compound_organ_edges) ===
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes) VALUES
+  (101, 'heart', 'benefit', 4, 'Strong evidence for cardiovascular health'),
+  (101, 'brain', 'benefit', 3, 'Supports cognitive function'),
+  (102, 'heart', 'benefit', 3, 'Antioxidant cardioprotection'),
+  (102, 'liver', 'benefit', 2, 'Hepatoprotective properties'),
+  (103, 'gut', 'benefit', 3, 'Supports gut lining integrity'),
+  (103, 'heart', 'benefit', 2, 'Mild cardiovascular benefit');
 
--- === Ingredient compound yields (mg per 100 g) ===
-INSERT OR REPLACE INTO ingredient_compound_yields (ingredient, compound_id, mg_per_100g) VALUES
-  ('salmon', 101, 1500),
-  ('sardine', 101, 1200),
-  ('mackerel', 101, 1400),
-  ('olive oil', 102, 200),
-  ('green tea', 102, 120),
-  ('blueberry', 102, 300),
-  ('lemon', 103, 53000),
-  ('orange', 103, 53000),
-  ('broccoli', 103, 89000);
+-- === Ingredients (must exist before yields) ===
+INSERT OR IGNORE INTO ingredients (name, name_normalized, food_group) VALUES
+  ('Salmon', 'salmon', 'seafood'),
+  ('Sardine', 'sardine', 'seafood'),
+  ('Mackerel', 'mackerel', 'seafood'),
+  ('Olive Oil', 'olive oil', 'oils'),
+  ('Green Tea', 'green tea', 'beverages'),
+  ('Blueberry', 'blueberry', 'fruits'),
+  ('Lemon', 'lemon', 'fruits'),
+  ('Orange', 'orange', 'fruits'),
+  ('Broccoli', 'broccoli', 'vegetables');
+
+-- === Ingredient compound yields (mg per 100g) ===
+INSERT OR REPLACE INTO ingredient_compound_yields (ingredient_id, compound_id, mg_per_100g, source) VALUES
+  ((SELECT id FROM ingredients WHERE name_normalized = 'salmon'), 101, 1500, 'usda_fdc'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'sardine'), 101, 1200, 'usda_fdc'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'mackerel'), 101, 1400, 'usda_fdc'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'olive oil'), 102, 200, 'literature'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'green tea'), 102, 120, 'literature'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'blueberry'), 102, 300, 'literature'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'lemon'), 103, 53, 'usda_fdc'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'orange'), 103, 53, 'usda_fdc'),
+  ((SELECT id FROM ingredients WHERE name_normalized = 'broccoli'), 103, 89, 'usda_fdc');
 
 -- === Cooking factors ===
 INSERT OR REPLACE INTO cooking_factors (method, compound_id, factor) VALUES

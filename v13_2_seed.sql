@@ -1,61 +1,139 @@
--- (same content I gave you earlier)
 -- ===============================
 -- Tummy Buddy V13.2: Edge Seeding
 -- ===============================
+-- NOTE: Updated to use compound_organ_effects (NOT compound_organ_edges)
+-- The actual schema uses: compound_id, organ, effect, strength, notes
 
-INSERT OR IGNORE INTO organ_systems (slug, name) VALUES
- ('gut','Gut'),('liver','Liver'),('heart','Heart'),('brain','Brain'),('kidney','Kidney'),('immune','Immune');
+-- Ensure organ systems exist
+INSERT OR IGNORE INTO organ_systems (organ, system, description) VALUES
+  ('gut', 'Digestive', 'Gastrointestinal tract and microbiome'),
+  ('liver', 'Digestive', 'Hepatic metabolism and detox'),
+  ('heart', 'Cardiovascular', 'Cardiac muscle and vessels'),
+  ('brain', 'Nervous', 'Central nervous system'),
+  ('kidney', 'Urinary', 'Renal filtration and fluid balance'),
+  ('immune', 'Immune', 'Innate/adaptive immune responses');
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_compounds_slug ON compounds (slug);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_organ_systems_slug ON organ_systems (slug);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON compound_organ_edges (compound_slug, organ_slug, sign);
+-- Seed compounds (using name, not slug)
+INSERT OR IGNORE INTO compounds (name, common_name, description) VALUES
+  ('Omega-3 (EPA+DHA)', 'Fish oil omega-3', 'Marine-derived fatty acids'),
+  ('Catechins', 'Tea catechins', 'Green tea polyphenols'),
+  ('Anthocyanins', 'Berry pigments', 'Blue/purple plant pigments'),
+  ('L-Theanine', 'Theanine', 'Amino acid from tea'),
+  ('Lutein+Zeaxanthin', 'Eye carotenoids', 'Macular pigments'),
+  ('Flavanols', 'Cocoa flavanols', 'Cocoa polyphenols'),
+  ('Soluble Fiber', 'Soluble fiber', 'Fermentable fiber'),
+  ('Beta-Glucan', 'Oat beta-glucan', 'Oat/barley fiber'),
+  ('Allicin', 'Garlic compound', 'Organosulfur from garlic'),
+  ('Isothiocyanates', 'Crucifer compounds', 'Brassica phytochemicals'),
+  ('Sulforaphane', 'Broccoli compound', 'Cruciferous isothiocyanate'),
+  ('Curcumin', 'Turmeric pigment', 'Turmeric curcuminoid'),
+  ('Capsaicin', 'Chili heat', 'Hot pepper compound'),
+  ('Dietary Nitrate', 'Beet nitrate', 'Nitrate from vegetables'),
+  ('Lycopene', 'Tomato red', 'Red carotenoid'),
+  ('Beta-Carotene', 'Carrot orange', 'Orange carotenoid'),
+  ('Magnesium', 'Magnesium', 'Essential mineral'),
+  ('Phosphorus', 'Phosphorus', 'Essential mineral'),
+  ('Oxalate', 'Oxalic acid', 'Antinutrient in greens'),
+  ('Choline', 'Choline', 'Essential nutrient'),
+  ('Alcohol (Ethanol)', 'Alcohol', 'Ethyl alcohol'),
+  ('Fructose', 'Fruit sugar', 'Simple sugar'),
+  ('Added Sugars', 'Added sugars', 'Non-intrinsic sugars'),
+  ('Vitamin C', 'Ascorbic acid', 'Water-soluble vitamin'),
+  ('Zinc', 'Zinc', 'Essential trace mineral'),
+  ('Inulin', 'Inulin (FODMAP)', 'Fermentable oligosaccharide'),
+  ('Caffeine', 'Caffeine', 'Stimulant alkaloid'),
+  ('Potassium', 'Potassium', 'Essential electrolyte');
 
-INSERT OR IGNORE INTO compounds (slug, name) VALUES
- ('omega_3_epa_dha','Omega-3 (EPA+DHA)'),('catechins','Catechins'),('anthocyanins','Anthocyanins'),
- ('theanine','L-Theanine'),('lutein_zeaxanthin','Lutein+Zeaxanthin'),('flavanols','Flavanols'),
- ('soluble_fiber','Soluble Fiber'),('beta_glucan','Beta-Glucan'),('allicin','Allicin (Organosulfur)'),
- ('isothiocyanates','Isothiocyanates'),('sulforaphane','Sulforaphane'),('curcumin','Curcumin'),
- ('capsaicin','Capsaicin'),('nitrate','Dietary Nitrate'),('lycopene','Lycopene'),('beta_carotene','Beta-Carotene'),
- ('magnesium','Magnesium'),('phosphorus','Phosphorus'),('oxalate','Oxalate'),('choline','Choline'),
- ('alcohol_ethanol','Alcohol (Ethanol)'),('fructose','Fructose'),('added_sugars','Added Sugars'),
- ('vitamin_c','Vitamin C'),('zinc','Zinc'),('inulin','Inulin (FODMAP)'),('caffeine','Caffeine');
+-- Brain effects (using compound_organ_effects with correct schema)
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'brain', 'benefit', 4, 'Strong evidence for cognitive support (tier A)'
+FROM compounds c WHERE c.name = 'Omega-3 (EPA+DHA)';
 
--- Brain (6)
-INSERT OR REPLACE INTO compound_organ_edges (compound_slug, organ_slug, sign, strength, threshold, evidence_tier) VALUES
- ('omega_3_epa_dha','brain','benefit',0.85,250,'A'),
- ('catechins','brain','benefit',0.60,40,'B'),
- ('anthocyanins','brain','benefit',0.55,50,'B'),
- ('theanine','brain','benefit',0.50,50,'B'),
- ('lutein_zeaxanthin','brain','benefit',0.50,8,'B'),
- ('caffeine','brain','caution',0.50,180,'A');
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'brain', 'benefit', 3, 'Neuroprotective polyphenols (tier B)'
+FROM compounds c WHERE c.name = 'Catechins';
 
--- Kidney (4)
-INSERT OR REPLACE INTO compound_organ_edges VALUES
- ('potassium','kidney','benefit',0.60,1200,'A'),
- ('magnesium','kidney','benefit',0.45,200,'B'),
- ('phosphorus','kidney','caution',0.65,700,'A'),
- ('oxalate','kidney','caution',0.55,100,'B');
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'brain', 'benefit', 3, 'Cognitive support from berries (tier B)'
+FROM compounds c WHERE c.name = 'Anthocyanins';
 
--- Heart (5)
-INSERT OR REPLACE INTO compound_organ_edges VALUES
- ('soluble_fiber','heart','benefit',0.70,3,'A'),
- ('beta_glucan','heart','benefit',0.70,3,'A'),
- ('flavanols','heart','benefit',0.55,50,'B'),
- ('lycopene','heart','benefit',0.50,10,'B'),
- ('added_sugars','heart','caution',0.60,25,'A');
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'brain', 'benefit', 3, 'Calming amino acid (tier B)'
+FROM compounds c WHERE c.name = 'L-Theanine';
 
--- Liver (3)
-INSERT OR REPLACE INTO compound_organ_edges VALUES
- ('alcohol_ethanol','liver','caution',0.80,10,'A'),
- ('fructose','liver','caution',0.55,25,'B'),
- ('choline','liver','benefit',0.50,200,'B');
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'brain', 'benefit', 3, 'Macular and cognitive support (tier B)'
+FROM compounds c WHERE c.name = 'Lutein+Zeaxanthin';
 
--- Gut (2)
-INSERT OR REPLACE INTO compound_organ_edges VALUES
- ('inulin','gut','caution',0.55,5,'B'),
- ('capsaicin','gut','caution',0.45,50,'B');
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'brain', 'risk', 3, 'Excess may cause anxiety/sleep issues (tier A)'
+FROM compounds c WHERE c.name = 'Caffeine';
 
--- Immune (2)
-INSERT OR REPLACE INTO compound_organ_edges VALUES
- ('vitamin_c','immune','benefit',0.50,60,'B'),
- ('zinc','immune','benefit',0.55,8,'A');
+-- Kidney effects
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'kidney', 'benefit', 3, 'Supports fluid balance (tier A)'
+FROM compounds c WHERE c.name = 'Potassium';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'kidney', 'benefit', 2, 'Supports kidney function (tier B)'
+FROM compounds c WHERE c.name = 'Magnesium';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'kidney', 'risk', 3, 'High intake strains kidneys (tier A)'
+FROM compounds c WHERE c.name = 'Phosphorus';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'kidney', 'risk', 3, 'May contribute to kidney stones (tier B)'
+FROM compounds c WHERE c.name = 'Oxalate';
+
+-- Heart effects
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'heart', 'benefit', 4, 'Lowers LDL cholesterol (tier A)'
+FROM compounds c WHERE c.name = 'Soluble Fiber';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'heart', 'benefit', 4, 'Proven cholesterol reduction (tier A)'
+FROM compounds c WHERE c.name = 'Beta-Glucan';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'heart', 'benefit', 3, 'Improves endothelial function (tier B)'
+FROM compounds c WHERE c.name = 'Flavanols';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'heart', 'benefit', 3, 'Antioxidant cardioprotection (tier B)'
+FROM compounds c WHERE c.name = 'Lycopene';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'heart', 'risk', 3, 'Increases cardiovascular risk (tier A)'
+FROM compounds c WHERE c.name = 'Added Sugars';
+
+-- Liver effects
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'liver', 'risk', 4, 'Hepatotoxic at high intake (tier A)'
+FROM compounds c WHERE c.name = 'Alcohol (Ethanol)';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'liver', 'risk', 3, 'Excess promotes fatty liver (tier B)'
+FROM compounds c WHERE c.name = 'Fructose';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'liver', 'benefit', 3, 'Supports liver fat metabolism (tier B)'
+FROM compounds c WHERE c.name = 'Choline';
+
+-- Gut effects
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'gut', 'risk', 3, 'FODMAP - may cause bloating in IBS (tier B)'
+FROM compounds c WHERE c.name = 'Inulin';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'gut', 'risk', 2, 'May irritate sensitive GI tracts (tier B)'
+FROM compounds c WHERE c.name = 'Capsaicin';
+
+-- Immune effects
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'immune', 'benefit', 3, 'Supports immune cell function (tier B)'
+FROM compounds c WHERE c.name = 'Vitamin C';
+
+INSERT OR REPLACE INTO compound_organ_effects (compound_id, organ, effect, strength, notes)
+SELECT c.id, 'immune', 'benefit', 3, 'Essential for immune response (tier A)'
+FROM compounds c WHERE c.name = 'Zinc';
