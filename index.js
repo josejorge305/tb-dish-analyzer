@@ -5876,6 +5876,145 @@ function normKey(s = "") {
     .replace(/^-|-$/g, "");
 }
 
+// ============================================
+// SUPER BRAIN: Ingredient Cache Lookup (D1)
+// Queries our curated ingredient database before external APIs
+// ============================================
+async function lookupIngredientFromSuperBrain(env, ingredientName) {
+  if (!env?.D1_DB || !ingredientName) return null;
+
+  const normalized = ingredientName.toLowerCase().trim();
+
+  try {
+    // Step 1: Find ingredient by canonical name or synonym
+    let ingredient = await env.D1_DB.prepare(`
+      SELECT i.id, i.canonical_name, i.description
+      FROM ingredients i
+      WHERE i.canonical_name = ? OR i.canonical_name LIKE ?
+      LIMIT 1
+    `).bind(normalized, `%${normalized}%`).first();
+
+    // Try synonyms if not found directly
+    if (!ingredient) {
+      ingredient = await env.D1_DB.prepare(`
+        SELECT i.id, i.canonical_name, i.description
+        FROM ingredients i
+        JOIN ingredient_synonyms s ON s.ingredient_id = i.id
+        WHERE s.synonym = ? OR s.synonym LIKE ?
+        LIMIT 1
+      `).bind(normalized, `%${normalized}%`).first();
+    }
+
+    if (!ingredient) return null;
+
+    const ingredientId = ingredient.id;
+
+    // Step 2: Fetch nutrients
+    const { results: nutrients } = await env.D1_DB.prepare(`
+      SELECT nutrient_code, nutrient_name, amount_per_100g, unit
+      FROM ingredient_nutrients
+      WHERE ingredient_id = ?
+    `).bind(ingredientId).all();
+
+    // Step 3: Fetch allergens
+    const { results: allergens } = await env.D1_DB.prepare(`
+      SELECT af.allergen_code, ad.display_name, af.confidence
+      FROM ingredient_allergen_flags af
+      LEFT JOIN allergen_definitions ad ON ad.allergen_code = af.allergen_code
+      WHERE af.ingredient_id = ?
+    `).bind(ingredientId).all();
+
+    // Step 4: Fetch glycemic index
+    const glycemic = await env.D1_DB.prepare(`
+      SELECT glycemic_index, glycemic_load, gi_category, serving_size_g
+      FROM ingredient_glycemic
+      WHERE ingredient_id = ?
+      LIMIT 1
+    `).bind(ingredientId).first();
+
+    // Step 5: Fetch bioactives
+    const { results: bioactives } = await env.D1_DB.prepare(`
+      SELECT compound_name, compound_class, amount_per_100g, unit, health_effects, target_organs
+      FROM ingredient_bioactives
+      WHERE ingredient_id = ?
+    `).bind(ingredientId).all();
+
+    // Step 6: Fetch categories
+    const { results: categories } = await env.D1_DB.prepare(`
+      SELECT fc.category_code, fc.category_name
+      FROM ingredient_categories ic
+      JOIN food_categories fc ON fc.category_code = ic.category_code
+      WHERE ic.ingredient_id = ?
+    `).bind(ingredientId).all();
+
+    // Build nutrition object in expected format
+    const nutritionMap = {};
+    for (const n of nutrients || []) {
+      nutritionMap[n.nutrient_code] = {
+        name: n.nutrient_name,
+        amount: n.amount_per_100g,
+        unit: n.unit
+      };
+    }
+
+    return {
+      source: 'super_brain',
+      ingredientId,
+      description: ingredient.canonical_name,
+      nutrients: {
+        energyKcal: nutritionMap.energy?.amount || nutritionMap.calories?.amount || null,
+        protein_g: nutritionMap.protein?.amount || null,
+        fat_g: nutritionMap.fat?.amount || nutritionMap.total_fat?.amount || null,
+        carbs_g: nutritionMap.carbohydrate?.amount || nutritionMap.carbs?.amount || null,
+        fiber_g: nutritionMap.fiber?.amount || null,
+        sugar_g: nutritionMap.sugar?.amount || nutritionMap.sugars?.amount || null,
+        sodium_mg: nutritionMap.sodium?.amount || null,
+        saturatedFat_g: nutritionMap.saturated_fat?.amount || null,
+        cholesterol_mg: nutritionMap.cholesterol?.amount || null,
+        // Extended nutrients
+        vitaminA_mcg: nutritionMap.vitamin_a?.amount || null,
+        vitaminC_mg: nutritionMap.vitamin_c?.amount || null,
+        vitaminD_mcg: nutritionMap.vitamin_d?.amount || null,
+        calcium_mg: nutritionMap.calcium?.amount || null,
+        iron_mg: nutritionMap.iron?.amount || null,
+        potassium_mg: nutritionMap.potassium?.amount || null,
+      },
+      allergens: (allergens || []).map(a => ({
+        code: a.allergen_code,
+        name: a.display_name,
+        confidence: a.confidence
+      })),
+      glycemic: glycemic ? {
+        gi: glycemic.glycemic_index,
+        gl: glycemic.glycemic_load,
+        category: glycemic.gi_category,
+        servingSize: glycemic.serving_size_g
+      } : null,
+      bioactives: (bioactives || []).map(b => ({
+        compound: b.compound_name,
+        class: b.compound_class,
+        amount: b.amount_per_100g,
+        unit: b.unit,
+        effects: safeJsonParse(b.health_effects, []),
+        organs: safeJsonParse(b.target_organs, [])
+      })),
+      categories: (categories || []).map(c => c.category_code)
+    };
+  } catch (e) {
+    console.error('SuperBrain lookup error:', e);
+    return null;
+  }
+}
+
+function safeJsonParse(str, fallback = null) {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
 async function getCachedNutrition(env, name) {
   if (!env?.R2_BUCKET) return null;
   const key = `nutrition/${normKey(name)}.json`;
@@ -5899,10 +6038,29 @@ async function putCachedNutrition(env, name, data) {
 }
 
 // LATENCY OPTIMIZATION: Process all ingredients in parallel instead of sequential
+// Priority: Super Brain (D1) → R2 Cache → USDA FDC → Open Food Facts
 async function enrichWithNutrition(env, rows = []) {
   await Promise.all(rows.map(async (row) => {
     const q = (row?.name || row?.original || "").trim();
     if (!q) return;
+
+    // Try Super Brain cache first (our curated D1 database)
+    const superBrainHit = await lookupIngredientFromSuperBrain(env, q);
+    if (superBrainHit) {
+      row.nutrition = superBrainHit.nutrients;
+      row._superBrain = {
+        ingredientId: superBrainHit.ingredientId,
+        description: superBrainHit.description,
+        source: 'super_brain',
+        allergens: superBrainHit.allergens,
+        glycemic: superBrainHit.glycemic,
+        bioactives: superBrainHit.bioactives,
+        categories: superBrainHit.categories
+      };
+      return;
+    }
+
+    // Fallback: R2 cache → external APIs
     let hit = await getCachedNutrition(env, q);
     if (!hit) {
       hit = await callUSDAFDC(env, q);
