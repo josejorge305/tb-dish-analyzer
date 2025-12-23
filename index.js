@@ -4387,13 +4387,20 @@ async function logMeal(env, userId, mealData) {
       return { ok: false, error: 'duplicate_log', message: 'Already logged recently' };
     }
 
-    // Insert the meal
+    // R2-as-source-of-truth: Store full_analysis in R2, keep only pointer in D1
+    let r2AnalysisKey = null;
+    if (mealData.full_analysis && env.R2_BUCKET) {
+      r2AnalysisKey = `meals/${userId}/${crypto.randomUUID()}.json`;
+      await r2WriteJSON(env, r2AnalysisKey, mealData.full_analysis);
+    }
+
+    // Insert the meal (r2_analysis_key instead of full_analysis blob)
     const result = await env.D1_DB.prepare(`
       INSERT INTO logged_meals (
         user_id, dish_id, dish_name, restaurant_name, logged_at, meal_date,
         meal_type, portion_factor, calories, protein_g, carbs_g, fat_g,
         fiber_g, sugar_g, sodium_mg, organ_impacts, risk_flags,
-        analysis_confidence, analysis_version, full_analysis
+        analysis_confidence, analysis_version, r2_analysis_key
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       userId,
@@ -4415,7 +4422,7 @@ async function logMeal(env, userId, mealData) {
       mealData.risk_flags ? JSON.stringify(mealData.risk_flags) : null,
       mealData.analysis_confidence || null,
       mealData.analysis_version || PIPELINE_VERSION,
-      mealData.full_analysis ? JSON.stringify(mealData.full_analysis) : null
+      r2AnalysisKey
     ).run();
 
     // Update daily summary
@@ -8765,6 +8772,23 @@ async function r2WriteJSON(env, key, obj) {
   await env.R2_BUCKET.put(key, JSON.stringify(obj), {
     httpMetadata: { contentType: "application/json" }
   });
+}
+
+async function r2ReadJSON(env, key) {
+  if (!env?.R2_BUCKET || !key) return null;
+  try {
+    const obj = await env.R2_BUCKET.get(key);
+    if (!obj) return null;
+    return await obj.json();
+  } catch {
+    return null;
+  }
+}
+
+// Helper: Get full meal analysis from R2
+async function getMealFullAnalysis(env, r2Key) {
+  if (!r2Key) return null;
+  return await r2ReadJSON(env, r2Key);
 }
 
 async function handleDebugFetchBytes(request) {
