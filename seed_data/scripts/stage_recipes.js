@@ -731,6 +731,392 @@ const RECIPES = [
   },
 
   // ============================================
+  // === CHINESE CUISINE (20 base recipes) ===
+  // ============================================
+
+  // --- CHICKEN DISHES ---
+  {
+    dish_name: 'Kung Pao Chicken',
+    ingredients: [
+      { name: 'chicken thigh', quantity: 300, unit: 'g' },
+      { name: 'peanuts', quantity: 50, unit: 'g' },
+      { name: 'dried red chilies', quantity: 8, unit: 'pieces' },
+      { name: 'Sichuan peppercorns', quantity: 5, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'rice vinegar', quantity: 20, unit: 'ml' },
+      { name: 'shaoxing wine', quantity: 15, unit: 'ml' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'cornstarch', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 35, carbs: 22, fat: 28, fiber: 3, sugar: 6, sodium: 980 },
+    allergens: ['peanut', 'soy'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'General Tso Chicken',
+    ingredients: [
+      { name: 'chicken thigh', quantity: 350, unit: 'g' },
+      { name: 'cornstarch', quantity: 60, unit: 'g' },
+      { name: 'soy sauce', quantity: 45, unit: 'ml' },
+      { name: 'rice vinegar', quantity: 30, unit: 'ml' },
+      { name: 'hoisin sauce', quantity: 30, unit: 'ml' },
+      { name: 'brown sugar', quantity: 40, unit: 'g' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'dried red chilies', quantity: 6, unit: 'pieces' },
+      { name: 'vegetable oil', quantity: 80, unit: 'ml' },
+      { name: 'sesame oil', quantity: 10, unit: 'ml' }
+    ],
+    nutrition: { calories: 620, protein: 32, carbs: 52, fat: 32, fiber: 1, sugar: 28, sodium: 1350 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- PORK DISHES ---
+  {
+    dish_name: 'Sweet and Sour Pork',
+    ingredients: [
+      { name: 'pork loin', quantity: 350, unit: 'g' },
+      { name: 'pineapple chunks', quantity: 150, unit: 'g' },
+      { name: 'bell peppers', quantity: 100, unit: 'g' },
+      { name: 'cornstarch', quantity: 50, unit: 'g' },
+      { name: 'rice vinegar', quantity: 60, unit: 'ml' },
+      { name: 'ketchup', quantity: 45, unit: 'ml' },
+      { name: 'sugar', quantity: 50, unit: 'g' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 28, carbs: 55, fat: 26, fiber: 2, sugar: 38, sodium: 680 },
+    allergens: ['soy'],
+    fodmap: ['high_fructose', 'high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Twice Cooked Pork',
+    ingredients: [
+      { name: 'pork belly', quantity: 350, unit: 'g' },
+      { name: 'leeks', quantity: 100, unit: 'g' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'doubanjiang', quantity: 30, unit: 'g' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'shaoxing wine', quantity: 15, unit: 'ml' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'sugar', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 25, carbs: 15, fat: 40, fiber: 2, sugar: 8, sodium: 920 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Char Siu',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 500, unit: 'g' },
+      { name: 'hoisin sauce', quantity: 60, unit: 'ml' },
+      { name: 'honey', quantity: 45, unit: 'ml' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'five spice powder', quantity: 5, unit: 'g' },
+      { name: 'shaoxing wine', quantity: 30, unit: 'ml' },
+      { name: 'red food coloring', quantity: 2, unit: 'ml' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' }
+    ],
+    nutrition: { calories: 380, protein: 35, carbs: 22, fat: 16, fiber: 1, sugar: 18, sodium: 850 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- TOFU & VEGETARIAN ---
+  {
+    dish_name: 'Mapo Tofu',
+    ingredients: [
+      { name: 'silken tofu', quantity: 400, unit: 'g' },
+      { name: 'ground pork', quantity: 150, unit: 'g' },
+      { name: 'doubanjiang', quantity: 40, unit: 'g' },
+      { name: 'Sichuan peppercorns', quantity: 5, unit: 'g' },
+      { name: 'fermented black beans', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'cornstarch', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 22, carbs: 12, fat: 22, fiber: 2, sugar: 3, sodium: 980 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free']
+  },
+
+  // --- DUCK ---
+  {
+    dish_name: 'Peking Duck',
+    ingredients: [
+      { name: 'whole duck', quantity: 2000, unit: 'g' },
+      { name: 'maltose', quantity: 60, unit: 'ml' },
+      { name: 'rice vinegar', quantity: 30, unit: 'ml' },
+      { name: 'five spice powder', quantity: 5, unit: 'g' },
+      { name: 'Mandarin pancakes', quantity: 12, unit: 'pieces' },
+      { name: 'hoisin sauce', quantity: 80, unit: 'ml' },
+      { name: 'green onion', quantity: 60, unit: 'g' },
+      { name: 'cucumber', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 45, carbs: 35, fat: 40, fiber: 2, sugar: 15, sodium: 720 },
+    allergens: ['gluten', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- HOT POT ---
+  {
+    dish_name: 'Hot Pot',
+    ingredients: [
+      { name: 'beef slices', quantity: 200, unit: 'g' },
+      { name: 'lamb slices', quantity: 150, unit: 'g' },
+      { name: 'tofu', quantity: 150, unit: 'g' },
+      { name: 'napa cabbage', quantity: 200, unit: 'g' },
+      { name: 'mushrooms', quantity: 150, unit: 'g' },
+      { name: 'glass noodles', quantity: 100, unit: 'g' },
+      { name: 'hot pot broth', quantity: 1000, unit: 'ml' },
+      { name: 'Sichuan peppercorns', quantity: 10, unit: 'g' },
+      { name: 'dried chilies', quantity: 15, unit: 'g' },
+      { name: 'sesame dipping sauce', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 42, carbs: 35, fat: 25, fiber: 5, sugar: 4, sodium: 1200 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_mannitol', 'high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+
+  // --- DUMPLINGS ---
+  {
+    dish_name: 'Xiaolongbao',
+    ingredients: [
+      { name: 'pork', quantity: 300, unit: 'g' },
+      { name: 'pork gelatin', quantity: 100, unit: 'g' },
+      { name: 'dumpling wrapper', quantity: 250, unit: 'g' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'sesame oil', quantity: 10, unit: 'ml' },
+      { name: 'shaoxing wine', quantity: 15, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 25, carbs: 42, fat: 18, fiber: 2, sugar: 2, sodium: 780 },
+    allergens: ['gluten', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Jiaozi',
+    ingredients: [
+      { name: 'ground pork', quantity: 300, unit: 'g' },
+      { name: 'napa cabbage', quantity: 200, unit: 'g' },
+      { name: 'dumpling wrapper', quantity: 250, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'green onion', quantity: 40, unit: 'g' },
+      { name: 'soy sauce', quantity: 25, unit: 'ml' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 22, carbs: 40, fat: 15, fiber: 3, sugar: 2, sodium: 720 },
+    allergens: ['gluten', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Wonton Soup',
+    ingredients: [
+      { name: 'ground pork', quantity: 200, unit: 'g' },
+      { name: 'shrimp', quantity: 100, unit: 'g' },
+      { name: 'wonton wrappers', quantity: 200, unit: 'g' },
+      { name: 'chicken broth', quantity: 800, unit: 'ml' },
+      { name: 'bok choy', quantity: 100, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'sesame oil', quantity: 10, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 25, carbs: 32, fat: 12, fiber: 2, sugar: 2, sodium: 920 },
+    allergens: ['gluten', 'shellfish', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- NOODLES ---
+  {
+    dish_name: 'Chow Mein',
+    ingredients: [
+      { name: 'egg noodles', quantity: 250, unit: 'g' },
+      { name: 'chicken breast', quantity: 150, unit: 'g' },
+      { name: 'bean sprouts', quantity: 100, unit: 'g' },
+      { name: 'cabbage', quantity: 100, unit: 'g' },
+      { name: 'carrot', quantity: 50, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'oyster sauce', quantity: 20, unit: 'ml' },
+      { name: 'sesame oil', quantity: 10, unit: 'ml' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' }
+    ],
+    nutrition: { calories: 480, protein: 28, carbs: 58, fat: 16, fiber: 4, sugar: 6, sodium: 1050 },
+    allergens: ['gluten', 'egg', 'soy', 'shellfish', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Lo Mein',
+    ingredients: [
+      { name: 'lo mein noodles', quantity: 250, unit: 'g' },
+      { name: 'beef', quantity: 150, unit: 'g' },
+      { name: 'bok choy', quantity: 100, unit: 'g' },
+      { name: 'mushrooms', quantity: 80, unit: 'g' },
+      { name: 'soy sauce', quantity: 40, unit: 'ml' },
+      { name: 'oyster sauce', quantity: 25, unit: 'ml' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 30, carbs: 60, fat: 18, fiber: 3, sugar: 5, sodium: 1120 },
+    allergens: ['gluten', 'soy', 'shellfish', 'sesame'],
+    fodmap: ['high_fructan', 'high_mannitol'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Dan Dan Noodles',
+    ingredients: [
+      { name: 'wheat noodles', quantity: 250, unit: 'g' },
+      { name: 'ground pork', quantity: 150, unit: 'g' },
+      { name: 'preserved vegetables', quantity: 30, unit: 'g' },
+      { name: 'sesame paste', quantity: 40, unit: 'g' },
+      { name: 'chili oil', quantity: 30, unit: 'ml' },
+      { name: 'soy sauce', quantity: 25, unit: 'ml' },
+      { name: 'Sichuan peppercorns', quantity: 5, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'green onion', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 28, carbs: 55, fat: 28, fiber: 3, sugar: 4, sodium: 1080 },
+    allergens: ['gluten', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- RICE ---
+  {
+    dish_name: 'Yangzhou Fried Rice',
+    ingredients: [
+      { name: 'jasmine rice', quantity: 400, unit: 'g' },
+      { name: 'char siu pork', quantity: 100, unit: 'g' },
+      { name: 'shrimp', quantity: 100, unit: 'g' },
+      { name: 'egg', quantity: 3, unit: 'whole' },
+      { name: 'peas', quantity: 50, unit: 'g' },
+      { name: 'carrot', quantity: 50, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'sesame oil', quantity: 10, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 65, fat: 16, fiber: 3, sugar: 4, sodium: 820 },
+    allergens: ['shellfish', 'egg', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // --- BEEF ---
+  {
+    dish_name: 'Beef with Broccoli',
+    ingredients: [
+      { name: 'beef sirloin', quantity: 300, unit: 'g' },
+      { name: 'broccoli florets', quantity: 250, unit: 'g' },
+      { name: 'soy sauce', quantity: 45, unit: 'ml' },
+      { name: 'oyster sauce', quantity: 30, unit: 'ml' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'cornstarch', quantity: 15, unit: 'g' },
+      { name: 'sesame oil', quantity: 10, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 38, carbs: 22, fat: 22, fiber: 5, sugar: 6, sodium: 1180 },
+    allergens: ['soy', 'shellfish', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // --- SICHUAN ---
+  {
+    dish_name: 'Sichuan Boiled Fish',
+    ingredients: [
+      { name: 'white fish fillets', quantity: 400, unit: 'g' },
+      { name: 'dried chilies', quantity: 30, unit: 'g' },
+      { name: 'Sichuan peppercorns', quantity: 15, unit: 'g' },
+      { name: 'doubanjiang', quantity: 40, unit: 'g' },
+      { name: 'bean sprouts', quantity: 150, unit: 'g' },
+      { name: 'napa cabbage', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 38, carbs: 12, fat: 32, fiber: 3, sugar: 4, sodium: 1050 },
+    allergens: ['fish', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // --- EGG DISHES ---
+  {
+    dish_name: 'Egg Foo Young',
+    ingredients: [
+      { name: 'egg', quantity: 6, unit: 'whole' },
+      { name: 'bean sprouts', quantity: 100, unit: 'g' },
+      { name: 'char siu pork', quantity: 80, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'mushrooms', quantity: 60, unit: 'g' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'oyster sauce', quantity: 30, unit: 'ml' },
+      { name: 'chicken broth', quantity: 150, unit: 'ml' },
+      { name: 'cornstarch', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 28, carbs: 15, fat: 24, fiber: 2, sugar: 4, sodium: 920 },
+    allergens: ['egg', 'soy', 'shellfish'],
+    fodmap: ['high_fructan', 'high_mannitol'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // --- APPETIZERS ---
+  {
+    dish_name: 'Spring Rolls',
+    ingredients: [
+      { name: 'spring roll wrappers', quantity: 200, unit: 'g' },
+      { name: 'cabbage', quantity: 150, unit: 'g' },
+      { name: 'carrot', quantity: 80, unit: 'g' },
+      { name: 'bean sprouts', quantity: 80, unit: 'g' },
+      { name: 'ground pork', quantity: 100, unit: 'g' },
+      { name: 'glass noodles', quantity: 50, unit: 'g' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 12, carbs: 35, fat: 16, fiber: 3, sugar: 4, sodium: 580 },
+    allergens: ['gluten', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- DESSERTS ---
+  {
+    dish_name: 'Mooncakes',
+    ingredients: [
+      { name: 'lotus seed paste', quantity: 300, unit: 'g' },
+      { name: 'flour', quantity: 200, unit: 'g' },
+      { name: 'golden syrup', quantity: 100, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 50, unit: 'ml' },
+      { name: 'salted egg yolks', quantity: 4, unit: 'pieces' },
+      { name: 'lye water', quantity: 5, unit: 'ml' }
+    ],
+    nutrition: { calories: 450, protein: 8, carbs: 65, fat: 18, fiber: 2, sugar: 42, sodium: 280 },
+    allergens: ['gluten', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'vegetarian']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
@@ -825,59 +1211,6 @@ const RECIPES = [
     allergens: ['shellfish', 'peanut', 'egg', 'soy', 'fish'],
     fodmap: ['high_fructan', 'high_gos'],
     diet_tags: ['gluten-free']
-  },
-  {
-    dish_name: 'Chicken Fried Rice',
-    ingredients: [
-      { name: 'jasmine rice', quantity: 300, unit: 'g' },
-      { name: 'chicken breast', quantity: 150, unit: 'g' },
-      { name: 'egg', quantity: 2, unit: 'whole' },
-      { name: 'peas', quantity: 50, unit: 'g' },
-      { name: 'carrot', quantity: 50, unit: 'g' },
-      { name: 'soy sauce', quantity: 30, unit: 'ml' },
-      { name: 'sesame oil', quantity: 10, unit: 'ml' },
-      { name: 'green onion', quantity: 20, unit: 'g' },
-      { name: 'garlic', quantity: 2, unit: 'cloves' }
-    ],
-    nutrition: { calories: 520, protein: 28, carbs: 62, fat: 16, fiber: 3, sugar: 4, sodium: 980 },
-    allergens: ['soy', 'egg', 'sesame'],
-    fodmap: ['high_fructan', 'moderate_gos'],
-    diet_tags: ['dairy-free']
-  },
-  {
-    dish_name: 'General Tso Chicken',
-    ingredients: [
-      { name: 'chicken thigh', quantity: 300, unit: 'g' },
-      { name: 'cornstarch', quantity: 50, unit: 'g' },
-      { name: 'soy sauce', quantity: 45, unit: 'ml' },
-      { name: 'rice vinegar', quantity: 30, unit: 'ml' },
-      { name: 'brown sugar', quantity: 30, unit: 'g' },
-      { name: 'ginger', quantity: 10, unit: 'g' },
-      { name: 'garlic', quantity: 3, unit: 'cloves' },
-      { name: 'dried red chilies', quantity: 5, unit: 'g' },
-      { name: 'vegetable oil', quantity: 60, unit: 'ml' }
-    ],
-    nutrition: { calories: 620, protein: 32, carbs: 48, fat: 32, fiber: 1, sugar: 22, sodium: 1350 },
-    allergens: ['soy'],
-    fodmap: ['high_fructan'],
-    diet_tags: ['dairy-free']
-  },
-  {
-    dish_name: 'Beef and Broccoli',
-    ingredients: [
-      { name: 'beef sirloin', quantity: 250, unit: 'g' },
-      { name: 'broccoli florets', quantity: 200, unit: 'g' },
-      { name: 'soy sauce', quantity: 45, unit: 'ml' },
-      { name: 'oyster sauce', quantity: 30, unit: 'ml' },
-      { name: 'garlic', quantity: 3, unit: 'cloves' },
-      { name: 'ginger', quantity: 10, unit: 'g' },
-      { name: 'cornstarch', quantity: 15, unit: 'g' },
-      { name: 'sesame oil', quantity: 10, unit: 'ml' }
-    ],
-    nutrition: { calories: 420, protein: 35, carbs: 22, fat: 22, fiber: 4, sugar: 6, sodium: 1180 },
-    allergens: ['soy', 'shellfish', 'sesame'],
-    fodmap: ['high_fructan'],
-    diet_tags: ['dairy-free', 'gluten-free']
   },
   {
     dish_name: 'Chicken Teriyaki',
