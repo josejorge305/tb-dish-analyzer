@@ -122,6 +122,7 @@ FATSECRET_SCOPES = "image-recognition"
 
 
 # === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===
+#   wrangler secret put ADMIN_SECRET         # Admin key for cache/R2 deletion endpoints (X-Admin-Key header)
 #   wrangler secret put APIFY_TOKEN          # Tier 1 Uber Eats scraper (Apify)
 #   wrangler secret put RAPIDAPI_KEY         # Tier 2 Uber Eats scraper (RapidAPI fallback)
 #   wrangler secret put OPENAI_API_KEY
