@@ -176,6 +176,51 @@ async function requirePremium(env, url) {
   };
 }
 
+// --- Admin Gate (secret key protected) ---
+// Usage: Pass X-Admin-Key header matching env.ADMIN_SECRET
+// Used to protect destructive operations like cache deletion
+function requireAdmin(request, env) {
+  const adminKey = request.headers.get("X-Admin-Key");
+
+  if (!env.ADMIN_SECRET) {
+    return {
+      ok: false,
+      status: 500,
+      body: {
+        ok: false,
+        error: "admin_not_configured",
+        hint: "ADMIN_SECRET environment variable not set. Run: wrangler secret put ADMIN_SECRET"
+      }
+    };
+  }
+
+  if (!adminKey) {
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        ok: false,
+        error: "admin_key_required",
+        hint: "Include X-Admin-Key header with admin secret"
+      }
+    };
+  }
+
+  if (adminKey !== env.ADMIN_SECRET) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
+        ok: false,
+        error: "admin_key_invalid",
+        hint: "Invalid admin key"
+      }
+    };
+  }
+
+  return { ok: true };
+}
+
 // ==== Step 41 Helpers: ctx + trace =========================================
 // Lightweight per-request context (for consistent analytics headers)
 function makeCtx(env) {
@@ -15281,6 +15326,15 @@ const _worker_impl = {
     }
 
     if (pathname === "/debug/menu-cache/delete") {
+      // Admin protection - requires X-Admin-Key header
+      const adminGate = requireAdmin(request, env);
+      if (!adminGate.ok) {
+        return new Response(JSON.stringify(adminGate.body), {
+          status: adminGate.status,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
       const kv = env.MENUS_CACHE;
       if (!kv) {
         return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
@@ -15318,6 +15372,15 @@ const _worker_impl = {
     }
 
     if (pathname === "/debug/menu-cache/clear-all") {
+      // Admin protection - requires X-Admin-Key header
+      const adminGate = requireAdmin(request, env);
+      if (!adminGate.ok) {
+        return new Response(JSON.stringify(adminGate.body), {
+          status: adminGate.status,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
       // Safety: require confirmation param
       if (searchParams.get("confirm") !== "yes") {
         return new Response(JSON.stringify({
@@ -15351,6 +15414,15 @@ const _worker_impl = {
     }
 
     if (pathname === "/debug/r2-list") {
+      // Admin protection - requires X-Admin-Key header
+      const adminGate = requireAdmin(request, env);
+      if (!adminGate.ok) {
+        return new Response(JSON.stringify(adminGate.body), {
+          status: adminGate.status,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
       const prefix = searchParams.get("prefix") || "";
       const limit = Number(searchParams.get("limit") || "25");
       const cursor = searchParams.get("cursor") || undefined;
@@ -15372,6 +15444,15 @@ const _worker_impl = {
     }
 
     if (pathname === "/debug/r2-get") {
+      // Admin protection - requires X-Admin-Key header
+      const adminGate = requireAdmin(request, env);
+      if (!adminGate.ok) {
+        return new Response(JSON.stringify(adminGate.body), {
+          status: adminGate.status,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
       const key = searchParams.get("key");
       if (!key) return jsonResponse({ ok: false, error: "missing ?key=" }, 400);
 
