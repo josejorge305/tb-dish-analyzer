@@ -1498,6 +1498,381 @@ const RECIPES = [
   },
 
   // ============================================
+  // === KOREAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // --- BBQ & GRILLED MEATS ---
+  {
+    dish_name: 'Bulgogi',
+    ingredients: [
+      { name: 'beef sirloin', quantity: 400, unit: 'g' },
+      { name: 'soy sauce', quantity: 60, unit: 'ml' },
+      { name: 'brown sugar', quantity: 30, unit: 'g' },
+      { name: 'sesame oil', quantity: 20, unit: 'ml' },
+      { name: 'garlic', quantity: 5, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'pear', quantity: 100, unit: 'g' },
+      { name: 'green onion', quantity: 40, unit: 'g' },
+      { name: 'sesame seeds', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 38, carbs: 22, fat: 20, fiber: 2, sugar: 16, sodium: 980 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Galbi',
+    ingredients: [
+      { name: 'beef short ribs', quantity: 500, unit: 'g' },
+      { name: 'soy sauce', quantity: 80, unit: 'ml' },
+      { name: 'brown sugar', quantity: 40, unit: 'g' },
+      { name: 'sesame oil', quantity: 25, unit: 'ml' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'Asian pear', quantity: 100, unit: 'g' },
+      { name: 'green onion', quantity: 40, unit: 'g' },
+      { name: 'black pepper', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 42, carbs: 25, fat: 35, fiber: 1, sugar: 20, sodium: 1120 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Samgyeopsal',
+    ingredients: [
+      { name: 'pork belly', quantity: 400, unit: 'g' },
+      { name: 'ssamjang', quantity: 40, unit: 'g' },
+      { name: 'lettuce leaves', quantity: 100, unit: 'g' },
+      { name: 'perilla leaves', quantity: 50, unit: 'g' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'kimchi', quantity: 80, unit: 'g' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 8, fat: 42, fiber: 2, sugar: 3, sodium: 780 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'keto', 'low-carb']
+  },
+
+  // --- RICE DISHES ---
+  {
+    dish_name: 'Bibimbap',
+    ingredients: [
+      { name: 'steamed rice', quantity: 250, unit: 'g' },
+      { name: 'beef', quantity: 100, unit: 'g' },
+      { name: 'spinach', quantity: 50, unit: 'g' },
+      { name: 'bean sprouts', quantity: 50, unit: 'g' },
+      { name: 'carrot', quantity: 40, unit: 'g' },
+      { name: 'zucchini', quantity: 40, unit: 'g' },
+      { name: 'shiitake mushrooms', quantity: 40, unit: 'g' },
+      { name: 'fried egg', quantity: 1, unit: 'whole' },
+      { name: 'gochujang', quantity: 30, unit: 'g' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 28, carbs: 72, fat: 20, fiber: 5, sugar: 8, sodium: 820 },
+    allergens: ['soy', 'egg', 'sesame'],
+    fodmap: ['high_fructan', 'high_mannitol'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Kimchi Fried Rice',
+    ingredients: [
+      { name: 'steamed rice', quantity: 300, unit: 'g' },
+      { name: 'kimchi', quantity: 150, unit: 'g' },
+      { name: 'pork belly', quantity: 100, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'gochujang', quantity: 20, unit: 'g' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'sesame seeds', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 22, carbs: 65, fat: 20, fiber: 4, sugar: 5, sodium: 920 },
+    allergens: ['soy', 'egg', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // --- STEWS (JJIGAE) ---
+  {
+    dish_name: 'Kimchi Jjigae',
+    ingredients: [
+      { name: 'aged kimchi', quantity: 300, unit: 'g' },
+      { name: 'pork belly', quantity: 150, unit: 'g' },
+      { name: 'tofu', quantity: 200, unit: 'g' },
+      { name: 'gochugaru', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'anchovy broth', quantity: 400, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 25, carbs: 15, fat: 26, fiber: 5, sugar: 6, sodium: 1250 },
+    allergens: ['soy', 'fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Sundubu Jjigae',
+    ingredients: [
+      { name: 'soft tofu', quantity: 400, unit: 'g' },
+      { name: 'pork', quantity: 100, unit: 'g' },
+      { name: 'clams', quantity: 80, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'gochugaru', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'anchovy broth', quantity: 400, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 28, carbs: 12, fat: 18, fiber: 2, sugar: 3, sodium: 1080 },
+    allergens: ['soy', 'shellfish', 'egg', 'fish'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Doenjang Jjigae',
+    ingredients: [
+      { name: 'doenjang paste', quantity: 60, unit: 'g' },
+      { name: 'tofu', quantity: 200, unit: 'g' },
+      { name: 'zucchini', quantity: 100, unit: 'g' },
+      { name: 'potato', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'anchovy broth', quantity: 500, unit: 'ml' },
+      { name: 'gochugaru', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 18, carbs: 28, fat: 12, fiber: 5, sugar: 6, sodium: 1150 },
+    allergens: ['soy', 'fish'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['dairy-free', 'vegetarian']
+  },
+
+  // --- NOODLES ---
+  {
+    dish_name: 'Japchae',
+    ingredients: [
+      { name: 'sweet potato noodles', quantity: 200, unit: 'g' },
+      { name: 'beef', quantity: 100, unit: 'g' },
+      { name: 'spinach', quantity: 80, unit: 'g' },
+      { name: 'carrot', quantity: 60, unit: 'g' },
+      { name: 'shiitake mushrooms', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 50, unit: 'g' },
+      { name: 'soy sauce', quantity: 40, unit: 'ml' },
+      { name: 'sesame oil', quantity: 20, unit: 'ml' },
+      { name: 'sugar', quantity: 15, unit: 'g' },
+      { name: 'sesame seeds', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 18, carbs: 58, fat: 14, fiber: 4, sugar: 12, sodium: 780 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan', 'high_mannitol'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Naengmyeon',
+    ingredients: [
+      { name: 'buckwheat noodles', quantity: 200, unit: 'g' },
+      { name: 'beef brisket', quantity: 80, unit: 'g' },
+      { name: 'cold beef broth', quantity: 400, unit: 'ml' },
+      { name: 'cucumber', quantity: 50, unit: 'g' },
+      { name: 'Asian pear', quantity: 50, unit: 'g' },
+      { name: 'hard-boiled egg', quantity: 1, unit: 'half' },
+      { name: 'rice vinegar', quantity: 20, unit: 'ml' },
+      { name: 'mustard', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 22, carbs: 58, fat: 8, fiber: 4, sugar: 8, sodium: 720 },
+    allergens: ['gluten', 'egg'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Jjajangmyeon',
+    ingredients: [
+      { name: 'wheat noodles', quantity: 250, unit: 'g' },
+      { name: 'pork belly', quantity: 150, unit: 'g' },
+      { name: 'black bean paste', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'zucchini', quantity: 80, unit: 'g' },
+      { name: 'potato', quantity: 80, unit: 'g' },
+      { name: 'cabbage', quantity: 60, unit: 'g' },
+      { name: 'cucumber', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 620, protein: 25, carbs: 78, fat: 24, fiber: 5, sugar: 10, sodium: 1080 },
+    allergens: ['gluten', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Jjampong',
+    ingredients: [
+      { name: 'wheat noodles', quantity: 250, unit: 'g' },
+      { name: 'seafood mix', quantity: 200, unit: 'g' },
+      { name: 'pork', quantity: 80, unit: 'g' },
+      { name: 'napa cabbage', quantity: 100, unit: 'g' },
+      { name: 'zucchini', quantity: 60, unit: 'g' },
+      { name: 'gochugaru', quantity: 25, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'seafood broth', quantity: 500, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 32, carbs: 62, fat: 16, fiber: 4, sugar: 6, sodium: 1320 },
+    allergens: ['gluten', 'shellfish', 'fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- STREET FOOD ---
+  {
+    dish_name: 'Tteokbokki',
+    ingredients: [
+      { name: 'rice cakes', quantity: 300, unit: 'g' },
+      { name: 'gochujang', quantity: 60, unit: 'g' },
+      { name: 'gochugaru', quantity: 15, unit: 'g' },
+      { name: 'fish cakes', quantity: 100, unit: 'g' },
+      { name: 'cabbage', quantity: 80, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'anchovy broth', quantity: 300, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 12, carbs: 78, fat: 6, fiber: 3, sugar: 18, sodium: 1080 },
+    allergens: ['fish', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Kimbap',
+    ingredients: [
+      { name: 'sushi rice', quantity: 250, unit: 'g' },
+      { name: 'nori', quantity: 4, unit: 'sheets' },
+      { name: 'beef', quantity: 80, unit: 'g' },
+      { name: 'spinach', quantity: 50, unit: 'g' },
+      { name: 'carrot', quantity: 40, unit: 'g' },
+      { name: 'pickled radish', quantity: 40, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' },
+      { name: 'sesame seeds', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 450, protein: 20, carbs: 65, fat: 14, fiber: 3, sugar: 5, sodium: 680 },
+    allergens: ['soy', 'egg', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- FRIED CHICKEN ---
+  {
+    dish_name: 'Korean Fried Chicken',
+    ingredients: [
+      { name: 'chicken wings', quantity: 500, unit: 'g' },
+      { name: 'potato starch', quantity: 80, unit: 'g' },
+      { name: 'gochujang', quantity: 40, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'honey', quantity: 40, unit: 'ml' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'vegetable oil', quantity: 300, unit: 'ml' },
+      { name: 'sesame seeds', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 35, carbs: 38, fat: 32, fiber: 1, sugar: 22, sodium: 920 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // --- PORK DISHES ---
+  {
+    dish_name: 'Bossam',
+    ingredients: [
+      { name: 'pork belly', quantity: 500, unit: 'g' },
+      { name: 'doenjang', quantity: 30, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'green onion', quantity: 40, unit: 'g' },
+      { name: 'lettuce leaves', quantity: 100, unit: 'g' },
+      { name: 'ssamjang', quantity: 50, unit: 'g' },
+      { name: 'kimchi', quantity: 100, unit: 'g' },
+      { name: 'salted shrimp', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 32, carbs: 12, fat: 35, fiber: 3, sugar: 5, sodium: 1150 },
+    allergens: ['soy', 'shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Dakgalbi',
+    ingredients: [
+      { name: 'chicken thigh', quantity: 400, unit: 'g' },
+      { name: 'gochujang', quantity: 50, unit: 'g' },
+      { name: 'gochugaru', quantity: 15, unit: 'g' },
+      { name: 'cabbage', quantity: 150, unit: 'g' },
+      { name: 'sweet potato', quantity: 100, unit: 'g' },
+      { name: 'rice cakes', quantity: 100, unit: 'g' },
+      { name: 'perilla leaves', quantity: 30, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 38, carbs: 45, fat: 20, fiber: 5, sugar: 12, sodium: 980 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- PANCAKES ---
+  {
+    dish_name: 'Haemul Pajeon',
+    ingredients: [
+      { name: 'flour', quantity: 150, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'green onion', quantity: 150, unit: 'g' },
+      { name: 'squid', quantity: 80, unit: 'g' },
+      { name: 'shrimp', quantity: 80, unit: 'g' },
+      { name: 'clams', quantity: 60, unit: 'g' },
+      { name: 'vegetable oil', quantity: 40, unit: 'ml' },
+      { name: 'soy dipping sauce', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 25, carbs: 38, fat: 20, fiber: 3, sugar: 4, sodium: 780 },
+    allergens: ['gluten', 'egg', 'shellfish', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- DUMPLINGS ---
+  {
+    dish_name: 'Mandu',
+    ingredients: [
+      { name: 'ground pork', quantity: 200, unit: 'g' },
+      { name: 'tofu', quantity: 100, unit: 'g' },
+      { name: 'kimchi', quantity: 100, unit: 'g' },
+      { name: 'mandu wrappers', quantity: 200, unit: 'g' },
+      { name: 'glass noodles', quantity: 50, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 22, carbs: 40, fat: 16, fiber: 3, sugar: 3, sodium: 720 },
+    allergens: ['gluten', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- SIDE DISHES ---
+  {
+    dish_name: 'Kimchi',
+    ingredients: [
+      { name: 'napa cabbage', quantity: 500, unit: 'g' },
+      { name: 'gochugaru', quantity: 60, unit: 'g' },
+      { name: 'fish sauce', quantity: 40, unit: 'ml' },
+      { name: 'garlic', quantity: 8, unit: 'cloves' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'green onion', quantity: 50, unit: 'g' },
+      { name: 'salted shrimp', quantity: 30, unit: 'g' },
+      { name: 'sugar', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 40, protein: 2, carbs: 8, fat: 0, fiber: 2, sugar: 4, sodium: 680 },
+    allergens: ['fish', 'shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'low-carb']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
