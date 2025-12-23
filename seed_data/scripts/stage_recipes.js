@@ -2657,6 +2657,761 @@ const RECIPES = [
   },
 
   // ============================================
+  // === INDIAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === CURRIES & MAINS ===
+  {
+    dish_name: 'Butter Chicken',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 500, unit: 'g' },
+      { name: 'tomato puree', quantity: 200, unit: 'ml' },
+      { name: 'heavy cream', quantity: 150, unit: 'ml' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'garam masala', quantity: 10, unit: 'g' },
+      { name: 'kashmiri chili', quantity: 8, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'yogurt', quantity: 100, unit: 'g' },
+      { name: 'fenugreek leaves', quantity: 5, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 38, carbs: 14, fat: 36, fiber: 2, sugar: 8, sodium: 680 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['gluten-free', 'keto-friendly']
+  },
+  {
+    dish_name: 'Chicken Tikka Masala',
+    ingredients: [
+      { name: 'chicken breast', quantity: 500, unit: 'g' },
+      { name: 'tomato sauce', quantity: 250, unit: 'ml' },
+      { name: 'heavy cream', quantity: 120, unit: 'ml' },
+      { name: 'yogurt', quantity: 150, unit: 'g' },
+      { name: 'garam masala', quantity: 12, unit: 'g' },
+      { name: 'turmeric', quantity: 5, unit: 'g' },
+      { name: 'cumin', quantity: 6, unit: 'g' },
+      { name: 'paprika', quantity: 8, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 42, carbs: 18, fat: 28, fiber: 3, sugar: 10, sodium: 720 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Tandoori Chicken',
+    ingredients: [
+      { name: 'chicken legs', quantity: 800, unit: 'g' },
+      { name: 'yogurt', quantity: 200, unit: 'g' },
+      { name: 'tandoori masala', quantity: 25, unit: 'g' },
+      { name: 'lemon juice', quantity: 30, unit: 'ml' },
+      { name: 'ginger paste', quantity: 20, unit: 'g' },
+      { name: 'garlic paste', quantity: 20, unit: 'g' },
+      { name: 'kashmiri chili', quantity: 10, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'ghee', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 45, carbs: 8, fat: 18, fiber: 1, sugar: 4, sodium: 580 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb', 'high-protein']
+  },
+  {
+    dish_name: 'Rogan Josh',
+    ingredients: [
+      { name: 'lamb shoulder', quantity: 500, unit: 'g' },
+      { name: 'yogurt', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'kashmiri chili', quantity: 15, unit: 'g' },
+      { name: 'ginger', quantity: 25, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'fennel seeds', quantity: 5, unit: 'g' },
+      { name: 'cardamom', quantity: 4, unit: 'pods' },
+      { name: 'cinnamon stick', quantity: 1, unit: 'piece' },
+      { name: 'ghee', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 38, carbs: 12, fat: 32, fiber: 2, sugar: 6, sodium: 520 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Vindaloo',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 500, unit: 'g' },
+      { name: 'vinegar', quantity: 60, unit: 'ml' },
+      { name: 'kashmiri chili', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 30, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'mustard seeds', quantity: 5, unit: 'g' },
+      { name: 'tamarind paste', quantity: 20, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'vegetable oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 450, protein: 35, carbs: 14, fat: 28, fiber: 2, sugar: 6, sodium: 620 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Korma',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 500, unit: 'g' },
+      { name: 'coconut milk', quantity: 200, unit: 'ml' },
+      { name: 'cashews', quantity: 60, unit: 'g' },
+      { name: 'yogurt', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 200, unit: 'g' },
+      { name: 'garam masala', quantity: 10, unit: 'g' },
+      { name: 'cardamom', quantity: 4, unit: 'pods' },
+      { name: 'cinnamon stick', quantity: 1, unit: 'piece' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'ghee', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 540, protein: 36, carbs: 18, fat: 38, fiber: 3, sugar: 8, sodium: 480 },
+    allergens: ['milk', 'tree_nut'],
+    fodmap: ['high_lactose', 'high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free']
+  },
+
+  // === VEGETARIAN ===
+  {
+    dish_name: 'Palak Paneer',
+    ingredients: [
+      { name: 'paneer', quantity: 250, unit: 'g' },
+      { name: 'spinach', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'heavy cream', quantity: 60, unit: 'ml' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'garam masala', quantity: 8, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'ghee', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 22, carbs: 14, fat: 28, fiber: 5, sugar: 4, sodium: 420 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Paneer Tikka',
+    ingredients: [
+      { name: 'paneer', quantity: 300, unit: 'g' },
+      { name: 'yogurt', quantity: 150, unit: 'g' },
+      { name: 'bell peppers', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'tandoori masala', quantity: 20, unit: 'g' },
+      { name: 'lemon juice', quantity: 20, unit: 'ml' },
+      { name: 'ginger paste', quantity: 15, unit: 'g' },
+      { name: 'garlic paste', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 350, protein: 20, carbs: 12, fat: 26, fiber: 2, sugar: 6, sodium: 380 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Dal Makhani',
+    ingredients: [
+      { name: 'black lentils', quantity: 200, unit: 'g' },
+      { name: 'kidney beans', quantity: 100, unit: 'g' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'heavy cream', quantity: 100, unit: 'ml' },
+      { name: 'tomato puree', quantity: 150, unit: 'ml' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'garam masala', quantity: 8, unit: 'g' },
+      { name: 'kashmiri chili', quantity: 5, unit: 'g' },
+      { name: 'fenugreek leaves', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 18, carbs: 42, fat: 22, fiber: 12, sugar: 6, sodium: 380 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Chana Masala',
+    ingredients: [
+      { name: 'chickpeas', quantity: 400, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'coriander powder', quantity: 10, unit: 'g' },
+      { name: 'cumin', quantity: 6, unit: 'g' },
+      { name: 'garam masala', quantity: 8, unit: 'g' },
+      { name: 'amchur powder', quantity: 5, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' },
+      { name: 'cilantro', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 14, carbs: 45, fat: 10, fiber: 12, sugar: 8, sodium: 420 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'high-fiber']
+  },
+
+  // === RICE & BREADS ===
+  {
+    dish_name: 'Biryani',
+    ingredients: [
+      { name: 'basmati rice', quantity: 300, unit: 'g' },
+      { name: 'chicken', quantity: 400, unit: 'g' },
+      { name: 'yogurt', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 200, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'biryani masala', quantity: 20, unit: 'g' },
+      { name: 'saffron', quantity: 0.5, unit: 'g' },
+      { name: 'ghee', quantity: 50, unit: 'g' },
+      { name: 'mint', quantity: 20, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 35, carbs: 58, fat: 24, fiber: 3, sugar: 6, sodium: 650 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Naan',
+    ingredients: [
+      { name: 'all-purpose flour', quantity: 300, unit: 'g' },
+      { name: 'yogurt', quantity: 100, unit: 'g' },
+      { name: 'milk', quantity: 60, unit: 'ml' },
+      { name: 'yeast', quantity: 5, unit: 'g' },
+      { name: 'sugar', quantity: 10, unit: 'g' },
+      { name: 'ghee', quantity: 30, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'cilantro', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 8, carbs: 45, fat: 8, fiber: 2, sugar: 4, sodium: 320 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+
+  // === SNACKS & STREET FOOD ===
+  {
+    dish_name: 'Samosas',
+    ingredients: [
+      { name: 'all-purpose flour', quantity: 200, unit: 'g' },
+      { name: 'potatoes', quantity: 300, unit: 'g' },
+      { name: 'peas', quantity: 80, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'coriander powder', quantity: 5, unit: 'g' },
+      { name: 'garam masala', quantity: 5, unit: 'g' },
+      { name: 'green chilies', quantity: 15, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'vegetable oil', quantity: 150, unit: 'ml' },
+      { name: 'mint chutney', quantity: 50, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 6, carbs: 38, fat: 16, fiber: 4, sugar: 2, sodium: 280 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+  {
+    dish_name: 'Masala Dosa',
+    ingredients: [
+      { name: 'rice', quantity: 200, unit: 'g' },
+      { name: 'urad dal', quantity: 60, unit: 'g' },
+      { name: 'potatoes', quantity: 300, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'mustard seeds', quantity: 5, unit: 'g' },
+      { name: 'curry leaves', quantity: 10, unit: 'leaves' },
+      { name: 'turmeric', quantity: 3, unit: 'g' },
+      { name: 'green chilies', quantity: 10, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' },
+      { name: 'sambar', quantity: 150, unit: 'ml' },
+      { name: 'coconut chutney', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 10, carbs: 62, fat: 10, fiber: 5, sugar: 4, sodium: 450 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Idli with Sambar',
+    ingredients: [
+      { name: 'rice', quantity: 200, unit: 'g' },
+      { name: 'urad dal', quantity: 100, unit: 'g' },
+      { name: 'toor dal', quantity: 100, unit: 'g' },
+      { name: 'tamarind', quantity: 20, unit: 'g' },
+      { name: 'sambar powder', quantity: 15, unit: 'g' },
+      { name: 'drumstick', quantity: 50, unit: 'g' },
+      { name: 'tomatoes', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'mustard seeds', quantity: 3, unit: 'g' },
+      { name: 'curry leaves', quantity: 8, unit: 'leaves' }
+    ],
+    nutrition: { calories: 320, protein: 12, carbs: 58, fat: 4, fiber: 8, sugar: 4, sodium: 380 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'low-fat']
+  },
+  {
+    dish_name: 'Chole Bhature',
+    ingredients: [
+      { name: 'chickpeas', quantity: 300, unit: 'g' },
+      { name: 'all-purpose flour', quantity: 250, unit: 'g' },
+      { name: 'yogurt', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'chole masala', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 150, unit: 'ml' },
+      { name: 'amchur powder', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 16, carbs: 68, fat: 20, fiber: 10, sugar: 8, sodium: 580 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegetarian', 'high-fiber']
+  },
+
+  // === ACCOMPANIMENTS ===
+  {
+    dish_name: 'Raita',
+    ingredients: [
+      { name: 'yogurt', quantity: 300, unit: 'g' },
+      { name: 'cucumber', quantity: 100, unit: 'g' },
+      { name: 'tomatoes', quantity: 50, unit: 'g' },
+      { name: 'onion', quantity: 30, unit: 'g' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'mint', quantity: 10, unit: 'g' },
+      { name: 'salt', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 120, protein: 8, carbs: 12, fat: 4, fiber: 1, sugar: 10, sodium: 320 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-calorie']
+  },
+
+  // === DESSERTS & DRINKS ===
+  {
+    dish_name: 'Gulab Jamun',
+    ingredients: [
+      { name: 'milk powder', quantity: 200, unit: 'g' },
+      { name: 'all-purpose flour', quantity: 40, unit: 'g' },
+      { name: 'ghee', quantity: 30, unit: 'g' },
+      { name: 'baking soda', quantity: 2, unit: 'g' },
+      { name: 'milk', quantity: 60, unit: 'ml' },
+      { name: 'sugar', quantity: 300, unit: 'g' },
+      { name: 'cardamom', quantity: 4, unit: 'pods' },
+      { name: 'rose water', quantity: 10, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 6, carbs: 58, fat: 14, fiber: 0, sugar: 48, sodium: 120 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Jalebi',
+    ingredients: [
+      { name: 'all-purpose flour', quantity: 200, unit: 'g' },
+      { name: 'yogurt', quantity: 30, unit: 'g' },
+      { name: 'sugar', quantity: 250, unit: 'g' },
+      { name: 'saffron', quantity: 0.3, unit: 'g' },
+      { name: 'cardamom', quantity: 3, unit: 'pods' },
+      { name: 'rose water', quantity: 10, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 350, protein: 4, carbs: 62, fat: 10, fiber: 0, sugar: 45, sodium: 80 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Chai',
+    ingredients: [
+      { name: 'black tea', quantity: 10, unit: 'g' },
+      { name: 'milk', quantity: 200, unit: 'ml' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'cardamom', quantity: 2, unit: 'pods' },
+      { name: 'cinnamon', quantity: 2, unit: 'g' },
+      { name: 'cloves', quantity: 2, unit: 'whole' }
+    ],
+    nutrition: { calories: 120, protein: 4, carbs: 18, fat: 4, fiber: 0, sugar: 16, sodium: 60 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+
+  // ============================================
+  // === MIDDLE EASTERN / LEVANTINE CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === DIPS & MEZZE ===
+  {
+    dish_name: 'Hummus',
+    ingredients: [
+      { name: 'chickpeas', quantity: 400, unit: 'g' },
+      { name: 'tahini', quantity: 80, unit: 'g' },
+      { name: 'lemon juice', quantity: 50, unit: 'ml' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'paprika', quantity: 2, unit: 'g' },
+      { name: 'salt', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 10, carbs: 28, fat: 16, fiber: 6, sugar: 2, sodium: 380 },
+    allergens: ['sesame'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Baba Ghanoush',
+    ingredients: [
+      { name: 'eggplant', quantity: 500, unit: 'g' },
+      { name: 'tahini', quantity: 60, unit: 'g' },
+      { name: 'lemon juice', quantity: 40, unit: 'ml' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'parsley', quantity: 15, unit: 'g' },
+      { name: 'pomegranate seeds', quantity: 20, unit: 'g' },
+      { name: 'cumin', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 5, carbs: 16, fat: 12, fiber: 6, sugar: 6, sodium: 280 },
+    allergens: ['sesame'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Labneh',
+    ingredients: [
+      { name: 'strained yogurt', quantity: 400, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'za\'atar', quantity: 10, unit: 'g' },
+      { name: 'salt', quantity: 3, unit: 'g' },
+      { name: 'mint', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 12, carbs: 8, fat: 12, fiber: 0, sugar: 6, sodium: 420 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+
+  // === MAIN DISHES ===
+  {
+    dish_name: 'Falafel',
+    ingredients: [
+      { name: 'chickpeas', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'parsley', quantity: 40, unit: 'g' },
+      { name: 'cilantro', quantity: 30, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'coriander powder', quantity: 5, unit: 'g' },
+      { name: 'baking powder', quantity: 5, unit: 'g' },
+      { name: 'vegetable oil', quantity: 150, unit: 'ml' },
+      { name: 'tahini sauce', quantity: 50, unit: 'ml' }
+    ],
+    nutrition: { calories: 340, protein: 14, carbs: 38, fat: 16, fiber: 8, sugar: 4, sodium: 420 },
+    allergens: ['sesame'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Chicken Shawarma',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 500, unit: 'g' },
+      { name: 'yogurt', quantity: 100, unit: 'g' },
+      { name: 'shawarma spices', quantity: 20, unit: 'g' },
+      { name: 'lemon juice', quantity: 30, unit: 'ml' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'pita bread', quantity: 2, unit: 'pieces' },
+      { name: 'pickled turnips', quantity: 40, unit: 'g' },
+      { name: 'garlic sauce', quantity: 50, unit: 'ml' },
+      { name: 'tomatoes', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 42, carbs: 35, fat: 24, fiber: 2, sugar: 4, sodium: 780 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Beef Shawarma',
+    ingredients: [
+      { name: 'beef sirloin', quantity: 500, unit: 'g' },
+      { name: 'lamb fat', quantity: 50, unit: 'g' },
+      { name: 'shawarma spices', quantity: 25, unit: 'g' },
+      { name: 'vinegar', quantity: 30, unit: 'ml' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'pita bread', quantity: 2, unit: 'pieces' },
+      { name: 'tahini sauce', quantity: 50, unit: 'ml' },
+      { name: 'pickles', quantity: 40, unit: 'g' },
+      { name: 'parsley', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 45, carbs: 32, fat: 32, fiber: 2, sugar: 4, sodium: 820 },
+    allergens: ['wheat', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Kafta Kebab',
+    ingredients: [
+      { name: 'ground beef', quantity: 400, unit: 'g' },
+      { name: 'ground lamb', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'parsley', quantity: 40, unit: 'g' },
+      { name: 'allspice', quantity: 5, unit: 'g' },
+      { name: 'cinnamon', quantity: 2, unit: 'g' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'black pepper', quantity: 2, unit: 'g' },
+      { name: 'olive oil', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 32, carbs: 6, fat: 26, fiber: 1, sugar: 2, sodium: 480 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb', 'keto-friendly']
+  },
+  {
+    dish_name: 'Shish Tawook',
+    ingredients: [
+      { name: 'chicken breast', quantity: 500, unit: 'g' },
+      { name: 'yogurt', quantity: 150, unit: 'g' },
+      { name: 'lemon juice', quantity: 40, unit: 'ml' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'tomato paste', quantity: 20, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'garlic sauce', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 48, carbs: 10, fat: 16, fiber: 1, sugar: 6, sodium: 520 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb', 'high-protein']
+  },
+  {
+    dish_name: 'Kibbeh',
+    ingredients: [
+      { name: 'bulgur wheat', quantity: 150, unit: 'g' },
+      { name: 'ground lamb', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'pine nuts', quantity: 40, unit: 'g' },
+      { name: 'allspice', quantity: 5, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'vegetable oil', quantity: 150, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 26, carbs: 28, fat: 24, fiber: 4, sugar: 2, sodium: 380 },
+    allergens: ['wheat', 'tree_nut'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Maqluba',
+    ingredients: [
+      { name: 'basmati rice', quantity: 300, unit: 'g' },
+      { name: 'chicken', quantity: 500, unit: 'g' },
+      { name: 'eggplant', quantity: 300, unit: 'g' },
+      { name: 'cauliflower', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'allspice', quantity: 8, unit: 'g' },
+      { name: 'turmeric', quantity: 3, unit: 'g' },
+      { name: 'vegetable oil', quantity: 100, unit: 'ml' },
+      { name: 'pine nuts', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 35, carbs: 52, fat: 28, fiber: 5, sugar: 6, sodium: 520 },
+    allergens: ['tree_nut'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Stuffed Grape Leaves',
+    ingredients: [
+      { name: 'grape leaves', quantity: 40, unit: 'leaves' },
+      { name: 'rice', quantity: 200, unit: 'g' },
+      { name: 'ground beef', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'parsley', quantity: 30, unit: 'g' },
+      { name: 'mint', quantity: 15, unit: 'g' },
+      { name: 'allspice', quantity: 5, unit: 'g' },
+      { name: 'lemon juice', quantity: 50, unit: 'ml' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 12, carbs: 32, fat: 12, fiber: 3, sugar: 4, sodium: 420 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Mujaddara',
+    ingredients: [
+      { name: 'green lentils', quantity: 200, unit: 'g' },
+      { name: 'rice', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 300, unit: 'g' },
+      { name: 'olive oil', quantity: 80, unit: 'ml' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'coriander powder', quantity: 3, unit: 'g' },
+      { name: 'salt', quantity: 5, unit: 'g' },
+      { name: 'yogurt', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 14, carbs: 52, fat: 14, fiber: 10, sugar: 6, sodium: 380 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'high-fiber']
+  },
+
+  // === SALADS ===
+  {
+    dish_name: 'Fattoush',
+    ingredients: [
+      { name: 'romaine lettuce', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'cucumber', quantity: 150, unit: 'g' },
+      { name: 'radishes', quantity: 80, unit: 'g' },
+      { name: 'pita chips', quantity: 60, unit: 'g' },
+      { name: 'sumac', quantity: 8, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'lemon juice', quantity: 30, unit: 'ml' },
+      { name: 'mint', quantity: 15, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 220, protein: 4, carbs: 24, fat: 12, fiber: 4, sugar: 6, sodium: 280 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+  {
+    dish_name: 'Tabbouleh',
+    ingredients: [
+      { name: 'bulgur wheat', quantity: 60, unit: 'g' },
+      { name: 'parsley', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'mint', quantity: 30, unit: 'g' },
+      { name: 'green onion', quantity: 40, unit: 'g' },
+      { name: 'lemon juice', quantity: 50, unit: 'ml' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'salt', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 4, carbs: 22, fat: 10, fiber: 5, sugar: 3, sodium: 320 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+
+  // === BREADS & PASTRIES ===
+  {
+    dish_name: 'Manakish',
+    ingredients: [
+      { name: 'pizza dough', quantity: 300, unit: 'g' },
+      { name: 'za\'atar', quantity: 40, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'sesame seeds', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 10, carbs: 52, fat: 16, fiber: 4, sugar: 2, sodium: 480 },
+    allergens: ['wheat', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+  {
+    dish_name: 'Fatayer',
+    ingredients: [
+      { name: 'pizza dough', quantity: 300, unit: 'g' },
+      { name: 'spinach', quantity: 300, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'sumac', quantity: 8, unit: 'g' },
+      { name: 'lemon juice', quantity: 20, unit: 'ml' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'pine nuts', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 10, carbs: 42, fat: 14, fiber: 5, sugar: 3, sodium: 420 },
+    allergens: ['wheat', 'tree_nut'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+
+  // === EGG DISHES ===
+  {
+    dish_name: 'Shakshuka',
+    ingredients: [
+      { name: 'eggs', quantity: 4, unit: 'whole' },
+      { name: 'tomatoes', quantity: 400, unit: 'g' },
+      { name: 'bell peppers', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'harissa', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'feta cheese', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 18, carbs: 18, fat: 22, fiber: 4, sugar: 10, sodium: 580 },
+    allergens: ['egg', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+
+  // === SOUPS ===
+  {
+    dish_name: 'Lentil Soup',
+    ingredients: [
+      { name: 'red lentils', quantity: 250, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'celery', quantity: 50, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'lemon juice', quantity: 30, unit: 'ml' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'vegetable broth', quantity: 1000, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 16, carbs: 42, fat: 6, fiber: 14, sugar: 6, sodium: 520 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'high-fiber', 'low-fat']
+  },
+
+  // === DESSERTS ===
+  {
+    dish_name: 'Baklava',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 400, unit: 'g' },
+      { name: 'walnuts', quantity: 200, unit: 'g' },
+      { name: 'pistachios', quantity: 100, unit: 'g' },
+      { name: 'butter', quantity: 200, unit: 'g' },
+      { name: 'sugar', quantity: 200, unit: 'g' },
+      { name: 'honey', quantity: 100, unit: 'g' },
+      { name: 'lemon juice', quantity: 20, unit: 'ml' },
+      { name: 'rose water', quantity: 10, unit: 'ml' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 6, carbs: 48, fat: 24, fiber: 2, sugar: 32, sodium: 180 },
+    allergens: ['wheat', 'milk', 'tree_nut'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Kunafa',
+    ingredients: [
+      { name: 'kataifi pastry', quantity: 400, unit: 'g' },
+      { name: 'mozzarella cheese', quantity: 300, unit: 'g' },
+      { name: 'ricotta cheese', quantity: 200, unit: 'g' },
+      { name: 'butter', quantity: 150, unit: 'g' },
+      { name: 'sugar syrup', quantity: 250, unit: 'ml' },
+      { name: 'rose water', quantity: 15, unit: 'ml' },
+      { name: 'pistachios', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 14, carbs: 52, fat: 26, fiber: 1, sugar: 35, sodium: 420 },
+    allergens: ['wheat', 'milk', 'tree_nut'],
+    fodmap: ['high_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
