@@ -1,5 +1,5 @@
 -- foodb_bioactives batch 1
--- Generated: 2025-12-23T05:56:39.785Z
+-- Generated: 2025-12-23T06:06:42.443Z
 
 INSERT OR IGNORE INTO ingredient_bioactives (ingredient_id, compound_name, compound_class, compound_subclass, amount_per_100g, unit, health_effects, target_organs, source, source_id) SELECT i.id, 'Quercetin', 'flavonoid', 'flavonol', 45, 'mg', '["antioxidant","anti-inflammatory","antihistamine","cardioprotective"]', '["heart","immune","respiratory"]', 'foodb_curated', 'FDB_QUERCETIN' FROM ingredients i WHERE i.canonical_name = 'onion';
 INSERT OR IGNORE INTO ingredient_bioactives (ingredient_id, compound_name, compound_class, compound_subclass, amount_per_100g, unit, health_effects, target_organs, source, source_id) SELECT i.id, 'Quercetin', 'flavonoid', 'flavonol', 4.4, 'mg', '["antioxidant","anti-inflammatory","antihistamine","cardioprotective"]', '["heart","immune","respiratory"]', 'foodb_curated', 'FDB_QUERCETIN' FROM ingredients i WHERE i.canonical_name = 'apple';

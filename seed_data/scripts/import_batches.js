@@ -27,7 +27,7 @@ const files = fs.readdirSync(BATCH_DIR)
   .sort();
 
 // Group by type and import in correct order
-const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'quality_scores', 'additives', 'bioactives', 'micronutrients', 'nutrients'];
+const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'quality_scores', 'additives', 'micronutrients', 'nutrients'];
 const grouped = {};
 
 for (const file of files) {

@@ -110,6 +110,7 @@ async function main() {
     'quality_scores',  // References ingredients (NOVA, Nutri-Score)
     'additives',       // References ingredients
     'bioactives',      // References ingredients (FooDB polyphenols, carotenoids, etc.)
+    'glycemic',        // References ingredients (GI/GL data)
     'micronutrients',  // References ingredients
     'nutrients'        // References ingredients (USDA basic nutrients)
   ];
