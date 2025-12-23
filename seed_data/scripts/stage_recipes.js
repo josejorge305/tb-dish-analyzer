@@ -3412,6 +3412,1278 @@ const RECIPES = [
   },
 
   // ============================================
+  // === TURKISH CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === KEBABS ===
+  {
+    dish_name: 'Döner Kebab',
+    ingredients: [
+      { name: 'lamb shoulder', quantity: 500, unit: 'g' },
+      { name: 'beef fat', quantity: 50, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'pita bread', quantity: 2, unit: 'pieces' },
+      { name: 'tomatoes', quantity: 80, unit: 'g' },
+      { name: 'yogurt sauce', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 38, carbs: 35, fat: 32, fiber: 2, sugar: 4, sodium: 780 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Adana Kebab',
+    ingredients: [
+      { name: 'ground lamb', quantity: 400, unit: 'g' },
+      { name: 'lamb fat', quantity: 80, unit: 'g' },
+      { name: 'red pepper flakes', quantity: 15, unit: 'g' },
+      { name: 'sumac', quantity: 5, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' },
+      { name: 'bulgur pilaf', quantity: 150, unit: 'g' },
+      { name: 'grilled tomatoes', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 32, carbs: 28, fat: 34, fiber: 4, sugar: 4, sodium: 620 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Şiş Kebab',
+    ingredients: [
+      { name: 'lamb leg', quantity: 400, unit: 'g' },
+      { name: 'bell peppers', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'tomatoes', quantity: 80, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'yogurt', quantity: 60, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'rice pilaf', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 35, carbs: 32, fat: 24, fiber: 3, sugar: 5, sodium: 520 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'İskender Kebab',
+    ingredients: [
+      { name: 'döner meat', quantity: 300, unit: 'g' },
+      { name: 'pide bread', quantity: 150, unit: 'g' },
+      { name: 'tomato sauce', quantity: 150, unit: 'ml' },
+      { name: 'butter', quantity: 50, unit: 'g' },
+      { name: 'yogurt', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 42, carbs: 38, fat: 42, fiber: 2, sugar: 8, sodium: 920 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Köfte',
+    ingredients: [
+      { name: 'ground beef', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 40, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'garlic', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 32, carbs: 12, fat: 24, fiber: 1, sugar: 2, sodium: 480 },
+    allergens: ['wheat', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // === BREADS & PASTRIES ===
+  {
+    dish_name: 'Lahmacun',
+    ingredients: [
+      { name: 'flatbread dough', quantity: 150, unit: 'g' },
+      { name: 'ground lamb', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'bell peppers', quantity: 60, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' },
+      { name: 'red pepper paste', quantity: 20, unit: 'g' },
+      { name: 'lemon', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 420, protein: 22, carbs: 42, fat: 18, fiber: 3, sugar: 5, sodium: 580 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Pide',
+    ingredients: [
+      { name: 'pide dough', quantity: 200, unit: 'g' },
+      { name: 'ground beef', quantity: 150, unit: 'g' },
+      { name: 'cheese', quantity: 80, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'tomatoes', quantity: 60, unit: 'g' },
+      { name: 'butter', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 45, fat: 26, fiber: 2, sugar: 4, sodium: 680 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Börek',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 300, unit: 'g' },
+      { name: 'feta cheese', quantity: 200, unit: 'g' },
+      { name: 'spinach', quantity: 200, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'butter', quantity: 80, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 16, carbs: 32, fat: 28, fiber: 3, sugar: 2, sodium: 620 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Gözleme',
+    ingredients: [
+      { name: 'flatbread dough', quantity: 200, unit: 'g' },
+      { name: 'feta cheese', quantity: 100, unit: 'g' },
+      { name: 'spinach', quantity: 150, unit: 'g' },
+      { name: 'potato', quantity: 100, unit: 'g' },
+      { name: 'butter', quantity: 30, unit: 'g' },
+      { name: 'onion', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 14, carbs: 42, fat: 18, fiber: 4, sugar: 3, sodium: 520 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Simit',
+    ingredients: [
+      { name: 'bread flour', quantity: 300, unit: 'g' },
+      { name: 'yeast', quantity: 7, unit: 'g' },
+      { name: 'molasses', quantity: 30, unit: 'ml' },
+      { name: 'sesame seeds', quantity: 60, unit: 'g' },
+      { name: 'salt', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 10, carbs: 52, fat: 8, fiber: 3, sugar: 6, sodium: 380 },
+    allergens: ['wheat', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+
+  // === SOUPS & SALADS ===
+  {
+    dish_name: 'Mercimek Çorbası',
+    ingredients: [
+      { name: 'red lentils', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'carrots', quantity: 80, unit: 'g' },
+      { name: 'potato', quantity: 100, unit: 'g' },
+      { name: 'tomato paste', quantity: 20, unit: 'g' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'butter', quantity: 30, unit: 'g' },
+      { name: 'lemon', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 280, protein: 14, carbs: 42, fat: 8, fiber: 12, sugar: 6, sodium: 420 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Ezme Salad',
+    ingredients: [
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'parsley', quantity: 30, unit: 'g' },
+      { name: 'red pepper paste', quantity: 20, unit: 'g' },
+      { name: 'pomegranate molasses', quantity: 15, unit: 'ml' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 150, protein: 3, carbs: 16, fat: 10, fiber: 4, sugar: 10, sodium: 280 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+
+  // === OTHER DISHES ===
+  {
+    dish_name: 'Menemen',
+    ingredients: [
+      { name: 'eggs', quantity: 3, unit: 'whole' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'bell peppers', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'butter', quantity: 30, unit: 'g' },
+      { name: 'green chilies', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 18, carbs: 14, fat: 22, fiber: 3, sugar: 8, sodium: 420 },
+    allergens: ['egg', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Çiğ Köfte',
+    ingredients: [
+      { name: 'bulgur', quantity: 200, unit: 'g' },
+      { name: 'tomato paste', quantity: 40, unit: 'g' },
+      { name: 'red pepper paste', quantity: 40, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'parsley', quantity: 30, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'pomegranate molasses', quantity: 20, unit: 'ml' },
+      { name: 'cumin', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 8, carbs: 52, fat: 4, fiber: 8, sugar: 8, sodium: 380 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'low-fat']
+  },
+  {
+    dish_name: 'Mantı',
+    ingredients: [
+      { name: 'flour', quantity: 250, unit: 'g' },
+      { name: 'ground beef', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'yogurt', quantity: 200, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'butter', quantity: 40, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'dried mint', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 26, carbs: 48, fat: 26, fiber: 2, sugar: 6, sodium: 580 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'İmam Bayıldı',
+    ingredients: [
+      { name: 'eggplant', quantity: 400, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'olive oil', quantity: 80, unit: 'ml' },
+      { name: 'parsley', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 4, carbs: 22, fat: 20, fiber: 8, sugar: 14, sodium: 280 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Turkish Stuffed Peppers',
+    ingredients: [
+      { name: 'bell peppers', quantity: 400, unit: 'g' },
+      { name: 'rice', quantity: 150, unit: 'g' },
+      { name: 'ground beef', quantity: 200, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' },
+      { name: 'mint', quantity: 10, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 20, carbs: 38, fat: 18, fiber: 4, sugar: 8, sodium: 420 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === DESSERTS & DRINKS ===
+  {
+    dish_name: 'Turkish Baklava',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 400, unit: 'g' },
+      { name: 'pistachios', quantity: 250, unit: 'g' },
+      { name: 'butter', quantity: 200, unit: 'g' },
+      { name: 'sugar', quantity: 250, unit: 'g' },
+      { name: 'lemon juice', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 450, protein: 8, carbs: 52, fat: 26, fiber: 2, sugar: 36, sodium: 180 },
+    allergens: ['wheat', 'milk', 'tree_nut'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Turkish Delight',
+    ingredients: [
+      { name: 'sugar', quantity: 400, unit: 'g' },
+      { name: 'cornstarch', quantity: 100, unit: 'g' },
+      { name: 'cream of tartar', quantity: 3, unit: 'g' },
+      { name: 'rose water', quantity: 20, unit: 'ml' },
+      { name: 'pistachios', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 2, carbs: 68, fat: 4, fiber: 1, sugar: 58, sodium: 20 },
+    allergens: ['tree_nut'],
+    fodmap: ['high_fructose'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Turkish Tea',
+    ingredients: [
+      { name: 'black tea', quantity: 15, unit: 'g' },
+      { name: 'sugar', quantity: 15, unit: 'g' },
+      { name: 'hot water', quantity: 300, unit: 'ml' }
+    ],
+    nutrition: { calories: 60, protein: 0, carbs: 15, fat: 0, fiber: 0, sugar: 15, sodium: 5 },
+    allergens: [],
+    fodmap: [],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+
+  // ============================================
+  // === GREEK CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === MAIN DISHES ===
+  {
+    dish_name: 'Gyro',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 400, unit: 'g' },
+      { name: 'pita bread', quantity: 2, unit: 'pieces' },
+      { name: 'tzatziki', quantity: 80, unit: 'ml' },
+      { name: 'tomatoes', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'oregano', quantity: 3, unit: 'g' },
+      { name: 'french fries', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 620, protein: 38, carbs: 48, fat: 32, fiber: 3, sugar: 5, sodium: 820 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Souvlaki',
+    ingredients: [
+      { name: 'chicken breast', quantity: 400, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'lemon juice', quantity: 30, unit: 'ml' },
+      { name: 'oregano', quantity: 5, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'pita bread', quantity: 2, unit: 'pieces' },
+      { name: 'tzatziki', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 45, carbs: 32, fat: 20, fiber: 2, sugar: 4, sodium: 620 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Moussaka',
+    ingredients: [
+      { name: 'eggplant', quantity: 400, unit: 'g' },
+      { name: 'ground lamb', quantity: 300, unit: 'g' },
+      { name: 'potatoes', quantity: 200, unit: 'g' },
+      { name: 'tomato sauce', quantity: 200, unit: 'ml' },
+      { name: 'béchamel sauce', quantity: 250, unit: 'ml' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' },
+      { name: 'parmesan', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 32, fat: 34, fiber: 6, sugar: 10, sodium: 680 },
+    allergens: ['milk', 'wheat'],
+    fodmap: ['high_fructan', 'high_lactose', 'high_polyol'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Pastitsio',
+    ingredients: [
+      { name: 'bucatini pasta', quantity: 400, unit: 'g' },
+      { name: 'ground beef', quantity: 400, unit: 'g' },
+      { name: 'tomato sauce', quantity: 200, unit: 'ml' },
+      { name: 'béchamel sauce', quantity: 300, unit: 'ml' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'cheese', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 32, carbs: 52, fat: 28, fiber: 3, sugar: 8, sodium: 720 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Kleftiko',
+    ingredients: [
+      { name: 'lamb shoulder', quantity: 800, unit: 'g' },
+      { name: 'potatoes', quantity: 400, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'lemon juice', quantity: 50, unit: 'ml' },
+      { name: 'oregano', quantity: 8, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'feta cheese', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 620, protein: 48, carbs: 28, fat: 38, fiber: 3, sugar: 2, sodium: 580 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Bifteki',
+    ingredients: [
+      { name: 'ground beef', quantity: 400, unit: 'g' },
+      { name: 'feta cheese', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 40, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'oregano', quantity: 5, unit: 'g' },
+      { name: 'mint', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 35, carbs: 12, fat: 28, fiber: 1, sugar: 2, sodium: 580 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+
+  // === PIES ===
+  {
+    dish_name: 'Spanakopita',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 300, unit: 'g' },
+      { name: 'spinach', quantity: 500, unit: 'g' },
+      { name: 'feta cheese', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'dill', quantity: 20, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 14, carbs: 28, fat: 26, fiber: 4, sugar: 3, sodium: 620 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Tiropita',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 300, unit: 'g' },
+      { name: 'feta cheese', quantity: 300, unit: 'g' },
+      { name: 'ricotta cheese', quantity: 150, unit: 'g' },
+      { name: 'egg', quantity: 3, unit: 'whole' },
+      { name: 'butter', quantity: 80, unit: 'g' },
+      { name: 'mint', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 18, carbs: 26, fat: 30, fiber: 1, sugar: 2, sodium: 720 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+
+  // === SALADS & DIPS ===
+  {
+    dish_name: 'Greek Salad',
+    ingredients: [
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'cucumber', quantity: 150, unit: 'g' },
+      { name: 'red onion', quantity: 60, unit: 'g' },
+      { name: 'feta cheese', quantity: 100, unit: 'g' },
+      { name: 'kalamata olives', quantity: 60, unit: 'g' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'oregano', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 10, carbs: 14, fat: 26, fiber: 4, sugar: 8, sodium: 680 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Tzatziki',
+    ingredients: [
+      { name: 'greek yogurt', quantity: 400, unit: 'g' },
+      { name: 'cucumber', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'dill', quantity: 15, unit: 'g' },
+      { name: 'lemon juice', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 180, protein: 12, carbs: 10, fat: 12, fiber: 1, sugar: 8, sodium: 420 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Greek Dolmades',
+    ingredients: [
+      { name: 'grape leaves', quantity: 30, unit: 'leaves' },
+      { name: 'rice', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'dill', quantity: 20, unit: 'g' },
+      { name: 'mint', quantity: 15, unit: 'g' },
+      { name: 'pine nuts', quantity: 30, unit: 'g' },
+      { name: 'lemon juice', quantity: 50, unit: 'ml' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 5, carbs: 38, fat: 12, fiber: 3, sugar: 3, sodium: 380 },
+    allergens: ['tree_nut'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+
+  // === SEAFOOD ===
+  {
+    dish_name: 'Saganaki',
+    ingredients: [
+      { name: 'kefalograviera cheese', quantity: 200, unit: 'g' },
+      { name: 'flour', quantity: 30, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'lemon juice', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 22, carbs: 8, fat: 34, fiber: 0, sugar: 1, sodium: 680 },
+    allergens: ['milk', 'wheat'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'low-carb']
+  },
+  {
+    dish_name: 'Greek Calamari',
+    ingredients: [
+      { name: 'squid', quantity: 400, unit: 'g' },
+      { name: 'flour', quantity: 100, unit: 'g' },
+      { name: 'olive oil', quantity: 150, unit: 'ml' },
+      { name: 'lemon juice', quantity: 40, unit: 'ml' },
+      { name: 'oregano', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 28, carbs: 26, fat: 20, fiber: 1, sugar: 1, sodium: 520 },
+    allergens: ['wheat', 'mollusk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Grilled Octopus',
+    ingredients: [
+      { name: 'octopus', quantity: 500, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'red wine vinegar', quantity: 30, unit: 'ml' },
+      { name: 'oregano', quantity: 5, unit: 'g' },
+      { name: 'lemon juice', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 36, carbs: 4, fat: 14, fiber: 0, sugar: 1, sodium: 520 },
+    allergens: ['mollusk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+
+  // === SOUPS ===
+  {
+    dish_name: 'Avgolemono Soup',
+    ingredients: [
+      { name: 'chicken broth', quantity: 1000, unit: 'ml' },
+      { name: 'chicken breast', quantity: 200, unit: 'g' },
+      { name: 'orzo pasta', quantity: 100, unit: 'g' },
+      { name: 'eggs', quantity: 3, unit: 'whole' },
+      { name: 'lemon juice', quantity: 80, unit: 'ml' },
+      { name: 'dill', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 28, carbs: 28, fat: 12, fiber: 1, sugar: 2, sodium: 680 },
+    allergens: ['wheat', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Fasolada',
+    ingredients: [
+      { name: 'white beans', quantity: 300, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'celery', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 16, carbs: 48, fat: 10, fiber: 14, sugar: 8, sodium: 380 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'high-fiber']
+  },
+
+  // === DESSERTS ===
+  {
+    dish_name: 'Greek Baklava',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 400, unit: 'g' },
+      { name: 'walnuts', quantity: 300, unit: 'g' },
+      { name: 'butter', quantity: 200, unit: 'g' },
+      { name: 'honey', quantity: 200, unit: 'g' },
+      { name: 'cinnamon', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 8, carbs: 52, fat: 28, fiber: 2, sugar: 35, sodium: 180 },
+    allergens: ['wheat', 'milk', 'tree_nut'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Loukoumades',
+    ingredients: [
+      { name: 'flour', quantity: 300, unit: 'g' },
+      { name: 'yeast', quantity: 7, unit: 'g' },
+      { name: 'honey', quantity: 100, unit: 'g' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' },
+      { name: 'cinnamon', quantity: 5, unit: 'g' },
+      { name: 'walnuts', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 6, carbs: 58, fat: 14, fiber: 2, sugar: 28, sodium: 120 },
+    allergens: ['wheat', 'tree_nut'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+  {
+    dish_name: 'Galaktoboureko',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 300, unit: 'g' },
+      { name: 'milk', quantity: 1000, unit: 'ml' },
+      { name: 'semolina', quantity: 150, unit: 'g' },
+      { name: 'sugar', quantity: 200, unit: 'g' },
+      { name: 'eggs', quantity: 4, unit: 'whole' },
+      { name: 'butter', quantity: 100, unit: 'g' },
+      { name: 'vanilla', quantity: 5, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 10, carbs: 58, fat: 18, fiber: 1, sugar: 38, sodium: 220 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Feta and Olives Mezze',
+    ingredients: [
+      { name: 'feta cheese', quantity: 200, unit: 'g' },
+      { name: 'kalamata olives', quantity: 100, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' },
+      { name: 'oregano', quantity: 3, unit: 'g' },
+      { name: 'pita bread', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 16, carbs: 24, fat: 32, fiber: 3, sugar: 4, sodium: 920 },
+    allergens: ['milk', 'wheat'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+
+  // ============================================
+  // === FRENCH CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === BREADS & PASTRIES ===
+  {
+    dish_name: 'Croissant',
+    ingredients: [
+      { name: 'flour', quantity: 500, unit: 'g' },
+      { name: 'butter', quantity: 280, unit: 'g' },
+      { name: 'milk', quantity: 140, unit: 'ml' },
+      { name: 'sugar', quantity: 50, unit: 'g' },
+      { name: 'yeast', quantity: 10, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' }
+    ],
+    nutrition: { calories: 320, protein: 6, carbs: 36, fat: 18, fiber: 1, sugar: 6, sodium: 320 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Baguette with Butter',
+    ingredients: [
+      { name: 'baguette', quantity: 150, unit: 'g' },
+      { name: 'butter', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 10, carbs: 58, fat: 16, fiber: 2, sugar: 2, sodium: 580 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+
+  // === SOUPS ===
+  {
+    dish_name: 'French Onion Soup',
+    ingredients: [
+      { name: 'onions', quantity: 600, unit: 'g' },
+      { name: 'beef broth', quantity: 1000, unit: 'ml' },
+      { name: 'baguette', quantity: 100, unit: 'g' },
+      { name: 'gruyère cheese', quantity: 150, unit: 'g' },
+      { name: 'butter', quantity: 50, unit: 'g' },
+      { name: 'white wine', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 18, carbs: 38, fat: 22, fiber: 4, sugar: 12, sodium: 920 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Bouillabaisse',
+    ingredients: [
+      { name: 'mixed fish', quantity: 600, unit: 'g' },
+      { name: 'mussels', quantity: 200, unit: 'g' },
+      { name: 'shrimp', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'fennel', quantity: 100, unit: 'g' },
+      { name: 'saffron', quantity: 0.5, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 42, carbs: 14, fat: 16, fiber: 3, sugar: 6, sodium: 720 },
+    allergens: ['fish', 'shellfish', 'mollusk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === MAIN DISHES ===
+  {
+    dish_name: 'Coq au Vin',
+    ingredients: [
+      { name: 'chicken', quantity: 1200, unit: 'g' },
+      { name: 'red wine', quantity: 500, unit: 'ml' },
+      { name: 'bacon', quantity: 150, unit: 'g' },
+      { name: 'mushrooms', quantity: 200, unit: 'g' },
+      { name: 'pearl onions', quantity: 150, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'butter', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 42, carbs: 12, fat: 32, fiber: 2, sugar: 6, sodium: 680 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Beef Bourguignon',
+    ingredients: [
+      { name: 'beef chuck', quantity: 800, unit: 'g' },
+      { name: 'red wine', quantity: 500, unit: 'ml' },
+      { name: 'bacon', quantity: 150, unit: 'g' },
+      { name: 'mushrooms', quantity: 200, unit: 'g' },
+      { name: 'pearl onions', quantity: 150, unit: 'g' },
+      { name: 'carrots', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'beef broth', quantity: 250, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 48, carbs: 16, fat: 32, fiber: 3, sugar: 8, sodium: 720 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Steak Frites',
+    ingredients: [
+      { name: 'ribeye steak', quantity: 300, unit: 'g' },
+      { name: 'potatoes', quantity: 300, unit: 'g' },
+      { name: 'butter', quantity: 50, unit: 'g' },
+      { name: 'shallots', quantity: 40, unit: 'g' },
+      { name: 'red wine', quantity: 100, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 150, unit: 'ml' }
+    ],
+    nutrition: { calories: 720, protein: 45, carbs: 42, fat: 44, fiber: 4, sugar: 2, sodium: 480 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Duck Confit',
+    ingredients: [
+      { name: 'duck legs', quantity: 600, unit: 'g' },
+      { name: 'duck fat', quantity: 400, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'thyme', quantity: 10, unit: 'g' },
+      { name: 'bay leaves', quantity: 3, unit: 'leaves' },
+      { name: 'coarse salt', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 38, carbs: 2, fat: 48, fiber: 0, sugar: 0, sodium: 620 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb', 'keto-friendly']
+  },
+  {
+    dish_name: 'Cassoulet',
+    ingredients: [
+      { name: 'white beans', quantity: 400, unit: 'g' },
+      { name: 'duck confit', quantity: 300, unit: 'g' },
+      { name: 'toulouse sausage', quantity: 200, unit: 'g' },
+      { name: 'pork belly', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 42, carbs: 48, fat: 38, fiber: 12, sugar: 6, sodium: 920 },
+    allergens: ['wheat'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['dairy-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Ratatouille',
+    ingredients: [
+      { name: 'eggplant', quantity: 200, unit: 'g' },
+      { name: 'zucchini', quantity: 200, unit: 'g' },
+      { name: 'bell peppers', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 300, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'herbes de provence', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 220, protein: 4, carbs: 22, fat: 14, fiber: 7, sugar: 14, sodium: 280 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'low-calorie']
+  },
+  {
+    dish_name: 'Quiche Lorraine',
+    ingredients: [
+      { name: 'pie crust', quantity: 200, unit: 'g' },
+      { name: 'bacon', quantity: 150, unit: 'g' },
+      { name: 'gruyère cheese', quantity: 150, unit: 'g' },
+      { name: 'eggs', quantity: 3, unit: 'whole' },
+      { name: 'heavy cream', quantity: 200, unit: 'ml' },
+      { name: 'milk', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 18, carbs: 24, fat: 36, fiber: 1, sugar: 3, sodium: 680 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+
+  // === SALADS ===
+  {
+    dish_name: 'Niçoise Salad',
+    ingredients: [
+      { name: 'tuna', quantity: 200, unit: 'g' },
+      { name: 'green beans', quantity: 150, unit: 'g' },
+      { name: 'potatoes', quantity: 150, unit: 'g' },
+      { name: 'eggs', quantity: 2, unit: 'whole' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'niçoise olives', quantity: 60, unit: 'g' },
+      { name: 'anchovies', quantity: 30, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 32, carbs: 24, fat: 24, fiber: 5, sugar: 5, sodium: 680 },
+    allergens: ['fish', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === CRÊPES ===
+  {
+    dish_name: 'Sweet Crêpes',
+    ingredients: [
+      { name: 'flour', quantity: 250, unit: 'g' },
+      { name: 'eggs', quantity: 3, unit: 'whole' },
+      { name: 'milk', quantity: 500, unit: 'ml' },
+      { name: 'butter', quantity: 50, unit: 'g' },
+      { name: 'sugar', quantity: 30, unit: 'g' },
+      { name: 'nutella', quantity: 60, unit: 'g' },
+      { name: 'strawberries', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 10, carbs: 52, fat: 16, fiber: 2, sugar: 24, sodium: 180 },
+    allergens: ['wheat', 'milk', 'egg', 'tree_nut'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Savory Galette',
+    ingredients: [
+      { name: 'buckwheat flour', quantity: 200, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'ham', quantity: 80, unit: 'g' },
+      { name: 'gruyère cheese', quantity: 80, unit: 'g' },
+      { name: 'butter', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 22, carbs: 38, fat: 22, fiber: 4, sugar: 2, sodium: 680 },
+    allergens: ['egg', 'milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Escargots',
+    ingredients: [
+      { name: 'snails', quantity: 12, unit: 'pieces' },
+      { name: 'butter', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 30, unit: 'g' },
+      { name: 'parsley', quantity: 30, unit: 'g' },
+      { name: 'shallots', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 14, carbs: 4, fat: 28, fiber: 1, sugar: 1, sodium: 480 },
+    allergens: ['milk', 'mollusk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+
+  // === DESSERTS ===
+  {
+    dish_name: 'Crème Brûlée',
+    ingredients: [
+      { name: 'heavy cream', quantity: 500, unit: 'ml' },
+      { name: 'egg yolks', quantity: 6, unit: 'whole' },
+      { name: 'sugar', quantity: 100, unit: 'g' },
+      { name: 'vanilla bean', quantity: 1, unit: 'piece' }
+    ],
+    nutrition: { calories: 380, protein: 6, carbs: 28, fat: 28, fiber: 0, sugar: 26, sodium: 60 },
+    allergens: ['milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+  {
+    dish_name: 'Macarons',
+    ingredients: [
+      { name: 'almond flour', quantity: 150, unit: 'g' },
+      { name: 'powdered sugar', quantity: 150, unit: 'g' },
+      { name: 'egg whites', quantity: 100, unit: 'g' },
+      { name: 'sugar', quantity: 150, unit: 'g' },
+      { name: 'butter', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 3, carbs: 28, fat: 8, fiber: 1, sugar: 24, sodium: 20 },
+    allergens: ['tree_nut', 'egg', 'milk'],
+    fodmap: ['high_gos'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+  {
+    dish_name: 'Tarte Tatin',
+    ingredients: [
+      { name: 'apples', quantity: 800, unit: 'g' },
+      { name: 'puff pastry', quantity: 250, unit: 'g' },
+      { name: 'butter', quantity: 100, unit: 'g' },
+      { name: 'sugar', quantity: 150, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 4, carbs: 52, fat: 18, fiber: 3, sugar: 38, sodium: 180 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructose', 'high_polyol'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Profiteroles',
+    ingredients: [
+      { name: 'choux pastry', quantity: 200, unit: 'g' },
+      { name: 'vanilla ice cream', quantity: 300, unit: 'g' },
+      { name: 'chocolate sauce', quantity: 150, unit: 'ml' },
+      { name: 'whipped cream', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 8, carbs: 48, fat: 24, fiber: 2, sugar: 36, sodium: 180 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'French Cheese Plate',
+    ingredients: [
+      { name: 'brie', quantity: 80, unit: 'g' },
+      { name: 'camembert', quantity: 80, unit: 'g' },
+      { name: 'roquefort', quantity: 60, unit: 'g' },
+      { name: 'comté', quantity: 60, unit: 'g' },
+      { name: 'grapes', quantity: 80, unit: 'g' },
+      { name: 'walnuts', quantity: 40, unit: 'g' },
+      { name: 'baguette', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 28, carbs: 28, fat: 42, fiber: 2, sugar: 8, sodium: 980 },
+    allergens: ['milk', 'wheat', 'tree_nut'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+
+  // ============================================
+  // === SPANISH CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === RICE & MAIN DISHES ===
+  {
+    dish_name: 'Paella',
+    ingredients: [
+      { name: 'bomba rice', quantity: 300, unit: 'g' },
+      { name: 'chicken thighs', quantity: 300, unit: 'g' },
+      { name: 'shrimp', quantity: 200, unit: 'g' },
+      { name: 'mussels', quantity: 150, unit: 'g' },
+      { name: 'chorizo', quantity: 100, unit: 'g' },
+      { name: 'saffron', quantity: 0.5, unit: 'g' },
+      { name: 'bell peppers', quantity: 100, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'chicken broth', quantity: 600, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 38, carbs: 52, fat: 24, fiber: 3, sugar: 5, sodium: 920 },
+    allergens: ['shellfish', 'mollusk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Tortilla Española',
+    ingredients: [
+      { name: 'eggs', quantity: 6, unit: 'whole' },
+      { name: 'potatoes', quantity: 500, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'olive oil', quantity: 200, unit: 'ml' },
+      { name: 'salt', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 12, carbs: 28, fat: 20, fiber: 3, sugar: 3, sodium: 380 },
+    allergens: ['egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Fabada Asturiana',
+    ingredients: [
+      { name: 'white beans', quantity: 400, unit: 'g' },
+      { name: 'chorizo', quantity: 150, unit: 'g' },
+      { name: 'morcilla', quantity: 100, unit: 'g' },
+      { name: 'pork shoulder', quantity: 200, unit: 'g' },
+      { name: 'saffron', quantity: 0.3, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 620, protein: 38, carbs: 48, fat: 32, fiber: 14, sugar: 4, sodium: 920 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Bacalao a la Vizcaína',
+    ingredients: [
+      { name: 'salt cod', quantity: 500, unit: 'g' },
+      { name: 'dried peppers', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 200, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 80, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 42, carbs: 16, fat: 18, fiber: 3, sugar: 8, sodium: 1200 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Conejo al Ajillo',
+    ingredients: [
+      { name: 'rabbit', quantity: 800, unit: 'g' },
+      { name: 'garlic', quantity: 40, unit: 'g' },
+      { name: 'white wine', quantity: 150, unit: 'ml' },
+      { name: 'olive oil', quantity: 80, unit: 'ml' },
+      { name: 'rosemary', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 48, carbs: 4, fat: 24, fiber: 1, sugar: 1, sodium: 420 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+
+  // === TAPAS ===
+  {
+    dish_name: 'Patatas Bravas',
+    ingredients: [
+      { name: 'potatoes', quantity: 500, unit: 'g' },
+      { name: 'tomato sauce', quantity: 150, unit: 'ml' },
+      { name: 'mayonnaise', quantity: 60, unit: 'ml' },
+      { name: 'paprika', quantity: 10, unit: 'g' },
+      { name: 'cayenne', quantity: 3, unit: 'g' },
+      { name: 'olive oil', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 5, carbs: 42, fat: 22, fiber: 4, sugar: 5, sodium: 480 },
+    allergens: ['egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+  {
+    dish_name: 'Jamón Ibérico',
+    ingredients: [
+      { name: 'ibérico ham', quantity: 100, unit: 'g' },
+      { name: 'bread', quantity: 60, unit: 'g' },
+      { name: 'olive oil', quantity: 15, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 24, carbs: 18, fat: 18, fiber: 1, sugar: 1, sodium: 1100 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Croquetas',
+    ingredients: [
+      { name: 'flour', quantity: 60, unit: 'g' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'milk', quantity: 400, unit: 'ml' },
+      { name: 'serrano ham', quantity: 100, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'breadcrumbs', quantity: 100, unit: 'g' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 12, carbs: 22, fat: 18, fiber: 1, sugar: 3, sodium: 520 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Pimientos de Padrón',
+    ingredients: [
+      { name: 'padrón peppers', quantity: 250, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'sea salt', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 120, protein: 2, carbs: 6, fat: 10, fiber: 2, sugar: 3, sodium: 480 },
+    allergens: [],
+    fodmap: [],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free', 'low-calorie', 'keto-friendly']
+  },
+  {
+    dish_name: 'Gambas al Ajillo',
+    ingredients: [
+      { name: 'shrimp', quantity: 400, unit: 'g' },
+      { name: 'garlic', quantity: 30, unit: 'g' },
+      { name: 'olive oil', quantity: 100, unit: 'ml' },
+      { name: 'dried chili', quantity: 5, unit: 'g' },
+      { name: 'parsley', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 32, carbs: 4, fat: 28, fiber: 1, sugar: 1, sodium: 580 },
+    allergens: ['shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb', 'keto-friendly']
+  },
+  {
+    dish_name: 'Albóndigas',
+    ingredients: [
+      { name: 'ground beef', quantity: 300, unit: 'g' },
+      { name: 'ground pork', quantity: 200, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 50, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'tomato sauce', quantity: 300, unit: 'ml' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 32, carbs: 18, fat: 26, fiber: 2, sugar: 6, sodium: 620 },
+    allergens: ['wheat', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Pan con Tomate',
+    ingredients: [
+      { name: 'bread', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 6, carbs: 42, fat: 10, fiber: 4, sugar: 6, sodium: 480 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+  {
+    dish_name: 'Pulpo a la Gallega',
+    ingredients: [
+      { name: 'octopus', quantity: 500, unit: 'g' },
+      { name: 'potatoes', quantity: 300, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'paprika', quantity: 10, unit: 'g' },
+      { name: 'sea salt', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 36, carbs: 24, fat: 12, fiber: 3, sugar: 2, sodium: 620 },
+    allergens: ['mollusk'],
+    fodmap: [],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Calamares a la Romana',
+    ingredients: [
+      { name: 'squid', quantity: 400, unit: 'g' },
+      { name: 'flour', quantity: 150, unit: 'g' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' },
+      { name: 'lemon', quantity: 1, unit: 'whole' }
+    ],
+    nutrition: { calories: 380, protein: 26, carbs: 32, fat: 18, fiber: 1, sugar: 1, sodium: 520 },
+    allergens: ['wheat', 'mollusk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Empanada Gallega',
+    ingredients: [
+      { name: 'bread dough', quantity: 400, unit: 'g' },
+      { name: 'tuna', quantity: 300, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'bell peppers', quantity: 100, unit: 'g' },
+      { name: 'tomato sauce', quantity: 100, unit: 'ml' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 24, carbs: 42, fat: 18, fiber: 3, sugar: 5, sodium: 680 },
+    allergens: ['wheat', 'fish', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Pintxos Assorted',
+    ingredients: [
+      { name: 'bread', quantity: 100, unit: 'g' },
+      { name: 'anchovies', quantity: 40, unit: 'g' },
+      { name: 'olives', quantity: 40, unit: 'g' },
+      { name: 'serrano ham', quantity: 40, unit: 'g' },
+      { name: 'manchego cheese', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 16, carbs: 26, fat: 18, fiber: 2, sugar: 3, sodium: 820 },
+    allergens: ['wheat', 'fish', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+
+  // === SOUPS & SALADS ===
+  {
+    dish_name: 'Gazpacho',
+    ingredients: [
+      { name: 'tomatoes', quantity: 500, unit: 'g' },
+      { name: 'cucumber', quantity: 100, unit: 'g' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'bread', quantity: 50, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'sherry vinegar', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 180, protein: 4, carbs: 18, fat: 12, fiber: 4, sugar: 10, sodium: 320 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+
+  // === DESSERTS ===
+  {
+    dish_name: 'Churros con Chocolate',
+    ingredients: [
+      { name: 'flour', quantity: 250, unit: 'g' },
+      { name: 'water', quantity: 250, unit: 'ml' },
+      { name: 'butter', quantity: 30, unit: 'g' },
+      { name: 'sugar', quantity: 50, unit: 'g' },
+      { name: 'vegetable oil', quantity: 500, unit: 'ml' },
+      { name: 'dark chocolate', quantity: 150, unit: 'g' },
+      { name: 'milk', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 6, carbs: 52, fat: 22, fiber: 3, sugar: 28, sodium: 180 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Flan',
+    ingredients: [
+      { name: 'eggs', quantity: 4, unit: 'whole' },
+      { name: 'milk', quantity: 500, unit: 'ml' },
+      { name: 'sugar', quantity: 200, unit: 'g' },
+      { name: 'vanilla', quantity: 5, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 8, carbs: 42, fat: 10, fiber: 0, sugar: 40, sodium: 120 },
+    allergens: ['milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+  {
+    dish_name: 'Crema Catalana',
+    ingredients: [
+      { name: 'milk', quantity: 500, unit: 'ml' },
+      { name: 'egg yolks', quantity: 6, unit: 'whole' },
+      { name: 'sugar', quantity: 150, unit: 'g' },
+      { name: 'cornstarch', quantity: 30, unit: 'g' },
+      { name: 'cinnamon stick', quantity: 1, unit: 'piece' },
+      { name: 'lemon zest', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 8, carbs: 42, fat: 14, fiber: 0, sugar: 36, sodium: 80 },
+    allergens: ['milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
