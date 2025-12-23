@@ -2262,6 +2262,401 @@ const RECIPES = [
   },
 
   // ============================================
+  // === THAI CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === NOODLES ===
+  {
+    dish_name: 'Pad Thai',
+    ingredients: [
+      { name: 'rice noodles', quantity: 200, unit: 'g' },
+      { name: 'shrimp', quantity: 100, unit: 'g' },
+      { name: 'tofu', quantity: 80, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'bean sprouts', quantity: 80, unit: 'g' },
+      { name: 'garlic chives', quantity: 30, unit: 'g' },
+      { name: 'peanuts', quantity: 30, unit: 'g' },
+      { name: 'tamarind paste', quantity: 30, unit: 'g' },
+      { name: 'fish sauce', quantity: 30, unit: 'ml' },
+      { name: 'palm sugar', quantity: 25, unit: 'g' },
+      { name: 'dried shrimp', quantity: 15, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 62, fat: 18, fiber: 3, sugar: 14, sodium: 1150 },
+    allergens: ['shellfish', 'egg', 'peanut', 'fish', 'soy'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Pad See Ew',
+    ingredients: [
+      { name: 'wide rice noodles', quantity: 250, unit: 'g' },
+      { name: 'chicken breast', quantity: 150, unit: 'g' },
+      { name: 'chinese broccoli', quantity: 150, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'dark soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'oyster sauce', quantity: 20, unit: 'ml' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' },
+      { name: 'white pepper', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 32, carbs: 68, fat: 20, fiber: 3, sugar: 6, sodium: 1400 },
+    allergens: ['egg', 'soy', 'shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Pad Kee Mao',
+    ingredients: [
+      { name: 'wide rice noodles', quantity: 250, unit: 'g' },
+      { name: 'beef sirloin', quantity: 150, unit: 'g' },
+      { name: 'thai basil', quantity: 30, unit: 'g' },
+      { name: 'thai chilies', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 5, unit: 'cloves' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'tomatoes', quantity: 60, unit: 'g' },
+      { name: 'baby corn', quantity: 50, unit: 'g' },
+      { name: 'oyster sauce', quantity: 25, unit: 'ml' },
+      { name: 'fish sauce', quantity: 20, unit: 'ml' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'egg', quantity: 1, unit: 'whole' }
+    ],
+    nutrition: { calories: 550, protein: 30, carbs: 65, fat: 18, fiber: 4, sugar: 8, sodium: 1250 },
+    allergens: ['egg', 'soy', 'shellfish', 'fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Khao Soi',
+    ingredients: [
+      { name: 'egg noodles', quantity: 200, unit: 'g' },
+      { name: 'chicken thighs', quantity: 200, unit: 'g' },
+      { name: 'coconut milk', quantity: 300, unit: 'ml' },
+      { name: 'red curry paste', quantity: 40, unit: 'g' },
+      { name: 'turmeric', quantity: 5, unit: 'g' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'palm sugar', quantity: 15, unit: 'g' },
+      { name: 'shallots', quantity: 30, unit: 'g' },
+      { name: 'pickled mustard greens', quantity: 30, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' },
+      { name: 'crispy noodles', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 35, carbs: 55, fat: 38, fiber: 3, sugar: 10, sodium: 1100 },
+    allergens: ['wheat', 'egg', 'fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free']
+  },
+
+  // === CURRIES ===
+  {
+    dish_name: 'Green Curry',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 250, unit: 'g' },
+      { name: 'coconut milk', quantity: 400, unit: 'ml' },
+      { name: 'green curry paste', quantity: 50, unit: 'g' },
+      { name: 'thai eggplant', quantity: 100, unit: 'g' },
+      { name: 'bamboo shoots', quantity: 80, unit: 'g' },
+      { name: 'thai basil', quantity: 20, unit: 'g' },
+      { name: 'kaffir lime leaves', quantity: 4, unit: 'leaves' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'palm sugar', quantity: 15, unit: 'g' },
+      { name: 'thai chilies', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 32, carbs: 18, fat: 38, fiber: 4, sugar: 10, sodium: 980 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Red Curry',
+    ingredients: [
+      { name: 'beef sirloin', quantity: 250, unit: 'g' },
+      { name: 'coconut milk', quantity: 400, unit: 'ml' },
+      { name: 'red curry paste', quantity: 50, unit: 'g' },
+      { name: 'bamboo shoots', quantity: 100, unit: 'g' },
+      { name: 'bell peppers', quantity: 80, unit: 'g' },
+      { name: 'thai basil', quantity: 20, unit: 'g' },
+      { name: 'kaffir lime leaves', quantity: 4, unit: 'leaves' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'palm sugar', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 550, protein: 34, carbs: 16, fat: 40, fiber: 3, sugar: 10, sodium: 1020 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Massaman Curry',
+    ingredients: [
+      { name: 'beef chuck', quantity: 300, unit: 'g' },
+      { name: 'coconut milk', quantity: 400, unit: 'ml' },
+      { name: 'massaman curry paste', quantity: 50, unit: 'g' },
+      { name: 'potatoes', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'peanuts', quantity: 40, unit: 'g' },
+      { name: 'tamarind paste', quantity: 20, unit: 'g' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'palm sugar', quantity: 20, unit: 'g' },
+      { name: 'cinnamon stick', quantity: 1, unit: 'piece' },
+      { name: 'cardamom', quantity: 3, unit: 'pods' }
+    ],
+    nutrition: { calories: 620, protein: 38, carbs: 32, fat: 42, fiber: 4, sugar: 14, sodium: 1050 },
+    allergens: ['fish', 'peanut'],
+    fodmap: ['high_fructan', 'high_polyol', 'high_gos'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Panang Curry',
+    ingredients: [
+      { name: 'pork tenderloin', quantity: 250, unit: 'g' },
+      { name: 'coconut milk', quantity: 350, unit: 'ml' },
+      { name: 'panang curry paste', quantity: 50, unit: 'g' },
+      { name: 'kaffir lime leaves', quantity: 5, unit: 'leaves' },
+      { name: 'thai basil', quantity: 20, unit: 'g' },
+      { name: 'fish sauce', quantity: 20, unit: 'ml' },
+      { name: 'palm sugar', quantity: 15, unit: 'g' },
+      { name: 'peanuts', quantity: 25, unit: 'g' },
+      { name: 'red chilies', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 540, protein: 35, carbs: 14, fat: 40, fiber: 2, sugar: 10, sodium: 920 },
+    allergens: ['fish', 'peanut'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+
+  // === SOUPS ===
+  {
+    dish_name: 'Tom Yum Soup',
+    ingredients: [
+      { name: 'shrimp', quantity: 200, unit: 'g' },
+      { name: 'mushrooms', quantity: 100, unit: 'g' },
+      { name: 'lemongrass', quantity: 30, unit: 'g' },
+      { name: 'galangal', quantity: 20, unit: 'g' },
+      { name: 'kaffir lime leaves', quantity: 5, unit: 'leaves' },
+      { name: 'thai chilies', quantity: 15, unit: 'g' },
+      { name: 'fish sauce', quantity: 30, unit: 'ml' },
+      { name: 'lime juice', quantity: 40, unit: 'ml' },
+      { name: 'tom yum paste', quantity: 30, unit: 'g' },
+      { name: 'cilantro', quantity: 15, unit: 'g' },
+      { name: 'cherry tomatoes', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 26, carbs: 12, fat: 4, fiber: 2, sugar: 6, sodium: 1350 },
+    allergens: ['shellfish', 'fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb', 'low-fat']
+  },
+  {
+    dish_name: 'Tom Kha Gai',
+    ingredients: [
+      { name: 'chicken breast', quantity: 200, unit: 'g' },
+      { name: 'coconut milk', quantity: 400, unit: 'ml' },
+      { name: 'mushrooms', quantity: 100, unit: 'g' },
+      { name: 'galangal', quantity: 25, unit: 'g' },
+      { name: 'lemongrass', quantity: 25, unit: 'g' },
+      { name: 'kaffir lime leaves', quantity: 4, unit: 'leaves' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'lime juice', quantity: 30, unit: 'ml' },
+      { name: 'thai chilies', quantity: 10, unit: 'g' },
+      { name: 'cilantro', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 32, carbs: 12, fat: 30, fiber: 2, sugar: 6, sodium: 980 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb', 'keto-friendly']
+  },
+
+  // === SALADS & APPETIZERS ===
+  {
+    dish_name: 'Som Tam',
+    ingredients: [
+      { name: 'green papaya', quantity: 250, unit: 'g' },
+      { name: 'cherry tomatoes', quantity: 60, unit: 'g' },
+      { name: 'long beans', quantity: 50, unit: 'g' },
+      { name: 'dried shrimp', quantity: 20, unit: 'g' },
+      { name: 'peanuts', quantity: 25, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'thai chilies', quantity: 15, unit: 'g' },
+      { name: 'palm sugar', quantity: 20, unit: 'g' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'lime juice', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 220, protein: 10, carbs: 28, fat: 9, fiber: 5, sugar: 18, sodium: 920 },
+    allergens: ['shellfish', 'fish', 'peanut'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Larb',
+    ingredients: [
+      { name: 'ground pork', quantity: 300, unit: 'g' },
+      { name: 'shallots', quantity: 40, unit: 'g' },
+      { name: 'mint', quantity: 25, unit: 'g' },
+      { name: 'cilantro', quantity: 20, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'toasted rice powder', quantity: 20, unit: 'g' },
+      { name: 'fish sauce', quantity: 30, unit: 'ml' },
+      { name: 'lime juice', quantity: 40, unit: 'ml' },
+      { name: 'thai chilies', quantity: 15, unit: 'g' },
+      { name: 'lettuce', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 28, carbs: 12, fat: 18, fiber: 2, sugar: 4, sodium: 1100 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Satay',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 400, unit: 'g' },
+      { name: 'coconut milk', quantity: 100, unit: 'ml' },
+      { name: 'turmeric', quantity: 5, unit: 'g' },
+      { name: 'coriander powder', quantity: 5, unit: 'g' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'lemongrass', quantity: 20, unit: 'g' },
+      { name: 'peanut sauce', quantity: 100, unit: 'ml' },
+      { name: 'fish sauce', quantity: 15, unit: 'ml' },
+      { name: 'palm sugar', quantity: 15, unit: 'g' },
+      { name: 'cucumber', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 38, carbs: 18, fat: 30, fiber: 2, sugar: 12, sodium: 850 },
+    allergens: ['peanut', 'fish'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Thai Spring Rolls',
+    ingredients: [
+      { name: 'spring roll wrappers', quantity: 8, unit: 'sheets' },
+      { name: 'glass noodles', quantity: 50, unit: 'g' },
+      { name: 'ground pork', quantity: 150, unit: 'g' },
+      { name: 'cabbage', quantity: 80, unit: 'g' },
+      { name: 'carrots', quantity: 50, unit: 'g' },
+      { name: 'wood ear mushrooms', quantity: 30, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'white pepper', quantity: 2, unit: 'g' },
+      { name: 'vegetable oil', quantity: 150, unit: 'ml' },
+      { name: 'sweet chili sauce', quantity: 50, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 14, carbs: 38, fat: 20, fiber: 2, sugar: 8, sodium: 680 },
+    allergens: ['wheat', 'soy'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free']
+  },
+
+  // === STIR-FRIES ===
+  {
+    dish_name: 'Pad Kra Pao',
+    ingredients: [
+      { name: 'ground chicken', quantity: 300, unit: 'g' },
+      { name: 'thai holy basil', quantity: 40, unit: 'g' },
+      { name: 'thai chilies', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'shallots', quantity: 30, unit: 'g' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'oyster sauce', quantity: 20, unit: 'ml' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'sugar', quantity: 10, unit: 'g' },
+      { name: 'fried egg', quantity: 1, unit: 'whole' },
+      { name: 'jasmine rice', quantity: 200, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 35, carbs: 55, fat: 24, fiber: 2, sugar: 6, sodium: 1250 },
+    allergens: ['fish', 'soy', 'shellfish', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Pad Prik King',
+    ingredients: [
+      { name: 'pork belly', quantity: 250, unit: 'g' },
+      { name: 'long beans', quantity: 150, unit: 'g' },
+      { name: 'red curry paste', quantity: 40, unit: 'g' },
+      { name: 'kaffir lime leaves', quantity: 4, unit: 'leaves' },
+      { name: 'fish sauce', quantity: 20, unit: 'ml' },
+      { name: 'palm sugar', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 24, carbs: 18, fat: 36, fiber: 4, sugar: 10, sodium: 920 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Crispy Pork Belly with Basil',
+    ingredients: [
+      { name: 'crispy pork belly', quantity: 300, unit: 'g' },
+      { name: 'thai holy basil', quantity: 40, unit: 'g' },
+      { name: 'thai chilies', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'oyster sauce', quantity: 25, unit: 'ml' },
+      { name: 'fish sauce', quantity: 20, unit: 'ml' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'sugar', quantity: 10, unit: 'g' },
+      { name: 'jasmine rice', quantity: 200, unit: 'g' }
+    ],
+    nutrition: { calories: 720, protein: 32, carbs: 52, fat: 44, fiber: 2, sugar: 6, sodium: 1350 },
+    allergens: ['fish', 'soy', 'shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // === RICE DISHES ===
+  {
+    dish_name: 'Thai Fried Rice',
+    ingredients: [
+      { name: 'jasmine rice', quantity: 300, unit: 'g' },
+      { name: 'shrimp', quantity: 100, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'tomatoes', quantity: 60, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'fish sauce', quantity: 25, unit: 'ml' },
+      { name: 'soy sauce', quantity: 15, unit: 'ml' },
+      { name: 'white pepper', quantity: 2, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' },
+      { name: 'cucumber', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 22, carbs: 65, fat: 14, fiber: 2, sugar: 5, sodium: 1100 },
+    allergens: ['shellfish', 'egg', 'fish', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === DESSERTS & DRINKS ===
+  {
+    dish_name: 'Mango Sticky Rice',
+    ingredients: [
+      { name: 'sticky rice', quantity: 150, unit: 'g' },
+      { name: 'ripe mango', quantity: 200, unit: 'g' },
+      { name: 'coconut milk', quantity: 200, unit: 'ml' },
+      { name: 'sugar', quantity: 60, unit: 'g' },
+      { name: 'salt', quantity: 2, unit: 'g' },
+      { name: 'toasted sesame seeds', quantity: 10, unit: 'g' },
+      { name: 'mung beans', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 6, carbs: 82, fat: 14, fiber: 3, sugar: 45, sodium: 180 },
+    allergens: ['sesame'],
+    fodmap: ['high_fructose', 'high_polyol'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Thai Iced Tea',
+    ingredients: [
+      { name: 'thai tea mix', quantity: 30, unit: 'g' },
+      { name: 'condensed milk', quantity: 50, unit: 'ml' },
+      { name: 'evaporated milk', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'hot water', quantity: 200, unit: 'ml' },
+      { name: 'ice', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 220, protein: 4, carbs: 38, fat: 6, fiber: 0, sugar: 36, sodium: 80 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
