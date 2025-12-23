@@ -6142,46 +6142,62 @@ async function lookupCachedBaseRecipe(env, dishName) {
 }
 
 /**
- * Detect extra ingredients from vision that aren't in the base recipe.
- * Returns array of ingredient names found in vision but not in base.
+ * Detect vision delta: both extras (+ delta) AND missing (- delta) ingredients.
+ * Returns { extras: [...], missing: [...] }
+ *
+ * + delta: Ingredients in vision but NOT in base recipe (additions)
+ * - delta: Ingredients in base recipe but NOT in vision (removals)
  */
-function detectVisionExtras(baseIngredients, visionComponents) {
-  if (!Array.isArray(visionComponents) || visionComponents.length === 0) {
-    return [];
-  }
+function detectVisionDelta(baseIngredients, visionComponents) {
+  const extras = [];
+  const missing = [];
 
   // Normalize base ingredient names for matching
-  const baseSet = new Set(
-    (baseIngredients || []).map(ing => {
-      const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
-      return normalizeDishNameForCache(name);
-    }).filter(Boolean)
-  );
+  const baseList = (baseIngredients || []).map(ing => {
+    const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
+    const normalized = normalizeDishNameForCache(name);
+    return { original: ing, name, normalized };
+  }).filter(b => b.normalized);
 
-  const extras = [];
-  const seenExtras = new Set();
+  const baseSet = new Set(baseList.map(b => b.normalized));
 
-  for (const comp of visionComponents) {
+  // Normalize vision components
+  const visionList = (visionComponents || []).map(comp => {
     const label = comp.label || comp.food_entry_name || comp.component || '';
-    const normalizedLabel = normalizeDishNameForCache(label);
+    const normalized = normalizeDishNameForCache(label);
+    return { original: comp, label, normalized };
+  }).filter(v => v.normalized);
 
-    if (!normalizedLabel || seenExtras.has(normalizedLabel)) continue;
+  const visionSet = new Set(visionList.map(v => v.normalized));
 
-    // Check if this is already in the base recipe
-    let inBase = false;
-    for (const baseName of baseSet) {
-      // Fuzzy match: if one contains the other
-      if (baseName.includes(normalizedLabel) || normalizedLabel.includes(baseName)) {
-        inBase = true;
+  // Track what's been matched
+  const matchedBase = new Set();
+  const matchedVision = new Set();
+
+  // Find matches between base and vision (fuzzy matching)
+  for (const base of baseList) {
+    for (const vision of visionList) {
+      if (matchedVision.has(vision.normalized)) continue;
+
+      // Fuzzy match: one contains the other
+      if (base.normalized.includes(vision.normalized) ||
+          vision.normalized.includes(base.normalized)) {
+        matchedBase.add(base.normalized);
+        matchedVision.add(vision.normalized);
         break;
       }
     }
+  }
 
-    if (!inBase) {
-      seenExtras.add(normalizedLabel);
+  // + delta: Vision items not matched to base (ADDITIONS)
+  const seenExtras = new Set();
+  for (const vision of visionList) {
+    if (!matchedVision.has(vision.normalized) && !seenExtras.has(vision.normalized)) {
+      seenExtras.add(vision.normalized);
+      const comp = vision.original;
       extras.push({
-        name: label,
-        normalized: normalizedLabel,
+        name: vision.label,
+        normalized: vision.normalized,
         nutrition: comp.energyKcal != null ? {
           energyKcal: comp.energyKcal || 0,
           protein_g: comp.protein_g || 0,
@@ -6191,31 +6207,106 @@ function detectVisionExtras(baseIngredients, visionComponents) {
           sugar_g: comp.sugar_g || 0,
           sodium_mg: comp.sodium_mg || 0
         } : null,
-        source: comp.source || 'vision'
+        source: comp.source || 'vision',
+        deltaType: 'addition'
       });
     }
   }
 
-  return extras;
+  // - delta: Base items not matched to vision (REMOVALS)
+  // Only flag removals if we have meaningful vision data (at least 2 components detected)
+  if (visionList.length >= 2) {
+    const seenMissing = new Set();
+    for (const base of baseList) {
+      if (!matchedBase.has(base.normalized) && !seenMissing.has(base.normalized)) {
+        // Skip common "invisible" ingredients that vision can't detect
+        const invisibleIngredients = new Set([
+          'salt', 'pepper', 'oil', 'olive oil', 'vegetable oil', 'butter',
+          'garlic', 'seasoning', 'spices', 'herbs', 'water', 'broth', 'stock',
+          'flour', 'cornstarch', 'baking powder', 'baking soda', 'yeast',
+          'vanilla', 'extract', 'sugar', 'brown sugar', 'honey', 'syrup'
+        ]);
+
+        if (invisibleIngredients.has(base.normalized)) continue;
+
+        seenMissing.add(base.normalized);
+        const ing = base.original;
+        missing.push({
+          name: base.name,
+          normalized: base.normalized,
+          originalData: typeof ing === 'object' ? ing : null,
+          source: 'base_recipe',
+          deltaType: 'removal'
+        });
+      }
+    }
+  }
+
+  return { extras, missing };
 }
 
 /**
- * Merge base recipe with detected extras.
- * Combines ingredients and recomputes nutrition/allergens.
+ * Detect extra ingredients from vision that aren't in the base recipe.
+ * Returns array of ingredient names found in vision but not in base.
+ * @deprecated Use detectVisionDelta for full +/- delta support
  */
-async function mergeRecipeWithExtras(env, baseRecipe, extras) {
+function detectVisionExtras(baseIngredients, visionComponents) {
+  const delta = detectVisionDelta(baseIngredients, visionComponents);
+  return delta.extras;
+}
+
+/**
+ * Merge base recipe with detected delta (extras and missing).
+ * Adds extras, removes missing, recomputes nutrition/allergens.
+ */
+async function mergeRecipeWithDelta(env, baseRecipe, delta) {
   if (!baseRecipe) return null;
-  if (!extras || extras.length === 0) return baseRecipe;
+
+  const extras = delta?.extras || [];
+  const missing = delta?.missing || [];
+
+  if (extras.length === 0 && missing.length === 0) return baseRecipe;
 
   // Start with base recipe data
   const merged = {
     ...baseRecipe,
     _mergedExtras: extras.map(e => e.name),
+    _removedIngredients: missing.map(m => m.name),
     _originalIngredientCount: baseRecipe.ingredients?.length || 0
   };
 
+  // Build set of missing ingredient names for filtering
+  const missingSet = new Set(missing.map(m => m.normalized));
+
+  // Filter out missing ingredients, add extras
+  const mergedIngredients = [];
+
+  for (const ing of (baseRecipe.ingredients || [])) {
+    const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
+    const normalized = normalizeDishNameForCache(name);
+
+    // Check if this ingredient is in the missing list
+    let isMissing = false;
+    for (const m of missingSet) {
+      if (normalized.includes(m) || m.includes(normalized)) {
+        isMissing = true;
+        break;
+      }
+    }
+
+    if (!isMissing) {
+      mergedIngredients.push(ing);
+    } else {
+      // Mark as removed but keep for reference
+      mergedIngredients.push({
+        ...(typeof ing === 'object' ? ing : { name: ing }),
+        _removed: true,
+        _removalReason: 'not_detected_in_vision'
+      });
+    }
+  }
+
   // Add extra ingredients
-  const mergedIngredients = [...(baseRecipe.ingredients || [])];
   for (const extra of extras) {
     mergedIngredients.push({
       name: extra.name,
@@ -6225,7 +6316,7 @@ async function mergeRecipeWithExtras(env, baseRecipe, extras) {
   }
   merged.ingredients = mergedIngredients;
 
-  // Recompute nutrition by adding extras
+  // Recompute nutrition
   const baseNutrition = baseRecipe.nutrition || {};
   let totalNutrition = {
     energyKcal: baseNutrition.energyKcal || 0,
@@ -6237,7 +6328,35 @@ async function mergeRecipeWithExtras(env, baseRecipe, extras) {
     sodium_mg: baseNutrition.sodium_mg || 0
   };
 
-  // Add nutrition from extras (if available from vision)
+  // SUBTRACT nutrition from missing ingredients
+  for (const miss of missing) {
+    if (miss.originalData?.nutrition) {
+      const n = miss.originalData.nutrition;
+      totalNutrition.energyKcal -= n.energyKcal || n.calories_kcal || 0;
+      totalNutrition.protein_g -= n.protein_g || 0;
+      totalNutrition.carbs_g -= n.carbs_g || 0;
+      totalNutrition.fat_g -= n.fat_g || 0;
+      totalNutrition.fiber_g -= n.fiber_g || 0;
+      totalNutrition.sugar_g -= n.sugar_g || 0;
+      totalNutrition.sodium_mg -= n.sodium_mg || 0;
+    } else if (env) {
+      // Lookup missing ingredient nutrition from Super Brain to subtract
+      const missData = await lookupIngredientFromSuperBrain(env, miss.name);
+      if (missData?.nutrients) {
+        // Assume ~30g portion was the original amount
+        const factor = 0.3;
+        totalNutrition.energyKcal -= (missData.nutrients.energy_kcal || 0) * factor;
+        totalNutrition.protein_g -= (missData.nutrients.protein_g || 0) * factor;
+        totalNutrition.carbs_g -= (missData.nutrients.carbohydrate_g || 0) * factor;
+        totalNutrition.fat_g -= (missData.nutrients.fat_g || 0) * factor;
+        totalNutrition.fiber_g -= (missData.nutrients.fiber_g || 0) * factor;
+        totalNutrition.sugar_g -= (missData.nutrients.sugar_g || 0) * factor;
+        totalNutrition.sodium_mg -= (missData.nutrients.sodium_mg || 0) * factor;
+      }
+    }
+  }
+
+  // ADD nutrition from extras
   for (const extra of extras) {
     if (extra.nutrition) {
       totalNutrition.energyKcal += extra.nutrition.energyKcal || 0;
@@ -6248,10 +6367,8 @@ async function mergeRecipeWithExtras(env, baseRecipe, extras) {
       totalNutrition.sugar_g += extra.nutrition.sugar_g || 0;
       totalNutrition.sodium_mg += extra.nutrition.sodium_mg || 0;
     } else if (env) {
-      // Lookup extra ingredient nutrition from Super Brain
       const extraData = await lookupIngredientFromSuperBrain(env, extra.name);
       if (extraData?.nutrients) {
-        // Assume ~30g portion for detected extras
         const factor = 0.3;
         totalNutrition.energyKcal += (extraData.nutrients.energy_kcal || 0) * factor;
         totalNutrition.protein_g += (extraData.nutrients.protein_g || 0) * factor;
@@ -6261,7 +6378,6 @@ async function mergeRecipeWithExtras(env, baseRecipe, extras) {
         totalNutrition.sugar_g += (extraData.nutrients.sugar_g || 0) * factor;
         totalNutrition.sodium_mg += (extraData.nutrients.sodium_mg || 0) * factor;
 
-        // Add any allergens from extra
         if (extraData.allergens?.length > 0) {
           merged.allergenFlags = [
             ...(merged.allergenFlags || []),
@@ -6277,10 +6393,59 @@ async function mergeRecipeWithExtras(env, baseRecipe, extras) {
     }
   }
 
+  // Remove allergens that came solely from missing ingredients
+  if (missing.length > 0 && merged.allergenFlags?.length > 0) {
+    // Get allergens from missing ingredients
+    const missingAllergenSources = new Set();
+    for (const miss of missing) {
+      if (env) {
+        const missData = await lookupIngredientFromSuperBrain(env, miss.name);
+        if (missData?.allergens) {
+          for (const a of missData.allergens) {
+            missingAllergenSources.add(`${a.allergen_code}:${miss.name}`);
+          }
+        }
+      }
+    }
+
+    // Filter allergen flags - remove ones that mention missing ingredients
+    if (missingAllergenSources.size > 0) {
+      merged.allergenFlags = merged.allergenFlags.filter(af => {
+        // Check if this allergen's message mentions a missing ingredient
+        for (const miss of missing) {
+          if (af.message && af.message.toLowerCase().includes(miss.normalized)) {
+            merged._removedAllergens = merged._removedAllergens || [];
+            merged._removedAllergens.push(af);
+            return false;
+          }
+        }
+        return true;
+      });
+    }
+  }
+
+  // Ensure nutrition values don't go negative
+  for (const key of Object.keys(totalNutrition)) {
+    if (totalNutrition[key] < 0) totalNutrition[key] = 0;
+  }
+
   merged.nutrition = totalNutrition;
   merged._nutritionAdjusted = true;
+  merged._deltaApplied = {
+    additions: extras.length,
+    removals: missing.length
+  };
 
   return merged;
+}
+
+/**
+ * Merge base recipe with detected extras.
+ * Combines ingredients and recomputes nutrition/allergens.
+ * @deprecated Use mergeRecipeWithDelta for full +/- delta support
+ */
+async function mergeRecipeWithExtras(env, baseRecipe, extras) {
+  return mergeRecipeWithDelta(env, baseRecipe, { extras, missing: [] });
 }
 
 /**
@@ -6383,26 +6548,32 @@ function extractIngredientsFromDescription(description) {
 }
 
 /**
- * Detect extras from both vision and menu description.
- * Combines both sources and deduplicates.
+ * Detect full delta from vision and menu description.
+ * Returns { extras: [...], missing: [...] }
+ *
+ * + delta (extras): Ingredients in vision/description but NOT in base
+ * - delta (missing): Ingredients in base but NOT in vision (only from vision source)
  */
-function detectAllExtras(baseIngredients, visionComponents, menuDescription) {
-  const visionExtras = detectVisionExtras(baseIngredients, visionComponents || []);
+function detectFullDelta(baseIngredients, visionComponents, menuDescription) {
+  // Get vision delta (both + and -)
+  const visionDelta = detectVisionDelta(baseIngredients, visionComponents || []);
+
+  // Get description extras (menu description only adds, never removes)
   const descExtras = extractIngredientsFromDescription(menuDescription);
 
-  // Merge and deduplicate
-  const allExtras = [...visionExtras];
-  const seenNormalized = new Set(visionExtras.map(e => e.normalized));
+  // Merge extras from both sources, deduplicate
+  const allExtras = [...visionDelta.extras];
+  const seenNormalized = new Set(visionDelta.extras.map(e => e.normalized));
+
+  // Build base set for checking description items
+  const baseSet = new Set(
+    (baseIngredients || []).map(ing => {
+      const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
+      return normalizeDishNameForCache(name);
+    }).filter(Boolean)
+  );
 
   for (const descExtra of descExtras) {
-    // Also check if description ingredient is in base recipe
-    const baseSet = new Set(
-      (baseIngredients || []).map(ing => {
-        const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
-        return normalizeDishNameForCache(name);
-      }).filter(Boolean)
-    );
-
     // Skip if already in base or already detected from vision
     let inBase = false;
     for (const baseName of baseSet) {
@@ -6414,11 +6585,27 @@ function detectAllExtras(baseIngredients, visionComponents, menuDescription) {
 
     if (!inBase && !seenNormalized.has(descExtra.normalized)) {
       seenNormalized.add(descExtra.normalized);
-      allExtras.push(descExtra);
+      allExtras.push({
+        ...descExtra,
+        deltaType: 'addition'
+      });
     }
   }
 
-  return allExtras;
+  return {
+    extras: allExtras,
+    missing: visionDelta.missing
+  };
+}
+
+/**
+ * Detect extras from both vision and menu description.
+ * Combines both sources and deduplicates.
+ * @deprecated Use detectFullDelta for full +/- delta support
+ */
+function detectAllExtras(baseIngredients, visionComponents, menuDescription) {
+  const delta = detectFullDelta(baseIngredients, visionComponents, menuDescription);
+  return delta.extras;
 }
 
 async function getCachedNutrition(env, name) {
@@ -21236,23 +21423,32 @@ async function runDishAnalysis(env, body, ctx) {
   }
 
   // ========== RECIPE CACHE + VISION DELTA MERGING ==========
-  // If we used D1 cached recipe, detect and merge extras from vision AND menu description
-  let visionExtras = [];
+  // If we used D1 cached recipe, detect and merge full delta from vision AND menu description
+  // + delta: ingredients in vision/description but NOT in base (additions)
+  // - delta: ingredients in base but NOT in vision (removals)
+  let recipeDelta = { extras: [], missing: [] };
   try {
     if (usedD1RecipeCache && d1CachedRecipe) {
-      // Detect ingredients from both vision and menu description that aren't in base recipe
-      visionExtras = detectAllExtras(
+      // Detect full delta: additions AND removals
+      recipeDelta = detectFullDelta(
         d1CachedRecipe.ingredients,
         fatsecretNutritionBreakdown || [],
         menuDescription
       );
 
-      if (visionExtras.length > 0) {
-        debug.vision_extras_detected = visionExtras.map(e => e.name);
-        debug.vision_extras_count = visionExtras.length;
+      const hasChanges = recipeDelta.extras.length > 0 || recipeDelta.missing.length > 0;
 
-        // Merge extras with base recipe (updates nutrition, allergens)
-        const merged = await mergeRecipeWithExtras(env, d1CachedRecipe, visionExtras);
+      if (hasChanges) {
+        // Log delta details for debugging
+        debug.vision_delta = {
+          additions: recipeDelta.extras.map(e => e.name),
+          additions_count: recipeDelta.extras.length,
+          removals: recipeDelta.missing.map(m => m.name),
+          removals_count: recipeDelta.missing.length
+        };
+
+        // Merge delta with base recipe (adds extras, removes missing, adjusts nutrition/allergens)
+        const merged = await mergeRecipeWithDelta(env, d1CachedRecipe, recipeDelta);
         if (merged) {
           d1CachedRecipe = merged;
 
@@ -21263,18 +21459,30 @@ async function runDishAnalysis(env, body, ctx) {
             debug.merged_nutrition = merged.nutrition;
           }
 
+          // Log delta application results
+          if (merged._deltaApplied) {
+            debug.delta_applied = merged._deltaApplied;
+          }
+
+          // Log any removed allergens
+          if (merged._removedAllergens?.length > 0) {
+            debug.removed_allergens = merged._removedAllergens.map(a => a.kind);
+          }
+
           // Add any new allergens from extras
           if (merged.allergenFlags?.length > 0) {
             const extraAllergens = merged.allergenFlags.filter(a => a.source === 'vision_extra');
             if (extraAllergens.length > 0) {
-              debug.vision_extra_allergens = extraAllergens;
+              debug.added_allergens = extraAllergens.map(a => a.kind);
             }
           }
         }
 
         // Record vision extras for learning (async, don't wait)
-        recordVisionExtras(env, d1CachedRecipe.id, visionExtras, 'fatsecret_image')
-          .catch(e => console.error('recordVisionExtras failed:', e));
+        if (recipeDelta.extras.length > 0) {
+          recordVisionExtras(env, d1CachedRecipe.id, recipeDelta.extras, 'fatsecret_image')
+            .catch(e => console.error('recordVisionExtras failed:', e));
+        }
       }
     }
   } catch (err) {
