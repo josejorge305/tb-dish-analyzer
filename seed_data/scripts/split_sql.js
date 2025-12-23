@@ -109,6 +109,7 @@ async function main() {
     'allergen_flags',  // References ingredients
     'quality_scores',  // References ingredients (NOVA, Nutri-Score)
     'additives',       // References ingredients
+    'bioactives',      // References ingredients (FooDB polyphenols, carotenoids, etc.)
     'micronutrients',  // References ingredients
     'nutrients'        // References ingredients (USDA basic nutrients)
   ];
