@@ -6471,6 +6471,412 @@ function safeJsonParse(str, fallback = null) {
   }
 }
 
+// ============================================
+// Recipe Cache with Vision Delta Merging
+// ============================================
+
+/**
+ * Normalize a dish name for cache matching.
+ * Removes accents, extra spaces, and converts to lowercase.
+ */
+function normalizeDishNameForCache(name) {
+  return String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[^a-z0-9\s]/g, ' ')    // Remove special chars
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Lookup a cached base recipe from D1.
+ * Returns the recipe with ingredients, nutrition, and flags if found.
+ */
+async function lookupCachedBaseRecipe(env, dishName) {
+  if (!env?.D1_DB || !dishName) return null;
+
+  const normalized = normalizeDishNameForCache(dishName);
+  if (!normalized) return null;
+
+  try {
+    // Check main recipes table first
+    let recipe = await env.D1_DB.prepare(`
+      SELECT
+        cr.id,
+        cr.dish_name_normalized,
+        cr.dish_name_display,
+        cr.ingredients_json,
+        cr.servings,
+        cr.calories_kcal,
+        cr.protein_g,
+        cr.carbs_g,
+        cr.fat_g,
+        cr.fiber_g,
+        cr.sugar_g,
+        cr.sodium_mg,
+        cr.allergen_flags_json,
+        cr.fodmap_flags_json,
+        cr.diet_tags_json,
+        cr.source,
+        cr.confidence,
+        cr.times_used
+      FROM cached_recipes cr
+      WHERE cr.dish_name_normalized = ?
+    `).bind(normalized).first();
+
+    // If not found, check aliases
+    if (!recipe) {
+      const alias = await env.D1_DB.prepare(`
+        SELECT recipe_id FROM recipe_aliases
+        WHERE alias_normalized = ?
+      `).bind(normalized).first();
+
+      if (alias?.recipe_id) {
+        recipe = await env.D1_DB.prepare(`
+          SELECT
+            cr.id, cr.dish_name_normalized, cr.dish_name_display,
+            cr.ingredients_json, cr.servings,
+            cr.calories_kcal, cr.protein_g, cr.carbs_g, cr.fat_g,
+            cr.fiber_g, cr.sugar_g, cr.sodium_mg,
+            cr.allergen_flags_json, cr.fodmap_flags_json, cr.diet_tags_json,
+            cr.source, cr.confidence, cr.times_used
+          FROM cached_recipes cr
+          WHERE cr.id = ?
+        `).bind(alias.recipe_id).first();
+      }
+    }
+
+    if (!recipe) return null;
+
+    // Fetch detailed ingredients
+    const ingredientRows = await env.D1_DB.prepare(`
+      SELECT
+        ingredient_name, ingredient_id, quantity, unit, preparation,
+        calories_kcal, protein_g, carbs_g, fat_g,
+        allergen_codes, fodmap_category, is_optional, is_garnish
+      FROM cached_recipe_ingredients
+      WHERE recipe_id = ?
+      ORDER BY id
+    `).bind(recipe.id).all();
+
+    // Update usage stats
+    await env.D1_DB.prepare(`
+      UPDATE cached_recipes
+      SET times_used = times_used + 1, last_used_at = datetime('now')
+      WHERE id = ?
+    `).bind(recipe.id).run();
+
+    return {
+      id: recipe.id,
+      dishName: recipe.dish_name_display,
+      dishNameNormalized: recipe.dish_name_normalized,
+      ingredients: safeJsonParse(recipe.ingredients_json, []),
+      ingredientDetails: ingredientRows?.results || [],
+      servings: recipe.servings || 1,
+      nutrition: {
+        energyKcal: recipe.calories_kcal,
+        protein_g: recipe.protein_g,
+        carbs_g: recipe.carbs_g,
+        fat_g: recipe.fat_g,
+        fiber_g: recipe.fiber_g,
+        sugar_g: recipe.sugar_g,
+        sodium_mg: recipe.sodium_mg
+      },
+      allergenFlags: safeJsonParse(recipe.allergen_flags_json, []),
+      fodmapFlags: safeJsonParse(recipe.fodmap_flags_json, []),
+      dietTags: safeJsonParse(recipe.diet_tags_json, []),
+      source: recipe.source,
+      confidence: recipe.confidence,
+      timesUsed: recipe.times_used,
+      _cacheHit: true
+    };
+  } catch (e) {
+    console.error('lookupCachedBaseRecipe error:', e);
+    return null;
+  }
+}
+
+/**
+ * Detect extra ingredients from vision that aren't in the base recipe.
+ * Returns array of ingredient names found in vision but not in base.
+ */
+function detectVisionExtras(baseIngredients, visionComponents) {
+  if (!Array.isArray(visionComponents) || visionComponents.length === 0) {
+    return [];
+  }
+
+  // Normalize base ingredient names for matching
+  const baseSet = new Set(
+    (baseIngredients || []).map(ing => {
+      const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
+      return normalizeDishNameForCache(name);
+    }).filter(Boolean)
+  );
+
+  const extras = [];
+  const seenExtras = new Set();
+
+  for (const comp of visionComponents) {
+    const label = comp.label || comp.food_entry_name || comp.component || '';
+    const normalizedLabel = normalizeDishNameForCache(label);
+
+    if (!normalizedLabel || seenExtras.has(normalizedLabel)) continue;
+
+    // Check if this is already in the base recipe
+    let inBase = false;
+    for (const baseName of baseSet) {
+      // Fuzzy match: if one contains the other
+      if (baseName.includes(normalizedLabel) || normalizedLabel.includes(baseName)) {
+        inBase = true;
+        break;
+      }
+    }
+
+    if (!inBase) {
+      seenExtras.add(normalizedLabel);
+      extras.push({
+        name: label,
+        normalized: normalizedLabel,
+        nutrition: comp.energyKcal != null ? {
+          energyKcal: comp.energyKcal || 0,
+          protein_g: comp.protein_g || 0,
+          carbs_g: comp.carbs_g || 0,
+          fat_g: comp.fat_g || 0,
+          fiber_g: comp.fiber_g || 0,
+          sugar_g: comp.sugar_g || 0,
+          sodium_mg: comp.sodium_mg || 0
+        } : null,
+        source: comp.source || 'vision'
+      });
+    }
+  }
+
+  return extras;
+}
+
+/**
+ * Merge base recipe with detected extras.
+ * Combines ingredients and recomputes nutrition/allergens.
+ */
+async function mergeRecipeWithExtras(env, baseRecipe, extras) {
+  if (!baseRecipe) return null;
+  if (!extras || extras.length === 0) return baseRecipe;
+
+  // Start with base recipe data
+  const merged = {
+    ...baseRecipe,
+    _mergedExtras: extras.map(e => e.name),
+    _originalIngredientCount: baseRecipe.ingredients?.length || 0
+  };
+
+  // Add extra ingredients
+  const mergedIngredients = [...(baseRecipe.ingredients || [])];
+  for (const extra of extras) {
+    mergedIngredients.push({
+      name: extra.name,
+      source: 'vision_detected',
+      isExtra: true
+    });
+  }
+  merged.ingredients = mergedIngredients;
+
+  // Recompute nutrition by adding extras
+  const baseNutrition = baseRecipe.nutrition || {};
+  let totalNutrition = {
+    energyKcal: baseNutrition.energyKcal || 0,
+    protein_g: baseNutrition.protein_g || 0,
+    carbs_g: baseNutrition.carbs_g || 0,
+    fat_g: baseNutrition.fat_g || 0,
+    fiber_g: baseNutrition.fiber_g || 0,
+    sugar_g: baseNutrition.sugar_g || 0,
+    sodium_mg: baseNutrition.sodium_mg || 0
+  };
+
+  // Add nutrition from extras (if available from vision)
+  for (const extra of extras) {
+    if (extra.nutrition) {
+      totalNutrition.energyKcal += extra.nutrition.energyKcal || 0;
+      totalNutrition.protein_g += extra.nutrition.protein_g || 0;
+      totalNutrition.carbs_g += extra.nutrition.carbs_g || 0;
+      totalNutrition.fat_g += extra.nutrition.fat_g || 0;
+      totalNutrition.fiber_g += extra.nutrition.fiber_g || 0;
+      totalNutrition.sugar_g += extra.nutrition.sugar_g || 0;
+      totalNutrition.sodium_mg += extra.nutrition.sodium_mg || 0;
+    } else if (env) {
+      // Lookup extra ingredient nutrition from Super Brain
+      const extraData = await lookupIngredientFromSuperBrain(env, extra.name);
+      if (extraData?.nutrients) {
+        // Assume ~30g portion for detected extras
+        const factor = 0.3;
+        totalNutrition.energyKcal += (extraData.nutrients.energy_kcal || 0) * factor;
+        totalNutrition.protein_g += (extraData.nutrients.protein_g || 0) * factor;
+        totalNutrition.carbs_g += (extraData.nutrients.carbohydrate_g || 0) * factor;
+        totalNutrition.fat_g += (extraData.nutrients.fat_g || 0) * factor;
+        totalNutrition.fiber_g += (extraData.nutrients.fiber_g || 0) * factor;
+        totalNutrition.sugar_g += (extraData.nutrients.sugar_g || 0) * factor;
+        totalNutrition.sodium_mg += (extraData.nutrients.sodium_mg || 0) * factor;
+
+        // Add any allergens from extra
+        if (extraData.allergens?.length > 0) {
+          merged.allergenFlags = [
+            ...(merged.allergenFlags || []),
+            ...extraData.allergens.map(a => ({
+              kind: a.allergen_code,
+              present: 'yes',
+              message: `Contains ${a.allergen_code} from ${extra.name} (vision detected)`,
+              source: 'vision_extra'
+            }))
+          ];
+        }
+      }
+    }
+  }
+
+  merged.nutrition = totalNutrition;
+  merged._nutritionAdjusted = true;
+
+  return merged;
+}
+
+/**
+ * Record vision-detected extras for future learning.
+ * Tracks which extras are commonly seen with a dish.
+ */
+async function recordVisionExtras(env, recipeId, extras, detectionSource = 'fatsecret_image') {
+  if (!env?.D1_DB || !recipeId || !extras?.length) return;
+
+  try {
+    for (const extra of extras) {
+      await env.D1_DB.prepare(`
+        INSERT INTO recipe_vision_extras (recipe_id, extra_ingredient, detection_source, times_detected)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT (recipe_id, extra_ingredient, detection_source)
+        DO UPDATE SET
+          times_detected = times_detected + 1,
+          last_detected_at = datetime('now')
+      `).bind(recipeId, extra.name, detectionSource).run();
+    }
+  } catch (e) {
+    console.error('recordVisionExtras error:', e);
+  }
+}
+
+/**
+ * Check if frequently detected extras should be promoted to base recipe.
+ * Returns extras that have been detected 5+ times.
+ */
+async function getPromotableExtras(env, recipeId, threshold = 5) {
+  if (!env?.D1_DB || !recipeId) return [];
+
+  try {
+    const result = await env.D1_DB.prepare(`
+      SELECT extra_ingredient, times_detected, detection_source
+      FROM recipe_vision_extras
+      WHERE recipe_id = ?
+        AND times_detected >= ?
+        AND promoted_to_base = 0
+      ORDER BY times_detected DESC
+    `).bind(recipeId, threshold).all();
+
+    return result?.results || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Extract potential ingredient mentions from menu description text.
+ * Uses a curated list of common ingredients to detect.
+ */
+const COMMON_INGREDIENTS = new Set([
+  // Proteins
+  'chicken', 'beef', 'pork', 'lamb', 'fish', 'salmon', 'tuna', 'shrimp', 'lobster',
+  'crab', 'scallop', 'bacon', 'ham', 'sausage', 'turkey', 'duck', 'tofu', 'tempeh',
+  // Dairy
+  'cheese', 'mozzarella', 'parmesan', 'cheddar', 'feta', 'goat cheese', 'ricotta',
+  'cream', 'butter', 'milk', 'yogurt', 'sour cream',
+  // Vegetables
+  'tomato', 'onion', 'garlic', 'pepper', 'mushroom', 'spinach', 'lettuce', 'arugula',
+  'kale', 'broccoli', 'cauliflower', 'carrot', 'celery', 'cucumber', 'avocado',
+  'zucchini', 'eggplant', 'artichoke', 'asparagus', 'corn', 'potato', 'sweet potato',
+  'jalapeño', 'basil', 'cilantro', 'parsley', 'mint', 'rosemary', 'thyme', 'oregano',
+  // Fruits
+  'lemon', 'lime', 'orange', 'apple', 'pear', 'berry', 'strawberry', 'blueberry',
+  'raspberry', 'banana', 'mango', 'pineapple', 'peach', 'grape',
+  // Grains/Carbs
+  'rice', 'pasta', 'noodle', 'bread', 'tortilla', 'quinoa', 'couscous', 'farro',
+  // Nuts/Seeds
+  'almond', 'walnut', 'pecan', 'pistachio', 'cashew', 'peanut', 'pine nut', 'sesame',
+  // Sauces/Condiments
+  'mayo', 'mayonnaise', 'mustard', 'ketchup', 'aioli', 'pesto', 'marinara',
+  'alfredo', 'teriyaki', 'soy sauce', 'sriracha', 'hot sauce', 'bbq',
+  // Other
+  'egg', 'olive', 'capers', 'truffle', 'honey', 'maple'
+]);
+
+function extractIngredientsFromDescription(description) {
+  if (!description || typeof description !== 'string') return [];
+
+  const text = description.toLowerCase();
+  const found = [];
+  const seen = new Set();
+
+  for (const ingredient of COMMON_INGREDIENTS) {
+    // Match whole word (with word boundaries)
+    const regex = new RegExp(`\\b${ingredient}s?\\b`, 'i');
+    if (regex.test(text) && !seen.has(ingredient)) {
+      seen.add(ingredient);
+      found.push({
+        name: ingredient,
+        normalized: normalizeDishNameForCache(ingredient),
+        source: 'menu_description'
+      });
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Detect extras from both vision and menu description.
+ * Combines both sources and deduplicates.
+ */
+function detectAllExtras(baseIngredients, visionComponents, menuDescription) {
+  const visionExtras = detectVisionExtras(baseIngredients, visionComponents || []);
+  const descExtras = extractIngredientsFromDescription(menuDescription);
+
+  // Merge and deduplicate
+  const allExtras = [...visionExtras];
+  const seenNormalized = new Set(visionExtras.map(e => e.normalized));
+
+  for (const descExtra of descExtras) {
+    // Also check if description ingredient is in base recipe
+    const baseSet = new Set(
+      (baseIngredients || []).map(ing => {
+        const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient_name || '');
+        return normalizeDishNameForCache(name);
+      }).filter(Boolean)
+    );
+
+    // Skip if already in base or already detected from vision
+    let inBase = false;
+    for (const baseName of baseSet) {
+      if (baseName.includes(descExtra.normalized) || descExtra.normalized.includes(baseName)) {
+        inBase = true;
+        break;
+      }
+    }
+
+    if (!inBase && !seenNormalized.has(descExtra.normalized)) {
+      seenNormalized.add(descExtra.normalized);
+      allExtras.push(descExtra);
+    }
+  }
+
+  return allExtras;
+}
+
 async function getCachedNutrition(env, name) {
   if (!env?.R2_BUCKET) return null;
   const key = `nutrition/${normKey(name)}.json`;
@@ -24201,12 +24607,52 @@ async function runDishAnalysis(env, body, ctx) {
   let fatsecretNutritionBreakdown = null;
   let fsComponentAllergens = null;
 
+  // D1 Recipe Cache state (for vision delta merging)
+  let d1CachedRecipe = null;
+  let usedD1RecipeCache = false;
+
   // ========== LATENCY OPTIMIZATION: Run recipe + combo + image ops in parallel ==========
   // All three operations are independent and can start immediately
   const tParallelStart = Date.now();
 
   const recipePromise = (async () => {
     const t0 = Date.now();
+
+    // RECIPE CACHE: Try D1 cached_recipes first (faster than API calls)
+    if (!forceReanalyze && env?.D1_DB) {
+      try {
+        const cachedBase = await lookupCachedBaseRecipe(env, dishName);
+        if (cachedBase) {
+          d1CachedRecipe = cachedBase;
+          usedD1RecipeCache = true;
+          debug.recipe_cache_source = 'd1_cached_recipes';
+          debug.recipe_cache_id = cachedBase.id;
+          debug.recipe_cache_times_used = cachedBase.timesUsed;
+
+          // Convert to resolveRecipeWithCache-compatible format
+          return {
+            ok: true,
+            out: {
+              ingredients: cachedBase.ingredients,
+              nutrition_summary: cachedBase.nutrition,
+              provider: cachedBase.source,
+              cache: true,
+              d1_cache: true
+            },
+            ingredients: cachedBase.ingredients,
+            allergen_flags: cachedBase.allergenFlags,
+            fodmap_flags: cachedBase.fodmapFlags,
+            diet_tags: cachedBase.dietTags,
+            source: 'd1_recipe_cache',
+            _d1CacheHit: true
+          };
+        }
+      } catch (e) {
+        debug.d1_recipe_cache_error = String(e);
+      }
+    }
+
+    // Fallback: Original API-based resolution (Edamam/Spoonacular/OpenAI)
     const result = await resolveRecipeWithCache(env, {
       dishTitle: dishName,
       placeId: body.placeId || body.place_id || "",
@@ -25812,6 +26258,54 @@ async function runDishAnalysis(env, body, ctx) {
     }
   } catch (err) {
     debug.plate_components_fatsecret_error = String(
+      (err && (err.stack || err.message)) || err
+    );
+  }
+
+  // ========== RECIPE CACHE + VISION DELTA MERGING ==========
+  // If we used D1 cached recipe, detect and merge extras from vision AND menu description
+  let visionExtras = [];
+  try {
+    if (usedD1RecipeCache && d1CachedRecipe) {
+      // Detect ingredients from both vision and menu description that aren't in base recipe
+      visionExtras = detectAllExtras(
+        d1CachedRecipe.ingredients,
+        fatsecretNutritionBreakdown || [],
+        menuDescription
+      );
+
+      if (visionExtras.length > 0) {
+        debug.vision_extras_detected = visionExtras.map(e => e.name);
+        debug.vision_extras_count = visionExtras.length;
+
+        // Merge extras with base recipe (updates nutrition, allergens)
+        const merged = await mergeRecipeWithExtras(env, d1CachedRecipe, visionExtras);
+        if (merged) {
+          d1CachedRecipe = merged;
+
+          // Update nutrition summary with merged values
+          if (merged.nutrition) {
+            finalNutritionSummary = merged.nutrition;
+            nutrition_source = 'd1_cache_merged_vision';
+            debug.merged_nutrition = merged.nutrition;
+          }
+
+          // Add any new allergens from extras
+          if (merged.allergenFlags?.length > 0) {
+            const extraAllergens = merged.allergenFlags.filter(a => a.source === 'vision_extra');
+            if (extraAllergens.length > 0) {
+              debug.vision_extra_allergens = extraAllergens;
+            }
+          }
+        }
+
+        // Record vision extras for learning (async, don't wait)
+        recordVisionExtras(env, d1CachedRecipe.id, visionExtras, 'fatsecret_image')
+          .catch(e => console.error('recordVisionExtras failed:', e));
+      }
+    }
+  } catch (err) {
+    debug.vision_delta_merge_error = String(
       (err && (err.stack || err.message)) || err
     );
   }
