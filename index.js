@@ -26069,6 +26069,48 @@ async function runDishAnalysis(env, body, ctx) {
     }
   }
 
+  // --- D1 Recipe Cache Allergen Fallback ---
+  // If LLM allergen detection failed/empty but we have D1 recipe cache allergens, use them
+  if (allergen_flags.length === 0 && recipeResult?._d1CacheHit) {
+    const cachedAllergens = recipeResult.allergen_flags || [];
+    if (Array.isArray(cachedAllergens) && cachedAllergens.length > 0) {
+      allergen_flags = cachedAllergens.map(a => {
+        if (typeof a === 'string') {
+          return {
+            kind: a,
+            present: 'yes',
+            message: `Contains ${a} based on recipe cache`,
+            source: 'd1_recipe_cache'
+          };
+        }
+        return {
+          kind: a.kind || a,
+          present: a.present || 'yes',
+          message: a.message || `Contains ${a.kind || a} based on recipe cache`,
+          source: a.source || 'd1_recipe_cache'
+        };
+      });
+      debug.allergen_source = 'd1_recipe_cache_fallback';
+      debug.allergen_cache_count = allergen_flags.length;
+    }
+  }
+
+  // Also use D1 cache FODMAP flags as fallback
+  if (!fodmap_flags && recipeResult?._d1CacheHit) {
+    const cachedFodmap = recipeResult.fodmap_flags || [];
+    if (Array.isArray(cachedFodmap) && cachedFodmap.length > 0) {
+      // Convert array to fodmap_flags object
+      const highFodmap = cachedFodmap.some(f => f.includes('high'));
+      const moderateFodmap = cachedFodmap.some(f => f.includes('moderate'));
+      fodmap_flags = {
+        level: highFodmap ? 'high' : (moderateFodmap ? 'moderate' : 'low'),
+        reason: `FODMAP indicators: ${cachedFodmap.join(', ')}`,
+        source: 'd1_recipe_cache'
+      };
+      debug.fodmap_source = 'd1_recipe_cache_fallback';
+    }
+  }
+
   // --- Map organs LLM result ---
   organs = null;
 
