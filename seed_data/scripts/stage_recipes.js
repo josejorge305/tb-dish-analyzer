@@ -18,40 +18,42 @@ const __dirname = path.dirname(__filename);
 
 // Popular dishes with curated recipe data
 const RECIPES = [
-  // === PASTA ===
+  // ============================================
+  // === ITALIAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // --- PIZZA ---
   {
-    dish_name: 'Spaghetti and Meatballs',
+    dish_name: 'Margherita Pizza',
     ingredients: [
-      { name: 'spaghetti', quantity: 200, unit: 'g' },
-      { name: 'ground beef', quantity: 300, unit: 'g' },
-      { name: 'breadcrumbs', quantity: 30, unit: 'g' },
-      { name: 'egg', quantity: 1, unit: 'whole' },
-      { name: 'parmesan cheese', quantity: 30, unit: 'g' },
-      { name: 'marinara sauce', quantity: 250, unit: 'ml' },
-      { name: 'garlic', quantity: 3, unit: 'cloves' },
-      { name: 'olive oil', quantity: 15, unit: 'ml' },
-      { name: 'basil', quantity: 5, unit: 'g' }
+      { name: 'pizza dough', quantity: 250, unit: 'g' },
+      { name: 'San Marzano tomatoes', quantity: 100, unit: 'g' },
+      { name: 'fresh mozzarella', quantity: 150, unit: 'g' },
+      { name: 'fresh basil', quantity: 10, unit: 'g' },
+      { name: 'extra virgin olive oil', quantity: 15, unit: 'ml' },
+      { name: 'sea salt', quantity: 2, unit: 'g' }
     ],
-    nutrition: { calories: 650, protein: 35, carbs: 70, fat: 25, fiber: 4, sugar: 8, sodium: 850 },
-    allergens: ['gluten', 'egg', 'milk'],
+    nutrition: { calories: 580, protein: 22, carbs: 68, fat: 24, fiber: 3, sugar: 5, sodium: 920 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_fructan', 'moderate_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Pepperoni Pizza',
+    ingredients: [
+      { name: 'pizza dough', quantity: 250, unit: 'g' },
+      { name: 'tomato sauce', quantity: 100, unit: 'ml' },
+      { name: 'mozzarella cheese', quantity: 150, unit: 'g' },
+      { name: 'pepperoni', quantity: 60, unit: 'g' },
+      { name: 'oregano', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 28, carbs: 65, fat: 32, fiber: 3, sugar: 5, sodium: 1450 },
+    allergens: ['gluten', 'milk'],
     fodmap: ['high_fructan', 'moderate_lactose'],
     diet_tags: []
   },
-  {
-    dish_name: 'Fettuccine Alfredo',
-    ingredients: [
-      { name: 'fettuccine pasta', quantity: 200, unit: 'g' },
-      { name: 'butter', quantity: 60, unit: 'g' },
-      { name: 'heavy cream', quantity: 240, unit: 'ml' },
-      { name: 'parmesan cheese', quantity: 100, unit: 'g' },
-      { name: 'garlic', quantity: 2, unit: 'cloves' },
-      { name: 'black pepper', quantity: 2, unit: 'g' }
-    ],
-    nutrition: { calories: 850, protein: 22, carbs: 65, fat: 55, fiber: 2, sugar: 3, sodium: 650 },
-    allergens: ['gluten', 'milk'],
-    fodmap: ['high_lactose', 'high_fructan'],
-    diet_tags: ['vegetarian']
-  },
+
+  // --- PASTA ---
   {
     dish_name: 'Lasagna',
     ingredients: [
@@ -71,7 +73,7 @@ const RECIPES = [
     diet_tags: []
   },
   {
-    dish_name: 'Carbonara',
+    dish_name: 'Spaghetti Carbonara',
     ingredients: [
       { name: 'spaghetti', quantity: 200, unit: 'g' },
       { name: 'guanciale', quantity: 100, unit: 'g' },
@@ -83,6 +85,312 @@ const RECIPES = [
     nutrition: { calories: 720, protein: 28, carbs: 60, fat: 40, fiber: 2, sugar: 2, sodium: 780 },
     allergens: ['gluten', 'egg', 'milk'],
     fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Spaghetti Bolognese',
+    ingredients: [
+      { name: 'spaghetti', quantity: 200, unit: 'g' },
+      { name: 'ground beef', quantity: 250, unit: 'g' },
+      { name: 'ground pork', quantity: 100, unit: 'g' },
+      { name: 'crushed tomatoes', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'carrot', quantity: 50, unit: 'g' },
+      { name: 'celery', quantity: 30, unit: 'g' },
+      { name: 'red wine', quantity: 100, unit: 'ml' },
+      { name: 'garlic', quantity: 2, unit: 'cloves' },
+      { name: 'olive oil', quantity: 20, unit: 'ml' },
+      { name: 'parmesan cheese', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 35, carbs: 65, fat: 28, fiber: 4, sugar: 8, sodium: 720 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Cacio e Pepe',
+    ingredients: [
+      { name: 'spaghetti', quantity: 200, unit: 'g' },
+      { name: 'pecorino romano', quantity: 100, unit: 'g' },
+      { name: 'black pepper', quantity: 5, unit: 'g' },
+      { name: 'pasta water', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 550, protein: 22, carbs: 58, fat: 26, fiber: 2, sugar: 1, sodium: 680 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Fettuccine Alfredo',
+    ingredients: [
+      { name: 'fettuccine pasta', quantity: 200, unit: 'g' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'heavy cream', quantity: 240, unit: 'ml' },
+      { name: 'parmesan cheese', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 2, unit: 'cloves' },
+      { name: 'black pepper', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 850, protein: 22, carbs: 65, fat: 55, fiber: 2, sugar: 3, sodium: 650 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_lactose', 'high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Pasta alla Norma',
+    ingredients: [
+      { name: 'rigatoni', quantity: 200, unit: 'g' },
+      { name: 'eggplant', quantity: 300, unit: 'g' },
+      { name: 'San Marzano tomatoes', quantity: 400, unit: 'g' },
+      { name: 'ricotta salata', quantity: 60, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'fresh basil', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 45, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 16, carbs: 68, fat: 20, fiber: 8, sugar: 10, sodium: 480 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_fructan', 'moderate_sorbitol'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Pesto Pasta',
+    ingredients: [
+      { name: 'linguine', quantity: 200, unit: 'g' },
+      { name: 'fresh basil', quantity: 60, unit: 'g' },
+      { name: 'pine nuts', quantity: 30, unit: 'g' },
+      { name: 'parmesan cheese', quantity: 50, unit: 'g' },
+      { name: 'garlic', quantity: 2, unit: 'cloves' },
+      { name: 'extra virgin olive oil', quantity: 80, unit: 'ml' },
+      { name: 'sea salt', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 18, carbs: 58, fat: 42, fiber: 3, sugar: 2, sodium: 420 },
+    allergens: ['gluten', 'milk', 'tree nuts'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+
+  // --- RISOTTO ---
+  {
+    dish_name: 'Risotto alla Milanese',
+    ingredients: [
+      { name: 'arborio rice', quantity: 200, unit: 'g' },
+      { name: 'beef bone marrow', quantity: 30, unit: 'g' },
+      { name: 'saffron threads', quantity: 0.2, unit: 'g' },
+      { name: 'white wine', quantity: 100, unit: 'ml' },
+      { name: 'chicken broth', quantity: 750, unit: 'ml' },
+      { name: 'butter', quantity: 50, unit: 'g' },
+      { name: 'parmesan cheese', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 14, carbs: 62, fat: 22, fiber: 1, sugar: 2, sodium: 680 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Risotto ai Funghi',
+    ingredients: [
+      { name: 'arborio rice', quantity: 200, unit: 'g' },
+      { name: 'porcini mushrooms', quantity: 100, unit: 'g' },
+      { name: 'cremini mushrooms', quantity: 150, unit: 'g' },
+      { name: 'white wine', quantity: 100, unit: 'ml' },
+      { name: 'vegetable broth', quantity: 750, unit: 'ml' },
+      { name: 'butter', quantity: 40, unit: 'g' },
+      { name: 'parmesan cheese', quantity: 50, unit: 'g' },
+      { name: 'shallot', quantity: 40, unit: 'g' },
+      { name: 'fresh thyme', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 12, carbs: 58, fat: 20, fiber: 3, sugar: 3, sodium: 580 },
+    allergens: ['milk'],
+    fodmap: ['high_mannitol', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+
+  // --- MAIN COURSES ---
+  {
+    dish_name: 'Osso Buco',
+    ingredients: [
+      { name: 'veal shanks', quantity: 400, unit: 'g' },
+      { name: 'white wine', quantity: 200, unit: 'ml' },
+      { name: 'beef broth', quantity: 300, unit: 'ml' },
+      { name: 'crushed tomatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'carrot', quantity: 60, unit: 'g' },
+      { name: 'celery', quantity: 40, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'lemon zest', quantity: 5, unit: 'g' },
+      { name: 'parsley', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 38, carbs: 12, fat: 22, fiber: 3, sugar: 6, sodium: 620 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Chicken Parmigiana',
+    ingredients: [
+      { name: 'chicken breast', quantity: 200, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 60, unit: 'g' },
+      { name: 'parmesan cheese', quantity: 40, unit: 'g' },
+      { name: 'mozzarella cheese', quantity: 80, unit: 'g' },
+      { name: 'marinara sauce', quantity: 150, unit: 'ml' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'flour', quantity: 30, unit: 'g' },
+      { name: 'olive oil', quantity: 45, unit: 'ml' },
+      { name: 'fresh basil', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 42, carbs: 32, fat: 30, fiber: 2, sugar: 5, sodium: 850 },
+    allergens: ['gluten', 'milk', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Veal Parmigiana',
+    ingredients: [
+      { name: 'veal cutlet', quantity: 200, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 60, unit: 'g' },
+      { name: 'parmesan cheese', quantity: 40, unit: 'g' },
+      { name: 'mozzarella cheese', quantity: 80, unit: 'g' },
+      { name: 'marinara sauce', quantity: 150, unit: 'ml' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'flour', quantity: 30, unit: 'g' },
+      { name: 'olive oil', quantity: 45, unit: 'ml' },
+      { name: 'fresh basil', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 560, protein: 38, carbs: 32, fat: 30, fiber: 2, sugar: 5, sodium: 820 },
+    allergens: ['gluten', 'milk', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Eggplant Parmigiana',
+    ingredients: [
+      { name: 'eggplant', quantity: 400, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 80, unit: 'g' },
+      { name: 'parmesan cheese', quantity: 60, unit: 'g' },
+      { name: 'mozzarella cheese', quantity: 150, unit: 'g' },
+      { name: 'marinara sauce', quantity: 300, unit: 'ml' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'flour', quantity: 40, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'fresh basil', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 20, carbs: 38, fat: 28, fiber: 8, sugar: 10, sodium: 780 },
+    allergens: ['gluten', 'milk', 'egg'],
+    fodmap: ['high_fructan', 'moderate_sorbitol'],
+    diet_tags: ['vegetarian']
+  },
+
+  // --- SALADS & APPETIZERS ---
+  {
+    dish_name: 'Caprese Salad',
+    ingredients: [
+      { name: 'fresh mozzarella', quantity: 200, unit: 'g' },
+      { name: 'tomato', quantity: 250, unit: 'g' },
+      { name: 'fresh basil', quantity: 20, unit: 'g' },
+      { name: 'extra virgin olive oil', quantity: 30, unit: 'ml' },
+      { name: 'balsamic glaze', quantity: 15, unit: 'ml' },
+      { name: 'sea salt', quantity: 2, unit: 'g' },
+      { name: 'black pepper', quantity: 1, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 18, carbs: 10, fat: 30, fiber: 2, sugar: 6, sodium: 520 },
+    allergens: ['milk'],
+    fodmap: ['moderate_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian', 'gluten-free', 'keto', 'low-carb']
+  },
+  {
+    dish_name: 'Bruschetta',
+    ingredients: [
+      { name: 'Italian bread', quantity: 150, unit: 'g' },
+      { name: 'tomato', quantity: 200, unit: 'g' },
+      { name: 'fresh basil', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'extra virgin olive oil', quantity: 30, unit: 'ml' },
+      { name: 'balsamic vinegar', quantity: 10, unit: 'ml' },
+      { name: 'sea salt', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 6, carbs: 38, fat: 12, fiber: 3, sugar: 5, sodium: 420 },
+    allergens: ['gluten'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegan', 'dairy-free', 'vegetarian']
+  },
+
+  // --- SOUPS ---
+  {
+    dish_name: 'Minestrone',
+    ingredients: [
+      { name: 'cannellini beans', quantity: 150, unit: 'g' },
+      { name: 'pasta (ditalini)', quantity: 80, unit: 'g' },
+      { name: 'zucchini', quantity: 100, unit: 'g' },
+      { name: 'carrot', quantity: 80, unit: 'g' },
+      { name: 'celery', quantity: 60, unit: 'g' },
+      { name: 'potato', quantity: 100, unit: 'g' },
+      { name: 'crushed tomatoes', quantity: 200, unit: 'g' },
+      { name: 'vegetable broth', quantity: 500, unit: 'ml' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'garlic', quantity: 2, unit: 'cloves' },
+      { name: 'parmesan rind', quantity: 30, unit: 'g' },
+      { name: 'olive oil', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 14, carbs: 48, fat: 8, fiber: 10, sugar: 8, sodium: 680 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+
+  // --- DESSERTS ---
+  {
+    dish_name: 'Tiramisu',
+    ingredients: [
+      { name: 'mascarpone cheese', quantity: 250, unit: 'g' },
+      { name: 'ladyfinger cookies', quantity: 200, unit: 'g' },
+      { name: 'espresso coffee', quantity: 200, unit: 'ml' },
+      { name: 'egg yolks', quantity: 4, unit: 'whole' },
+      { name: 'sugar', quantity: 80, unit: 'g' },
+      { name: 'cocoa powder', quantity: 20, unit: 'g' },
+      { name: 'Marsala wine', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 8, carbs: 45, fat: 24, fiber: 1, sugar: 32, sodium: 120 },
+    allergens: ['gluten', 'milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Gelato',
+    ingredients: [
+      { name: 'whole milk', quantity: 400, unit: 'ml' },
+      { name: 'heavy cream', quantity: 150, unit: 'ml' },
+      { name: 'sugar', quantity: 120, unit: 'g' },
+      { name: 'egg yolks', quantity: 4, unit: 'whole' },
+      { name: 'vanilla bean', quantity: 1, unit: 'whole' }
+    ],
+    nutrition: { calories: 280, protein: 5, carbs: 32, fat: 15, fiber: 0, sugar: 28, sodium: 60 },
+    allergens: ['milk', 'egg'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+
+  // ============================================
+  // === OTHER CUISINES ===
+  // ============================================
+
+  // === PASTA (Non-Italian) ===
+  {
+    dish_name: 'Spaghetti and Meatballs',
+    ingredients: [
+      { name: 'spaghetti', quantity: 200, unit: 'g' },
+      { name: 'ground beef', quantity: 300, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 30, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'parmesan cheese', quantity: 30, unit: 'g' },
+      { name: 'marinara sauce', quantity: 250, unit: 'ml' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'olive oil', quantity: 15, unit: 'ml' },
+      { name: 'basil', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 650, protein: 35, carbs: 70, fat: 25, fiber: 4, sugar: 8, sodium: 850 },
+    allergens: ['gluten', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'moderate_lactose'],
     diet_tags: []
   },
   {
@@ -99,35 +407,6 @@ const RECIPES = [
     allergens: ['gluten'],
     fodmap: ['high_fructan'],
     diet_tags: ['vegan', 'dairy-free']
-  },
-
-  // === PIZZA ===
-  {
-    dish_name: 'Margherita Pizza',
-    ingredients: [
-      { name: 'pizza dough', quantity: 250, unit: 'g' },
-      { name: 'tomato sauce', quantity: 100, unit: 'ml' },
-      { name: 'fresh mozzarella', quantity: 150, unit: 'g' },
-      { name: 'fresh basil', quantity: 10, unit: 'g' },
-      { name: 'olive oil', quantity: 15, unit: 'ml' }
-    ],
-    nutrition: { calories: 580, protein: 22, carbs: 68, fat: 24, fiber: 3, sugar: 5, sodium: 920 },
-    allergens: ['gluten', 'milk'],
-    fodmap: ['high_fructan', 'moderate_lactose'],
-    diet_tags: ['vegetarian']
-  },
-  {
-    dish_name: 'Pepperoni Pizza',
-    ingredients: [
-      { name: 'pizza dough', quantity: 250, unit: 'g' },
-      { name: 'tomato sauce', quantity: 100, unit: 'ml' },
-      { name: 'mozzarella cheese', quantity: 150, unit: 'g' },
-      { name: 'pepperoni', quantity: 60, unit: 'g' }
-    ],
-    nutrition: { calories: 680, protein: 28, carbs: 65, fat: 32, fiber: 3, sugar: 5, sodium: 1450 },
-    allergens: ['gluten', 'milk'],
-    fodmap: ['high_fructan', 'moderate_lactose'],
-    diet_tags: []
   },
 
   // === BURGERS ===
