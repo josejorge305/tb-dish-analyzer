@@ -1873,6 +1873,395 @@ const RECIPES = [
   },
 
   // ============================================
+  // === VIETNAMESE CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === PHỞ & SOUPS ===
+  {
+    dish_name: 'Phở Bò',
+    ingredients: [
+      { name: 'rice noodles', quantity: 200, unit: 'g' },
+      { name: 'beef brisket', quantity: 150, unit: 'g' },
+      { name: 'beef bone broth', quantity: 500, unit: 'ml' },
+      { name: 'star anise', quantity: 2, unit: 'whole' },
+      { name: 'cinnamon stick', quantity: 1, unit: 'piece' },
+      { name: 'ginger', quantity: 30, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'bean sprouts', quantity: 50, unit: 'g' },
+      { name: 'thai basil', quantity: 10, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' },
+      { name: 'hoisin sauce', quantity: 15, unit: 'ml' },
+      { name: 'sriracha', quantity: 10, unit: 'ml' }
+    ],
+    nutrition: { calories: 450, protein: 32, carbs: 55, fat: 12, fiber: 3, sugar: 6, sodium: 1200 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Phở Gà',
+    ingredients: [
+      { name: 'rice noodles', quantity: 200, unit: 'g' },
+      { name: 'chicken breast', quantity: 150, unit: 'g' },
+      { name: 'chicken broth', quantity: 500, unit: 'ml' },
+      { name: 'star anise', quantity: 2, unit: 'whole' },
+      { name: 'cinnamon stick', quantity: 1, unit: 'piece' },
+      { name: 'ginger', quantity: 30, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'bean sprouts', quantity: 50, unit: 'g' },
+      { name: 'cilantro', quantity: 10, unit: 'g' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 380, protein: 35, carbs: 48, fat: 6, fiber: 2, sugar: 4, sodium: 980 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-fat']
+  },
+  {
+    dish_name: 'Bún Riêu',
+    ingredients: [
+      { name: 'rice vermicelli', quantity: 200, unit: 'g' },
+      { name: 'crab paste', quantity: 60, unit: 'g' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'tofu puffs', quantity: 80, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'shrimp paste', quantity: 15, unit: 'g' },
+      { name: 'pork broth', quantity: 500, unit: 'ml' },
+      { name: 'water spinach', quantity: 50, unit: 'g' },
+      { name: 'bean sprouts', quantity: 30, unit: 'g' },
+      { name: 'shallots', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 24, carbs: 52, fat: 14, fiber: 3, sugar: 6, sodium: 1100 },
+    allergens: ['shellfish', 'egg', 'soy'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Bún Bò Huế',
+    ingredients: [
+      { name: 'rice vermicelli', quantity: 200, unit: 'g' },
+      { name: 'beef shank', quantity: 150, unit: 'g' },
+      { name: 'pork knuckle', quantity: 80, unit: 'g' },
+      { name: 'lemongrass', quantity: 30, unit: 'g' },
+      { name: 'shrimp paste', quantity: 20, unit: 'g' },
+      { name: 'chili oil', quantity: 15, unit: 'ml' },
+      { name: 'banana blossom', quantity: 50, unit: 'g' },
+      { name: 'water spinach', quantity: 50, unit: 'g' },
+      { name: 'bean sprouts', quantity: 30, unit: 'g' },
+      { name: 'pork blood cake', quantity: 40, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 520, protein: 38, carbs: 48, fat: 20, fiber: 3, sugar: 4, sodium: 1350 },
+    allergens: ['shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Hủ Tiếu',
+    ingredients: [
+      { name: 'rice noodles', quantity: 200, unit: 'g' },
+      { name: 'pork', quantity: 100, unit: 'g' },
+      { name: 'shrimp', quantity: 80, unit: 'g' },
+      { name: 'pork liver', quantity: 50, unit: 'g' },
+      { name: 'pork broth', quantity: 450, unit: 'ml' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'bean sprouts', quantity: 50, unit: 'g' },
+      { name: 'chinese celery', quantity: 20, unit: 'g' },
+      { name: 'fried shallots', quantity: 15, unit: 'g' },
+      { name: 'green onion', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 36, carbs: 50, fat: 15, fiber: 2, sugar: 3, sodium: 1050 },
+    allergens: ['shellfish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === BÁNH MÌ & ROLLS ===
+  {
+    dish_name: 'Bánh Mì',
+    ingredients: [
+      { name: 'baguette', quantity: 150, unit: 'g' },
+      { name: 'pork belly', quantity: 80, unit: 'g' },
+      { name: 'vietnamese ham', quantity: 50, unit: 'g' },
+      { name: 'pate', quantity: 30, unit: 'g' },
+      { name: 'pickled carrots', quantity: 40, unit: 'g' },
+      { name: 'pickled daikon', quantity: 40, unit: 'g' },
+      { name: 'cucumber', quantity: 30, unit: 'g' },
+      { name: 'cilantro', quantity: 10, unit: 'g' },
+      { name: 'jalapeño', quantity: 10, unit: 'g' },
+      { name: 'mayonnaise', quantity: 20, unit: 'g' },
+      { name: 'maggi sauce', quantity: 5, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 26, carbs: 52, fat: 30, fiber: 3, sugar: 8, sodium: 1400 },
+    allergens: ['wheat', 'egg', 'soy'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Gỏi Cuốn',
+    ingredients: [
+      { name: 'rice paper', quantity: 4, unit: 'sheets' },
+      { name: 'shrimp', quantity: 80, unit: 'g' },
+      { name: 'pork belly', quantity: 60, unit: 'g' },
+      { name: 'rice vermicelli', quantity: 60, unit: 'g' },
+      { name: 'lettuce', quantity: 40, unit: 'g' },
+      { name: 'mint', quantity: 10, unit: 'g' },
+      { name: 'thai basil', quantity: 10, unit: 'g' },
+      { name: 'chives', quantity: 15, unit: 'g' },
+      { name: 'peanut sauce', quantity: 40, unit: 'ml' },
+      { name: 'hoisin sauce', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 22, carbs: 35, fat: 10, fiber: 2, sugar: 6, sodium: 680 },
+    allergens: ['shellfish', 'peanut', 'soy'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Chả Giò',
+    ingredients: [
+      { name: 'rice paper', quantity: 8, unit: 'sheets' },
+      { name: 'ground pork', quantity: 200, unit: 'g' },
+      { name: 'crab meat', quantity: 50, unit: 'g' },
+      { name: 'wood ear mushrooms', quantity: 30, unit: 'g' },
+      { name: 'glass noodles', quantity: 40, unit: 'g' },
+      { name: 'carrots', quantity: 50, unit: 'g' },
+      { name: 'taro', quantity: 50, unit: 'g' },
+      { name: 'shallots', quantity: 20, unit: 'g' },
+      { name: 'fish sauce', quantity: 15, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 450, protein: 18, carbs: 32, fat: 28, fiber: 2, sugar: 3, sodium: 720 },
+    allergens: ['shellfish', 'fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === BÚN (VERMICELLI BOWLS) ===
+  {
+    dish_name: 'Bún Chả',
+    ingredients: [
+      { name: 'rice vermicelli', quantity: 200, unit: 'g' },
+      { name: 'pork patties', quantity: 150, unit: 'g' },
+      { name: 'pork belly', quantity: 100, unit: 'g' },
+      { name: 'fish sauce', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'lettuce', quantity: 40, unit: 'g' },
+      { name: 'herbs', quantity: 30, unit: 'g' },
+      { name: 'pickled papaya', quantity: 40, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 580, protein: 32, carbs: 55, fat: 26, fiber: 2, sugar: 12, sodium: 1100 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Bún Thịt Nướng',
+    ingredients: [
+      { name: 'rice vermicelli', quantity: 200, unit: 'g' },
+      { name: 'grilled pork', quantity: 150, unit: 'g' },
+      { name: 'lettuce', quantity: 50, unit: 'g' },
+      { name: 'cucumber', quantity: 40, unit: 'g' },
+      { name: 'pickled carrots', quantity: 40, unit: 'g' },
+      { name: 'bean sprouts', quantity: 40, unit: 'g' },
+      { name: 'peanuts', quantity: 20, unit: 'g' },
+      { name: 'fried shallots', quantity: 15, unit: 'g' },
+      { name: 'nuoc cham', quantity: 60, unit: 'ml' },
+      { name: 'mint', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 30, carbs: 55, fat: 20, fiber: 3, sugar: 10, sodium: 950 },
+    allergens: ['fish', 'peanut'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === CƠM (RICE DISHES) ===
+  {
+    dish_name: 'Cơm Tấm',
+    ingredients: [
+      { name: 'broken rice', quantity: 200, unit: 'g' },
+      { name: 'grilled pork chop', quantity: 150, unit: 'g' },
+      { name: 'pork skin', quantity: 50, unit: 'g' },
+      { name: 'steamed egg meatloaf', quantity: 80, unit: 'g' },
+      { name: 'pickled vegetables', quantity: 40, unit: 'g' },
+      { name: 'cucumber', quantity: 30, unit: 'g' },
+      { name: 'tomato', quantity: 40, unit: 'g' },
+      { name: 'fried shallots', quantity: 10, unit: 'g' },
+      { name: 'nuoc cham', quantity: 50, unit: 'ml' },
+      { name: 'scallion oil', quantity: 15, unit: 'ml' }
+    ],
+    nutrition: { calories: 650, protein: 38, carbs: 60, fat: 28, fiber: 2, sugar: 8, sodium: 1050 },
+    allergens: ['fish', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Xôi',
+    ingredients: [
+      { name: 'sticky rice', quantity: 200, unit: 'g' },
+      { name: 'mung beans', quantity: 80, unit: 'g' },
+      { name: 'coconut milk', quantity: 60, unit: 'ml' },
+      { name: 'shallots', quantity: 30, unit: 'g' },
+      { name: 'vegetable oil', quantity: 15, unit: 'ml' },
+      { name: 'salt', quantity: 2, unit: 'g' },
+      { name: 'sugar', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 10, carbs: 68, fat: 8, fiber: 4, sugar: 6, sodium: 320 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+
+  // === BÁNH (SAVORY CAKES/PANCAKES) ===
+  {
+    dish_name: 'Bánh Xèo',
+    ingredients: [
+      { name: 'rice flour', quantity: 100, unit: 'g' },
+      { name: 'coconut milk', quantity: 100, unit: 'ml' },
+      { name: 'turmeric', quantity: 5, unit: 'g' },
+      { name: 'shrimp', quantity: 80, unit: 'g' },
+      { name: 'pork belly', quantity: 80, unit: 'g' },
+      { name: 'bean sprouts', quantity: 60, unit: 'g' },
+      { name: 'mung beans', quantity: 40, unit: 'g' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'lettuce', quantity: 40, unit: 'g' },
+      { name: 'nuoc cham', quantity: 50, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 24, carbs: 42, fat: 24, fiber: 3, sugar: 5, sodium: 850 },
+    allergens: ['shellfish', 'fish'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // === CÁ & THỊT (FISH & MEAT) ===
+  {
+    dish_name: 'Cá Kho Tộ',
+    ingredients: [
+      { name: 'catfish', quantity: 300, unit: 'g' },
+      { name: 'fish sauce', quantity: 45, unit: 'ml' },
+      { name: 'coconut water', quantity: 100, unit: 'ml' },
+      { name: 'caramel sauce', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'shallots', quantity: 30, unit: 'g' },
+      { name: 'black pepper', quantity: 3, unit: 'g' },
+      { name: 'chili', quantity: 10, unit: 'g' },
+      { name: 'green onion', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 32, carbs: 22, fat: 18, fiber: 1, sugar: 18, sodium: 1400 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Thịt Kho Trứng',
+    ingredients: [
+      { name: 'pork belly', quantity: 300, unit: 'g' },
+      { name: 'eggs', quantity: 4, unit: 'whole' },
+      { name: 'coconut water', quantity: 200, unit: 'ml' },
+      { name: 'fish sauce', quantity: 40, unit: 'ml' },
+      { name: 'caramel sauce', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 25, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'shallots', quantity: 20, unit: 'g' },
+      { name: 'black pepper', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 18, fat: 38, fiber: 0, sugar: 16, sodium: 1250 },
+    allergens: ['fish', 'egg'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'keto-friendly']
+  },
+  {
+    dish_name: 'Lemongrass Chicken',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 400, unit: 'g' },
+      { name: 'lemongrass', quantity: 40, unit: 'g' },
+      { name: 'fish sauce', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'shallots', quantity: 30, unit: 'g' },
+      { name: 'chili', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' },
+      { name: 'black pepper', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 36, carbs: 12, fat: 26, fiber: 1, sugar: 10, sodium: 980 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+
+  // === GỎI (SALADS) ===
+  {
+    dish_name: 'Gỏi Đu Đủ',
+    ingredients: [
+      { name: 'green papaya', quantity: 200, unit: 'g' },
+      { name: 'shrimp', quantity: 60, unit: 'g' },
+      { name: 'pork', quantity: 50, unit: 'g' },
+      { name: 'carrots', quantity: 40, unit: 'g' },
+      { name: 'vietnamese coriander', quantity: 15, unit: 'g' },
+      { name: 'thai basil', quantity: 10, unit: 'g' },
+      { name: 'peanuts', quantity: 25, unit: 'g' },
+      { name: 'fried shallots', quantity: 15, unit: 'g' },
+      { name: 'nuoc cham', quantity: 50, unit: 'ml' },
+      { name: 'chili', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 18, carbs: 22, fat: 14, fiber: 4, sugar: 12, sodium: 720 },
+    allergens: ['shellfish', 'fish', 'peanut'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'gluten-free', 'low-carb']
+  },
+
+  // === DRINKS & DESSERTS ===
+  {
+    dish_name: 'Vietnamese Iced Coffee',
+    ingredients: [
+      { name: 'vietnamese coffee', quantity: 25, unit: 'g' },
+      { name: 'condensed milk', quantity: 40, unit: 'ml' },
+      { name: 'hot water', quantity: 100, unit: 'ml' },
+      { name: 'ice', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 3, carbs: 28, fat: 6, fiber: 0, sugar: 26, sodium: 45 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+  {
+    dish_name: 'Chè',
+    ingredients: [
+      { name: 'mung beans', quantity: 80, unit: 'g' },
+      { name: 'tapioca pearls', quantity: 40, unit: 'g' },
+      { name: 'coconut milk', quantity: 150, unit: 'ml' },
+      { name: 'sugar', quantity: 50, unit: 'g' },
+      { name: 'pandan leaves', quantity: 5, unit: 'g' },
+      { name: 'red beans', quantity: 40, unit: 'g' },
+      { name: 'palm sugar', quantity: 20, unit: 'g' },
+      { name: 'ice', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 8, carbs: 58, fat: 8, fiber: 4, sugar: 38, sodium: 25 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Fish Sauce Wings',
+    ingredients: [
+      { name: 'chicken wings', quantity: 500, unit: 'g' },
+      { name: 'fish sauce', quantity: 45, unit: 'ml' },
+      { name: 'sugar', quantity: 40, unit: 'g' },
+      { name: 'garlic', quantity: 6, unit: 'cloves' },
+      { name: 'butter', quantity: 30, unit: 'g' },
+      { name: 'black pepper', quantity: 3, unit: 'g' },
+      { name: 'vegetable oil', quantity: 50, unit: 'ml' }
+    ],
+    nutrition: { calories: 580, protein: 38, carbs: 18, fat: 40, fiber: 0, sugar: 16, sodium: 1350 },
+    allergens: ['fish', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'keto-friendly']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
