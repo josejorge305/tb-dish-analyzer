@@ -371,6 +371,366 @@ const RECIPES = [
   },
 
   // ============================================
+  // === MEXICAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // --- TACOS ---
+  {
+    dish_name: 'Tacos al Pastor',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 300, unit: 'g' },
+      { name: 'corn tortillas', quantity: 6, unit: 'pieces' },
+      { name: 'pineapple', quantity: 100, unit: 'g' },
+      { name: 'achiote paste', quantity: 30, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'cilantro', quantity: 15, unit: 'g' },
+      { name: 'lime', quantity: 1, unit: 'whole' },
+      { name: 'guajillo chilies', quantity: 3, unit: 'pieces' }
+    ],
+    nutrition: { calories: 520, protein: 32, carbs: 45, fat: 22, fiber: 4, sugar: 12, sodium: 680 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Carne Asada Tacos',
+    ingredients: [
+      { name: 'flank steak', quantity: 300, unit: 'g' },
+      { name: 'corn tortillas', quantity: 6, unit: 'pieces' },
+      { name: 'lime juice', quantity: 30, unit: 'ml' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'cilantro', quantity: 15, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'jalapeño', quantity: 1, unit: 'whole' },
+      { name: 'cumin', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 35, carbs: 38, fat: 20, fiber: 3, sugar: 3, sodium: 520 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Barbacoa Tacos',
+    ingredients: [
+      { name: 'beef cheeks', quantity: 350, unit: 'g' },
+      { name: 'corn tortillas', quantity: 6, unit: 'pieces' },
+      { name: 'chipotle peppers', quantity: 2, unit: 'pieces' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'oregano', quantity: 2, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'lime juice', quantity: 30, unit: 'ml' },
+      { name: 'onion', quantity: 50, unit: 'g' },
+      { name: 'cilantro', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 540, protein: 38, carbs: 40, fat: 24, fiber: 4, sugar: 2, sodium: 620 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Birria Tacos',
+    ingredients: [
+      { name: 'beef chuck', quantity: 400, unit: 'g' },
+      { name: 'corn tortillas', quantity: 6, unit: 'pieces' },
+      { name: 'guajillo chilies', quantity: 4, unit: 'pieces' },
+      { name: 'ancho chilies', quantity: 2, unit: 'pieces' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'oregano', quantity: 2, unit: 'g' },
+      { name: 'queso fresco', quantity: 60, unit: 'g' },
+      { name: 'cilantro', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 42, carbs: 42, fat: 26, fiber: 4, sugar: 4, sodium: 720 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+
+  // --- MAIN DISHES ---
+  {
+    dish_name: 'Carnitas',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 500, unit: 'g' },
+      { name: 'lard', quantity: 60, unit: 'g' },
+      { name: 'orange juice', quantity: 120, unit: 'ml' },
+      { name: 'lime juice', quantity: 30, unit: 'ml' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'cumin', quantity: 3, unit: 'g' },
+      { name: 'oregano', quantity: 2, unit: 'g' },
+      { name: 'bay leaves', quantity: 2, unit: 'pieces' }
+    ],
+    nutrition: { calories: 420, protein: 35, carbs: 8, fat: 28, fiber: 1, sugar: 5, sodium: 480 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['gluten-free', 'dairy-free', 'keto', 'low-carb']
+  },
+  {
+    dish_name: 'Enchiladas',
+    ingredients: [
+      { name: 'corn tortillas', quantity: 8, unit: 'pieces' },
+      { name: 'shredded chicken', quantity: 300, unit: 'g' },
+      { name: 'enchilada sauce', quantity: 400, unit: 'ml' },
+      { name: 'queso fresco', quantity: 100, unit: 'g' },
+      { name: 'sour cream', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 50, unit: 'g' },
+      { name: 'cilantro', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 35, carbs: 45, fat: 22, fiber: 5, sugar: 6, sodium: 920 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'moderate_lactose'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Chiles Rellenos',
+    ingredients: [
+      { name: 'poblano peppers', quantity: 4, unit: 'pieces' },
+      { name: 'queso Oaxaca', quantity: 200, unit: 'g' },
+      { name: 'egg', quantity: 3, unit: 'whole' },
+      { name: 'flour', quantity: 30, unit: 'g' },
+      { name: 'tomato sauce', quantity: 200, unit: 'ml' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'garlic', quantity: 2, unit: 'cloves' },
+      { name: 'vegetable oil', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 22, carbs: 25, fat: 32, fiber: 4, sugar: 8, sodium: 680 },
+    allergens: ['milk', 'egg', 'gluten'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Tamales',
+    ingredients: [
+      { name: 'masa harina', quantity: 300, unit: 'g' },
+      { name: 'lard', quantity: 150, unit: 'g' },
+      { name: 'pork', quantity: 250, unit: 'g' },
+      { name: 'dried corn husks', quantity: 12, unit: 'pieces' },
+      { name: 'guajillo chilies', quantity: 4, unit: 'pieces' },
+      { name: 'chicken broth', quantity: 200, unit: 'ml' },
+      { name: 'cumin', quantity: 2, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' }
+    ],
+    nutrition: { calories: 380, protein: 15, carbs: 32, fat: 22, fiber: 3, sugar: 1, sodium: 520 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Mole Poblano',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 400, unit: 'g' },
+      { name: 'ancho chilies', quantity: 4, unit: 'pieces' },
+      { name: 'pasilla chilies', quantity: 3, unit: 'pieces' },
+      { name: 'mulato chilies', quantity: 2, unit: 'pieces' },
+      { name: 'Mexican chocolate', quantity: 50, unit: 'g' },
+      { name: 'almonds', quantity: 30, unit: 'g' },
+      { name: 'sesame seeds', quantity: 20, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'cinnamon', quantity: 2, unit: 'g' },
+      { name: 'cumin', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 35, carbs: 28, fat: 32, fiber: 6, sugar: 12, sodium: 580 },
+    allergens: ['tree nuts', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Cochinita Pibil',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 500, unit: 'g' },
+      { name: 'achiote paste', quantity: 60, unit: 'g' },
+      { name: 'sour orange juice', quantity: 150, unit: 'ml' },
+      { name: 'banana leaves', quantity: 2, unit: 'pieces' },
+      { name: 'habanero pepper', quantity: 1, unit: 'whole' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'cumin', quantity: 2, unit: 'g' },
+      { name: 'oregano', quantity: 2, unit: 'g' },
+      { name: 'pickled red onion', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 450, protein: 38, carbs: 12, fat: 28, fiber: 2, sugar: 6, sodium: 520 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // --- SOUPS ---
+  {
+    dish_name: 'Pozole',
+    ingredients: [
+      { name: 'pork shoulder', quantity: 400, unit: 'g' },
+      { name: 'hominy', quantity: 400, unit: 'g' },
+      { name: 'guajillo chilies', quantity: 4, unit: 'pieces' },
+      { name: 'ancho chilies', quantity: 2, unit: 'pieces' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 4, unit: 'cloves' },
+      { name: 'oregano', quantity: 3, unit: 'g' },
+      { name: 'cabbage', quantity: 100, unit: 'g' },
+      { name: 'radishes', quantity: 50, unit: 'g' },
+      { name: 'lime', quantity: 2, unit: 'wedges' }
+    ],
+    nutrition: { calories: 420, protein: 32, carbs: 38, fat: 18, fiber: 6, sugar: 4, sodium: 720 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Menudo',
+    ingredients: [
+      { name: 'beef tripe', quantity: 500, unit: 'g' },
+      { name: 'hominy', quantity: 400, unit: 'g' },
+      { name: 'guajillo chilies', quantity: 6, unit: 'pieces' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'garlic', quantity: 5, unit: 'cloves' },
+      { name: 'oregano', quantity: 3, unit: 'g' },
+      { name: 'bay leaves', quantity: 2, unit: 'pieces' },
+      { name: 'lime', quantity: 2, unit: 'wedges' },
+      { name: 'cilantro', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 28, carbs: 35, fat: 14, fiber: 5, sugar: 3, sodium: 680 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // --- ANTOJITOS ---
+  {
+    dish_name: 'Quesadillas',
+    ingredients: [
+      { name: 'flour tortillas', quantity: 2, unit: 'large' },
+      { name: 'queso Oaxaca', quantity: 150, unit: 'g' },
+      { name: 'grilled chicken', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 30, unit: 'g' },
+      { name: 'peppers', quantity: 40, unit: 'g' },
+      { name: 'sour cream', quantity: 30, unit: 'g' },
+      { name: 'salsa', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 35, carbs: 42, fat: 30, fiber: 3, sugar: 4, sodium: 980 },
+    allergens: ['gluten', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Gorditas',
+    ingredients: [
+      { name: 'masa harina', quantity: 200, unit: 'g' },
+      { name: 'carnitas', quantity: 150, unit: 'g' },
+      { name: 'refried beans', quantity: 80, unit: 'g' },
+      { name: 'queso fresco', quantity: 50, unit: 'g' },
+      { name: 'lettuce', quantity: 30, unit: 'g' },
+      { name: 'salsa verde', quantity: 40, unit: 'ml' },
+      { name: 'sour cream', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 48, fat: 24, fiber: 6, sugar: 3, sodium: 720 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Sopes',
+    ingredients: [
+      { name: 'masa harina', quantity: 200, unit: 'g' },
+      { name: 'refried beans', quantity: 100, unit: 'g' },
+      { name: 'shredded chicken', quantity: 120, unit: 'g' },
+      { name: 'queso fresco', quantity: 60, unit: 'g' },
+      { name: 'lettuce', quantity: 30, unit: 'g' },
+      { name: 'salsa roja', quantity: 50, unit: 'ml' },
+      { name: 'sour cream', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 28, carbs: 45, fat: 20, fiber: 7, sugar: 3, sodium: 680 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Tostadas',
+    ingredients: [
+      { name: 'corn tostadas', quantity: 4, unit: 'pieces' },
+      { name: 'refried beans', quantity: 120, unit: 'g' },
+      { name: 'shredded chicken', quantity: 150, unit: 'g' },
+      { name: 'lettuce', quantity: 60, unit: 'g' },
+      { name: 'tomato', quantity: 80, unit: 'g' },
+      { name: 'queso fresco', quantity: 60, unit: 'g' },
+      { name: 'sour cream', quantity: 40, unit: 'g' },
+      { name: 'salsa', quantity: 50, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 32, carbs: 48, fat: 22, fiber: 8, sugar: 5, sodium: 780 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+
+  // --- SIDES & APPETIZERS ---
+  {
+    dish_name: 'Elote',
+    ingredients: [
+      { name: 'corn on the cob', quantity: 2, unit: 'pieces' },
+      { name: 'mayonnaise', quantity: 40, unit: 'g' },
+      { name: 'cotija cheese', quantity: 40, unit: 'g' },
+      { name: 'chili powder', quantity: 3, unit: 'g' },
+      { name: 'lime juice', quantity: 15, unit: 'ml' },
+      { name: 'cilantro', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 8, carbs: 32, fat: 20, fiber: 3, sugar: 8, sodium: 420 },
+    allergens: ['milk', 'egg'],
+    fodmap: ['moderate_sorbitol'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+  {
+    dish_name: 'Guacamole',
+    ingredients: [
+      { name: 'avocado', quantity: 300, unit: 'g' },
+      { name: 'lime juice', quantity: 30, unit: 'ml' },
+      { name: 'onion', quantity: 40, unit: 'g' },
+      { name: 'tomato', quantity: 60, unit: 'g' },
+      { name: 'jalapeño', quantity: 1, unit: 'whole' },
+      { name: 'cilantro', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 1, unit: 'clove' },
+      { name: 'sea salt', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 4, carbs: 16, fat: 24, fiber: 12, sugar: 3, sodium: 480 },
+    allergens: [],
+    fodmap: ['moderate_polyol', 'high_fructan'],
+    diet_tags: ['vegan', 'vegetarian', 'gluten-free', 'dairy-free', 'keto']
+  },
+  {
+    dish_name: 'Ceviche',
+    ingredients: [
+      { name: 'white fish', quantity: 300, unit: 'g' },
+      { name: 'lime juice', quantity: 150, unit: 'ml' },
+      { name: 'tomato', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'jalapeño', quantity: 1, unit: 'whole' },
+      { name: 'cilantro', quantity: 20, unit: 'g' },
+      { name: 'cucumber', quantity: 80, unit: 'g' },
+      { name: 'avocado', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 220, protein: 28, carbs: 12, fat: 8, fiber: 4, sugar: 5, sodium: 380 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan', 'moderate_polyol'],
+    diet_tags: ['gluten-free', 'dairy-free', 'low-carb']
+  },
+
+  // --- DESSERTS ---
+  {
+    dish_name: 'Churros',
+    ingredients: [
+      { name: 'flour', quantity: 150, unit: 'g' },
+      { name: 'water', quantity: 200, unit: 'ml' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'sugar', quantity: 60, unit: 'g' },
+      { name: 'cinnamon', quantity: 5, unit: 'g' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' },
+      { name: 'chocolate sauce', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 5, carbs: 45, fat: 20, fiber: 1, sugar: 22, sodium: 180 },
+    allergens: ['gluten', 'milk', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
