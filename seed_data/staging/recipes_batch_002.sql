@@ -364,6 +364,762 @@ INSERT INTO cached_recipes (
   allergen_flags_json, fodmap_flags_json, diet_tags_json,
   source, confidence
 ) VALUES (
+  'nigiri sushi',
+  'Nigiri Sushi',
+  '[{"name":"sushi rice","quantity":200,"unit":"g"},{"name":"fresh salmon","quantity":80,"unit":"g"},{"name":"fresh tuna","quantity":80,"unit":"g"},{"name":"shrimp","quantity":60,"unit":"g"},{"name":"rice vinegar","quantity":30,"unit":"ml"},{"name":"sugar","quantity":15,"unit":"g"},{"name":"wasabi","quantity":5,"unit":"g"},{"name":"soy sauce","quantity":30,"unit":"ml"},{"name":"pickled ginger","quantity":20,"unit":"g"}]',
+  1,
+  380,
+  28,
+  48,
+  8,
+  1,
+  8,
+  720,
+  '["fish","shellfish","soy"]',
+  '["low"]',
+  '["dairy-free","gluten-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'sashimi',
+  'Sashimi',
+  '[{"name":"fresh salmon","quantity":100,"unit":"g"},{"name":"fresh tuna","quantity":100,"unit":"g"},{"name":"yellowtail","quantity":80,"unit":"g"},{"name":"wasabi","quantity":8,"unit":"g"},{"name":"soy sauce","quantity":30,"unit":"ml"},{"name":"pickled ginger","quantity":20,"unit":"g"},{"name":"daikon radish","quantity":50,"unit":"g"},{"name":"shiso leaves","quantity":5,"unit":"pieces"}]',
+  1,
+  280,
+  42,
+  6,
+  10,
+  1,
+  3,
+  680,
+  '["fish","soy"]',
+  '["low"]',
+  '["dairy-free","gluten-free","keto","low-carb"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'maki rolls',
+  'Maki Rolls',
+  '[{"name":"sushi rice","quantity":250,"unit":"g"},{"name":"nori sheets","quantity":4,"unit":"pieces"},{"name":"fresh salmon","quantity":100,"unit":"g"},{"name":"cucumber","quantity":80,"unit":"g"},{"name":"avocado","quantity":80,"unit":"g"},{"name":"cream cheese","quantity":50,"unit":"g"},{"name":"rice vinegar","quantity":30,"unit":"ml"},{"name":"sesame seeds","quantity":10,"unit":"g"},{"name":"soy sauce","quantity":30,"unit":"ml"}]',
+  1,
+  450,
+  22,
+  55,
+  16,
+  4,
+  6,
+  780,
+  '["fish","milk","soy","sesame"]',
+  '["moderate_polyol"]',
+  '[]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'tonkotsu ramen',
+  'Tonkotsu Ramen',
+  '[{"name":"ramen noodles","quantity":200,"unit":"g"},{"name":"pork belly","quantity":100,"unit":"g"},{"name":"tonkotsu broth","quantity":500,"unit":"ml"},{"name":"soft-boiled egg","quantity":1,"unit":"whole"},{"name":"green onion","quantity":20,"unit":"g"},{"name":"nori","quantity":2,"unit":"sheets"},{"name":"bamboo shoots","quantity":30,"unit":"g"},{"name":"garlic oil","quantity":10,"unit":"ml"},{"name":"sesame seeds","quantity":5,"unit":"g"}]',
+  1,
+  680,
+  35,
+  65,
+  32,
+  3,
+  4,
+  1450,
+  '["gluten","egg","sesame"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'shoyu ramen',
+  'Shoyu Ramen',
+  '[{"name":"ramen noodles","quantity":200,"unit":"g"},{"name":"chashu pork","quantity":80,"unit":"g"},{"name":"soy sauce broth","quantity":500,"unit":"ml"},{"name":"soft-boiled egg","quantity":1,"unit":"whole"},{"name":"green onion","quantity":20,"unit":"g"},{"name":"nori","quantity":2,"unit":"sheets"},{"name":"bamboo shoots","quantity":30,"unit":"g"},{"name":"corn","quantity":30,"unit":"g"}]',
+  1,
+  580,
+  32,
+  68,
+  20,
+  3,
+  5,
+  1380,
+  '["gluten","egg","soy"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'udon',
+  'Udon',
+  '[{"name":"udon noodles","quantity":250,"unit":"g"},{"name":"dashi broth","quantity":400,"unit":"ml"},{"name":"soy sauce","quantity":30,"unit":"ml"},{"name":"mirin","quantity":20,"unit":"ml"},{"name":"green onion","quantity":20,"unit":"g"},{"name":"tempura flakes","quantity":20,"unit":"g"},{"name":"kamaboko","quantity":30,"unit":"g"}]',
+  1,
+  420,
+  14,
+  78,
+  6,
+  3,
+  8,
+  1120,
+  '["gluten","fish","soy"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'soba',
+  'Soba',
+  '[{"name":"soba noodles","quantity":200,"unit":"g"},{"name":"dashi broth","quantity":300,"unit":"ml"},{"name":"soy sauce","quantity":30,"unit":"ml"},{"name":"mirin","quantity":20,"unit":"ml"},{"name":"green onion","quantity":20,"unit":"g"},{"name":"wasabi","quantity":5,"unit":"g"},{"name":"nori","quantity":1,"unit":"sheet"}]',
+  1,
+  350,
+  14,
+  68,
+  3,
+  4,
+  6,
+  980,
+  '["gluten","fish","soy"]',
+  '["high_fructan"]',
+  '["dairy-free","vegan"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'tempura',
+  'Tempura',
+  '[{"name":"shrimp","quantity":150,"unit":"g"},{"name":"sweet potato","quantity":80,"unit":"g"},{"name":"eggplant","quantity":60,"unit":"g"},{"name":"green beans","quantity":50,"unit":"g"},{"name":"tempura flour","quantity":100,"unit":"g"},{"name":"ice water","quantity":150,"unit":"ml"},{"name":"vegetable oil","quantity":200,"unit":"ml"},{"name":"tentsuyu sauce","quantity":60,"unit":"ml"},{"name":"daikon","quantity":30,"unit":"g"}]',
+  1,
+  480,
+  22,
+  45,
+  24,
+  4,
+  6,
+  680,
+  '["shellfish","gluten","soy"]',
+  '["high_fructan","moderate_sorbitol"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'tonkatsu',
+  'Tonkatsu',
+  '[{"name":"pork loin","quantity":200,"unit":"g"},{"name":"panko breadcrumbs","quantity":80,"unit":"g"},{"name":"flour","quantity":30,"unit":"g"},{"name":"egg","quantity":1,"unit":"whole"},{"name":"cabbage","quantity":100,"unit":"g"},{"name":"tonkatsu sauce","quantity":40,"unit":"ml"},{"name":"vegetable oil","quantity":100,"unit":"ml"},{"name":"rice","quantity":150,"unit":"g"}]',
+  1,
+  720,
+  35,
+  65,
+  35,
+  3,
+  8,
+  820,
+  '["gluten","egg"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'chicken karaage',
+  'Chicken Karaage',
+  '[{"name":"chicken thigh","quantity":300,"unit":"g"},{"name":"soy sauce","quantity":30,"unit":"ml"},{"name":"sake","quantity":20,"unit":"ml"},{"name":"ginger","quantity":15,"unit":"g"},{"name":"garlic","quantity":3,"unit":"cloves"},{"name":"potato starch","quantity":60,"unit":"g"},{"name":"vegetable oil","quantity":200,"unit":"ml"},{"name":"lemon","quantity":1,"unit":"wedge"}]',
+  1,
+  450,
+  32,
+  25,
+  26,
+  1,
+  2,
+  780,
+  '["soy"]',
+  '["high_fructan"]',
+  '["dairy-free","gluten-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'yakitori',
+  'Yakitori',
+  '[{"name":"chicken thigh","quantity":300,"unit":"g"},{"name":"chicken skin","quantity":50,"unit":"g"},{"name":"green onion","quantity":60,"unit":"g"},{"name":"tare sauce","quantity":60,"unit":"ml"},{"name":"soy sauce","quantity":30,"unit":"ml"},{"name":"mirin","quantity":30,"unit":"ml"},{"name":"sake","quantity":20,"unit":"ml"},{"name":"shichimi togarashi","quantity":3,"unit":"g"}]',
+  1,
+  380,
+  35,
+  18,
+  18,
+  1,
+  12,
+  920,
+  '["soy"]',
+  '["high_fructan"]',
+  '["dairy-free","gluten-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'teriyaki chicken',
+  'Teriyaki Chicken',
+  '[{"name":"chicken thigh","quantity":300,"unit":"g"},{"name":"soy sauce","quantity":60,"unit":"ml"},{"name":"mirin","quantity":40,"unit":"ml"},{"name":"sake","quantity":30,"unit":"ml"},{"name":"sugar","quantity":25,"unit":"g"},{"name":"ginger","quantity":10,"unit":"g"},{"name":"garlic","quantity":2,"unit":"cloves"},{"name":"sesame seeds","quantity":5,"unit":"g"}]',
+  1,
+  420,
+  35,
+  28,
+  18,
+  0,
+  22,
+  1380,
+  '["soy","sesame"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'gyudon',
+  'Gyudon',
+  '[{"name":"beef sirloin","quantity":200,"unit":"g"},{"name":"onion","quantity":100,"unit":"g"},{"name":"rice","quantity":200,"unit":"g"},{"name":"dashi broth","quantity":100,"unit":"ml"},{"name":"soy sauce","quantity":40,"unit":"ml"},{"name":"mirin","quantity":30,"unit":"ml"},{"name":"sake","quantity":20,"unit":"ml"},{"name":"pickled ginger","quantity":15,"unit":"g"}]',
+  1,
+  580,
+  32,
+  65,
+  20,
+  2,
+  10,
+  980,
+  '["soy","fish"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'sukiyaki',
+  'Sukiyaki',
+  '[{"name":"beef ribeye","quantity":300,"unit":"g"},{"name":"tofu","quantity":150,"unit":"g"},{"name":"napa cabbage","quantity":150,"unit":"g"},{"name":"shiitake mushrooms","quantity":80,"unit":"g"},{"name":"shirataki noodles","quantity":100,"unit":"g"},{"name":"green onion","quantity":60,"unit":"g"},{"name":"soy sauce","quantity":80,"unit":"ml"},{"name":"mirin","quantity":60,"unit":"ml"},{"name":"sugar","quantity":40,"unit":"g"},{"name":"raw egg","quantity":1,"unit":"whole"}]',
+  1,
+  620,
+  42,
+  35,
+  35,
+  4,
+  25,
+  1250,
+  '["soy","egg"]',
+  '["high_fructan","high_mannitol"]',
+  '["gluten-free","dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'shabu shabu',
+  'Shabu Shabu',
+  '[{"name":"beef ribeye","quantity":250,"unit":"g"},{"name":"tofu","quantity":150,"unit":"g"},{"name":"napa cabbage","quantity":150,"unit":"g"},{"name":"enoki mushrooms","quantity":100,"unit":"g"},{"name":"shirataki noodles","quantity":100,"unit":"g"},{"name":"kombu dashi","quantity":600,"unit":"ml"},{"name":"ponzu sauce","quantity":60,"unit":"ml"},{"name":"sesame dipping sauce","quantity":60,"unit":"ml"}]',
+  1,
+  520,
+  40,
+  22,
+  30,
+  4,
+  6,
+  980,
+  '["soy","sesame","fish"]',
+  '["high_fructan","high_mannitol"]',
+  '["gluten-free","dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'okonomiyaki',
+  'Okonomiyaki',
+  '[{"name":"flour","quantity":100,"unit":"g"},{"name":"cabbage","quantity":200,"unit":"g"},{"name":"pork belly","quantity":100,"unit":"g"},{"name":"egg","quantity":2,"unit":"whole"},{"name":"dashi broth","quantity":100,"unit":"ml"},{"name":"okonomiyaki sauce","quantity":50,"unit":"ml"},{"name":"mayonnaise","quantity":30,"unit":"g"},{"name":"bonito flakes","quantity":10,"unit":"g"},{"name":"aonori","quantity":5,"unit":"g"}]',
+  1,
+  520,
+  22,
+  45,
+  28,
+  4,
+  12,
+  920,
+  '["gluten","egg","fish"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'takoyaki',
+  'Takoyaki',
+  '[{"name":"takoyaki batter","quantity":200,"unit":"g"},{"name":"octopus","quantity":100,"unit":"g"},{"name":"green onion","quantity":30,"unit":"g"},{"name":"pickled ginger","quantity":20,"unit":"g"},{"name":"tenkasu","quantity":20,"unit":"g"},{"name":"takoyaki sauce","quantity":40,"unit":"ml"},{"name":"mayonnaise","quantity":20,"unit":"g"},{"name":"bonito flakes","quantity":10,"unit":"g"},{"name":"aonori","quantity":5,"unit":"g"}]',
+  1,
+  380,
+  18,
+  42,
+  16,
+  2,
+  8,
+  780,
+  '["gluten","egg","shellfish","fish"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'onigiri',
+  'Onigiri',
+  '[{"name":"sushi rice","quantity":200,"unit":"g"},{"name":"nori","quantity":2,"unit":"sheets"},{"name":"salmon flakes","quantity":50,"unit":"g"},{"name":"umeboshi","quantity":2,"unit":"pieces"},{"name":"salt","quantity":3,"unit":"g"},{"name":"sesame seeds","quantity":5,"unit":"g"}]',
+  1,
+  280,
+  12,
+  48,
+  4,
+  1,
+  2,
+  580,
+  '["fish","sesame"]',
+  '["low"]',
+  '["dairy-free","gluten-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'gyoza',
+  'Gyoza',
+  '[{"name":"ground pork","quantity":250,"unit":"g"},{"name":"cabbage","quantity":150,"unit":"g"},{"name":"gyoza wrappers","quantity":200,"unit":"g"},{"name":"garlic","quantity":3,"unit":"cloves"},{"name":"ginger","quantity":10,"unit":"g"},{"name":"green onion","quantity":30,"unit":"g"},{"name":"soy sauce","quantity":20,"unit":"ml"},{"name":"sesame oil","quantity":15,"unit":"ml"},{"name":"rice vinegar","quantity":20,"unit":"ml"}]',
+  1,
+  420,
+  24,
+  42,
+  18,
+  3,
+  3,
+  720,
+  '["gluten","soy","sesame"]',
+  '["high_fructan"]',
+  '["dairy-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'miso soup',
+  'Miso Soup',
+  '[{"name":"dashi broth","quantity":400,"unit":"ml"},{"name":"miso paste","quantity":40,"unit":"g"},{"name":"silken tofu","quantity":100,"unit":"g"},{"name":"wakame seaweed","quantity":5,"unit":"g"},{"name":"green onion","quantity":15,"unit":"g"}]',
+  1,
+  80,
+  6,
+  8,
+  3,
+  2,
+  3,
+  820,
+  '["soy","fish"]',
+  '["high_gos","high_fructan"]',
+  '["vegetarian","gluten-free","dairy-free","low-carb"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
+  'matcha dessert',
+  'Matcha Dessert',
+  '[{"name":"matcha powder","quantity":10,"unit":"g"},{"name":"heavy cream","quantity":200,"unit":"ml"},{"name":"sugar","quantity":60,"unit":"g"},{"name":"milk","quantity":150,"unit":"ml"},{"name":"gelatin","quantity":5,"unit":"g"},{"name":"red bean paste","quantity":50,"unit":"g"}]',
+  1,
+  320,
+  6,
+  38,
+  18,
+  2,
+  32,
+  60,
+  '["milk"]',
+  '["high_lactose","high_gos"]',
+  '["vegetarian","gluten-free"]',
+  'curated',
+  0.95
+) ON CONFLICT(dish_name_normalized) DO UPDATE SET
+  ingredients_json = excluded.ingredients_json,
+  calories_kcal = excluded.calories_kcal,
+  protein_g = excluded.protein_g,
+  carbs_g = excluded.carbs_g,
+  fat_g = excluded.fat_g,
+  fiber_g = excluded.fiber_g,
+  sugar_g = excluded.sugar_g,
+  sodium_mg = excluded.sodium_mg,
+  allergen_flags_json = excluded.allergen_flags_json,
+  fodmap_flags_json = excluded.fodmap_flags_json,
+  diet_tags_json = excluded.diet_tags_json,
+  updated_at = datetime('now');
+
+INSERT INTO cached_recipes (
+  dish_name_normalized, dish_name_display, ingredients_json, servings,
+  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
+  allergen_flags_json, fodmap_flags_json, diet_tags_json,
+  source, confidence
+) VALUES (
   'spaghetti and meatballs',
   'Spaghetti and Meatballs',
   '[{"name":"spaghetti","quantity":200,"unit":"g"},{"name":"ground beef","quantity":300,"unit":"g"},{"name":"breadcrumbs","quantity":30,"unit":"g"},{"name":"egg","quantity":1,"unit":"whole"},{"name":"parmesan cheese","quantity":30,"unit":"g"},{"name":"marinara sauce","quantity":250,"unit":"ml"},{"name":"garlic","quantity":3,"unit":"cloves"},{"name":"olive oil","quantity":15,"unit":"ml"},{"name":"basil","quantity":5,"unit":"g"}]',
@@ -522,42 +1278,6 @@ INSERT INTO cached_recipes (
   '["shellfish","peanut","egg","soy","fish"]',
   '["high_fructan","high_gos"]',
   '["gluten-free"]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'chicken teriyaki',
-  'Chicken Teriyaki',
-  '[{"name":"chicken thigh","quantity":250,"unit":"g"},{"name":"soy sauce","quantity":60,"unit":"ml"},{"name":"mirin","quantity":30,"unit":"ml"},{"name":"sake","quantity":30,"unit":"ml"},{"name":"brown sugar","quantity":20,"unit":"g"},{"name":"ginger","quantity":5,"unit":"g"},{"name":"garlic","quantity":2,"unit":"cloves"},{"name":"sesame seeds","quantity":5,"unit":"g"}]',
-  1,
-  380,
-  32,
-  25,
-  16,
-  0,
-  18,
-  1450,
-  '["soy","sesame"]',
-  '["high_fructan"]',
-  '["dairy-free"]',
   'curated',
   0.95
 ) ON CONFLICT(dish_name_normalized) DO UPDATE SET
@@ -1062,222 +1782,6 @@ INSERT INTO cached_recipes (
   '["gluten"]',
   '["moderate_polyol","high_fructan"]',
   '["vegan","dairy-free","vegetarian"]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'chicken noodle soup',
-  'Chicken Noodle Soup',
-  '[{"name":"chicken breast","quantity":150,"unit":"g"},{"name":"egg noodles","quantity":100,"unit":"g"},{"name":"chicken broth","quantity":500,"unit":"ml"},{"name":"carrot","quantity":60,"unit":"g"},{"name":"celery","quantity":40,"unit":"g"},{"name":"onion","quantity":50,"unit":"g"},{"name":"parsley","quantity":5,"unit":"g"}]',
-  1,
-  280,
-  25,
-  28,
-  8,
-  2,
-  4,
-  980,
-  '["gluten","egg"]',
-  '["high_fructan","moderate_polyol"]',
-  '["dairy-free"]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'tomato soup',
-  'Tomato Soup',
-  '[{"name":"crushed tomatoes","quantity":400,"unit":"g"},{"name":"onion","quantity":80,"unit":"g"},{"name":"garlic","quantity":3,"unit":"cloves"},{"name":"vegetable broth","quantity":250,"unit":"ml"},{"name":"heavy cream","quantity":60,"unit":"ml"},{"name":"butter","quantity":20,"unit":"g"},{"name":"basil","quantity":10,"unit":"g"}]',
-  1,
-  220,
-  4,
-  18,
-  15,
-  4,
-  10,
-  680,
-  '["milk"]',
-  '["high_fructan","high_fructose"]',
-  '["vegetarian","gluten-free"]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'clam chowder',
-  'Clam Chowder',
-  '[{"name":"clams","quantity":200,"unit":"g"},{"name":"potato","quantity":200,"unit":"g"},{"name":"heavy cream","quantity":240,"unit":"ml"},{"name":"bacon","quantity":40,"unit":"g"},{"name":"onion","quantity":60,"unit":"g"},{"name":"celery","quantity":40,"unit":"g"},{"name":"butter","quantity":30,"unit":"g"},{"name":"flour","quantity":20,"unit":"g"}]',
-  1,
-  420,
-  18,
-  32,
-  26,
-  2,
-  4,
-  850,
-  '["shellfish","milk","gluten"]',
-  '["high_fructan","high_lactose","moderate_polyol"]',
-  '[]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'fish and chips',
-  'Fish and Chips',
-  '[{"name":"cod fillet","quantity":200,"unit":"g"},{"name":"flour","quantity":100,"unit":"g"},{"name":"beer","quantity":120,"unit":"ml"},{"name":"potato","quantity":250,"unit":"g"},{"name":"vegetable oil","quantity":100,"unit":"ml"},{"name":"tartar sauce","quantity":40,"unit":"g"},{"name":"lemon wedge","quantity":1,"unit":"piece"}]',
-  1,
-  780,
-  32,
-  68,
-  42,
-  4,
-  2,
-  720,
-  '["fish","gluten","egg"]',
-  '["high_fructan"]',
-  '["dairy-free"]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'grilled salmon',
-  'Grilled Salmon',
-  '[{"name":"salmon fillet","quantity":180,"unit":"g"},{"name":"olive oil","quantity":15,"unit":"ml"},{"name":"lemon","quantity":30,"unit":"g"},{"name":"dill","quantity":5,"unit":"g"},{"name":"garlic","quantity":2,"unit":"cloves"},{"name":"butter","quantity":15,"unit":"g"}]',
-  1,
-  380,
-  36,
-  2,
-  25,
-  0,
-  1,
-  280,
-  '["fish","milk"]',
-  '["high_fructan"]',
-  '["gluten-free","keto","low-carb"]',
-  'curated',
-  0.95
-) ON CONFLICT(dish_name_normalized) DO UPDATE SET
-  ingredients_json = excluded.ingredients_json,
-  calories_kcal = excluded.calories_kcal,
-  protein_g = excluded.protein_g,
-  carbs_g = excluded.carbs_g,
-  fat_g = excluded.fat_g,
-  fiber_g = excluded.fiber_g,
-  sugar_g = excluded.sugar_g,
-  sodium_mg = excluded.sodium_mg,
-  allergen_flags_json = excluded.allergen_flags_json,
-  fodmap_flags_json = excluded.fodmap_flags_json,
-  diet_tags_json = excluded.diet_tags_json,
-  updated_at = datetime('now');
-
-INSERT INTO cached_recipes (
-  dish_name_normalized, dish_name_display, ingredients_json, servings,
-  calories_kcal, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg,
-  allergen_flags_json, fodmap_flags_json, diet_tags_json,
-  source, confidence
-) VALUES (
-  'shrimp scampi',
-  'Shrimp Scampi',
-  '[{"name":"shrimp","quantity":300,"unit":"g"},{"name":"linguine","quantity":200,"unit":"g"},{"name":"butter","quantity":60,"unit":"g"},{"name":"garlic","quantity":5,"unit":"cloves"},{"name":"white wine","quantity":120,"unit":"ml"},{"name":"lemon juice","quantity":30,"unit":"ml"},{"name":"parsley","quantity":15,"unit":"g"},{"name":"red pepper flakes","quantity":2,"unit":"g"}]',
-  1,
-  620,
-  35,
-  58,
-  28,
-  3,
-  3,
-  720,
-  '["shellfish","gluten","milk"]',
-  '["high_fructan"]',
-  '[]',
   'curated',
   0.95
 ) ON CONFLICT(dish_name_normalized) DO UPDATE SET

@@ -1117,6 +1117,387 @@ const RECIPES = [
   },
 
   // ============================================
+  // === JAPANESE CUISINE (20 base recipes) ===
+  // ============================================
+
+  // --- SUSHI & SASHIMI ---
+  {
+    dish_name: 'Nigiri Sushi',
+    ingredients: [
+      { name: 'sushi rice', quantity: 200, unit: 'g' },
+      { name: 'fresh salmon', quantity: 80, unit: 'g' },
+      { name: 'fresh tuna', quantity: 80, unit: 'g' },
+      { name: 'shrimp', quantity: 60, unit: 'g' },
+      { name: 'rice vinegar', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 15, unit: 'g' },
+      { name: 'wasabi', quantity: 5, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'pickled ginger', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 28, carbs: 48, fat: 8, fiber: 1, sugar: 8, sodium: 720 },
+    allergens: ['fish', 'shellfish', 'soy'],
+    fodmap: ['low'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Sashimi',
+    ingredients: [
+      { name: 'fresh salmon', quantity: 100, unit: 'g' },
+      { name: 'fresh tuna', quantity: 100, unit: 'g' },
+      { name: 'yellowtail', quantity: 80, unit: 'g' },
+      { name: 'wasabi', quantity: 8, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'pickled ginger', quantity: 20, unit: 'g' },
+      { name: 'daikon radish', quantity: 50, unit: 'g' },
+      { name: 'shiso leaves', quantity: 5, unit: 'pieces' }
+    ],
+    nutrition: { calories: 280, protein: 42, carbs: 6, fat: 10, fiber: 1, sugar: 3, sodium: 680 },
+    allergens: ['fish', 'soy'],
+    fodmap: ['low'],
+    diet_tags: ['dairy-free', 'gluten-free', 'keto', 'low-carb']
+  },
+  {
+    dish_name: 'Maki Rolls',
+    ingredients: [
+      { name: 'sushi rice', quantity: 250, unit: 'g' },
+      { name: 'nori sheets', quantity: 4, unit: 'pieces' },
+      { name: 'fresh salmon', quantity: 100, unit: 'g' },
+      { name: 'cucumber', quantity: 80, unit: 'g' },
+      { name: 'avocado', quantity: 80, unit: 'g' },
+      { name: 'cream cheese', quantity: 50, unit: 'g' },
+      { name: 'rice vinegar', quantity: 30, unit: 'ml' },
+      { name: 'sesame seeds', quantity: 10, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 450, protein: 22, carbs: 55, fat: 16, fiber: 4, sugar: 6, sodium: 780 },
+    allergens: ['fish', 'milk', 'soy', 'sesame'],
+    fodmap: ['moderate_polyol'],
+    diet_tags: []
+  },
+
+  // --- NOODLES ---
+  {
+    dish_name: 'Tonkotsu Ramen',
+    ingredients: [
+      { name: 'ramen noodles', quantity: 200, unit: 'g' },
+      { name: 'pork belly', quantity: 100, unit: 'g' },
+      { name: 'tonkotsu broth', quantity: 500, unit: 'ml' },
+      { name: 'soft-boiled egg', quantity: 1, unit: 'whole' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'nori', quantity: 2, unit: 'sheets' },
+      { name: 'bamboo shoots', quantity: 30, unit: 'g' },
+      { name: 'garlic oil', quantity: 10, unit: 'ml' },
+      { name: 'sesame seeds', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 35, carbs: 65, fat: 32, fiber: 3, sugar: 4, sodium: 1450 },
+    allergens: ['gluten', 'egg', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Shoyu Ramen',
+    ingredients: [
+      { name: 'ramen noodles', quantity: 200, unit: 'g' },
+      { name: 'chashu pork', quantity: 80, unit: 'g' },
+      { name: 'soy sauce broth', quantity: 500, unit: 'ml' },
+      { name: 'soft-boiled egg', quantity: 1, unit: 'whole' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'nori', quantity: 2, unit: 'sheets' },
+      { name: 'bamboo shoots', quantity: 30, unit: 'g' },
+      { name: 'corn', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 32, carbs: 68, fat: 20, fiber: 3, sugar: 5, sodium: 1380 },
+    allergens: ['gluten', 'egg', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Udon',
+    ingredients: [
+      { name: 'udon noodles', quantity: 250, unit: 'g' },
+      { name: 'dashi broth', quantity: 400, unit: 'ml' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'mirin', quantity: 20, unit: 'ml' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'tempura flakes', quantity: 20, unit: 'g' },
+      { name: 'kamaboko', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 14, carbs: 78, fat: 6, fiber: 3, sugar: 8, sodium: 1120 },
+    allergens: ['gluten', 'fish', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Soba',
+    ingredients: [
+      { name: 'soba noodles', quantity: 200, unit: 'g' },
+      { name: 'dashi broth', quantity: 300, unit: 'ml' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'mirin', quantity: 20, unit: 'ml' },
+      { name: 'green onion', quantity: 20, unit: 'g' },
+      { name: 'wasabi', quantity: 5, unit: 'g' },
+      { name: 'nori', quantity: 1, unit: 'sheet' }
+    ],
+    nutrition: { calories: 350, protein: 14, carbs: 68, fat: 3, fiber: 4, sugar: 6, sodium: 980 },
+    allergens: ['gluten', 'fish', 'soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'vegan']
+  },
+
+  // --- FRIED DISHES ---
+  {
+    dish_name: 'Tempura',
+    ingredients: [
+      { name: 'shrimp', quantity: 150, unit: 'g' },
+      { name: 'sweet potato', quantity: 80, unit: 'g' },
+      { name: 'eggplant', quantity: 60, unit: 'g' },
+      { name: 'green beans', quantity: 50, unit: 'g' },
+      { name: 'tempura flour', quantity: 100, unit: 'g' },
+      { name: 'ice water', quantity: 150, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' },
+      { name: 'tentsuyu sauce', quantity: 60, unit: 'ml' },
+      { name: 'daikon', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 22, carbs: 45, fat: 24, fiber: 4, sugar: 6, sodium: 680 },
+    allergens: ['shellfish', 'gluten', 'soy'],
+    fodmap: ['high_fructan', 'moderate_sorbitol'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Tonkatsu',
+    ingredients: [
+      { name: 'pork loin', quantity: 200, unit: 'g' },
+      { name: 'panko breadcrumbs', quantity: 80, unit: 'g' },
+      { name: 'flour', quantity: 30, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'whole' },
+      { name: 'cabbage', quantity: 100, unit: 'g' },
+      { name: 'tonkatsu sauce', quantity: 40, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 100, unit: 'ml' },
+      { name: 'rice', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 720, protein: 35, carbs: 65, fat: 35, fiber: 3, sugar: 8, sodium: 820 },
+    allergens: ['gluten', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Chicken Karaage',
+    ingredients: [
+      { name: 'chicken thigh', quantity: 300, unit: 'g' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'sake', quantity: 20, unit: 'ml' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'potato starch', quantity: 60, unit: 'g' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' },
+      { name: 'lemon', quantity: 1, unit: 'wedge' }
+    ],
+    nutrition: { calories: 450, protein: 32, carbs: 25, fat: 26, fiber: 1, sugar: 2, sodium: 780 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+
+  // --- GRILLED ---
+  {
+    dish_name: 'Yakitori',
+    ingredients: [
+      { name: 'chicken thigh', quantity: 300, unit: 'g' },
+      { name: 'chicken skin', quantity: 50, unit: 'g' },
+      { name: 'green onion', quantity: 60, unit: 'g' },
+      { name: 'tare sauce', quantity: 60, unit: 'ml' },
+      { name: 'soy sauce', quantity: 30, unit: 'ml' },
+      { name: 'mirin', quantity: 30, unit: 'ml' },
+      { name: 'sake', quantity: 20, unit: 'ml' },
+      { name: 'shichimi togarashi', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 35, carbs: 18, fat: 18, fiber: 1, sugar: 12, sodium: 920 },
+    allergens: ['soy'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Teriyaki Chicken',
+    ingredients: [
+      { name: 'chicken thigh', quantity: 300, unit: 'g' },
+      { name: 'soy sauce', quantity: 60, unit: 'ml' },
+      { name: 'mirin', quantity: 40, unit: 'ml' },
+      { name: 'sake', quantity: 30, unit: 'ml' },
+      { name: 'sugar', quantity: 25, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'garlic', quantity: 2, unit: 'cloves' },
+      { name: 'sesame seeds', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 35, carbs: 28, fat: 18, fiber: 0, sugar: 22, sodium: 1380 },
+    allergens: ['soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- RICE BOWLS ---
+  {
+    dish_name: 'Gyudon',
+    ingredients: [
+      { name: 'beef sirloin', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'rice', quantity: 200, unit: 'g' },
+      { name: 'dashi broth', quantity: 100, unit: 'ml' },
+      { name: 'soy sauce', quantity: 40, unit: 'ml' },
+      { name: 'mirin', quantity: 30, unit: 'ml' },
+      { name: 'sake', quantity: 20, unit: 'ml' },
+      { name: 'pickled ginger', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 32, carbs: 65, fat: 20, fiber: 2, sugar: 10, sodium: 980 },
+    allergens: ['soy', 'fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- HOT POTS ---
+  {
+    dish_name: 'Sukiyaki',
+    ingredients: [
+      { name: 'beef ribeye', quantity: 300, unit: 'g' },
+      { name: 'tofu', quantity: 150, unit: 'g' },
+      { name: 'napa cabbage', quantity: 150, unit: 'g' },
+      { name: 'shiitake mushrooms', quantity: 80, unit: 'g' },
+      { name: 'shirataki noodles', quantity: 100, unit: 'g' },
+      { name: 'green onion', quantity: 60, unit: 'g' },
+      { name: 'soy sauce', quantity: 80, unit: 'ml' },
+      { name: 'mirin', quantity: 60, unit: 'ml' },
+      { name: 'sugar', quantity: 40, unit: 'g' },
+      { name: 'raw egg', quantity: 1, unit: 'whole' }
+    ],
+    nutrition: { calories: 620, protein: 42, carbs: 35, fat: 35, fiber: 4, sugar: 25, sodium: 1250 },
+    allergens: ['soy', 'egg'],
+    fodmap: ['high_fructan', 'high_mannitol'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Shabu Shabu',
+    ingredients: [
+      { name: 'beef ribeye', quantity: 250, unit: 'g' },
+      { name: 'tofu', quantity: 150, unit: 'g' },
+      { name: 'napa cabbage', quantity: 150, unit: 'g' },
+      { name: 'enoki mushrooms', quantity: 100, unit: 'g' },
+      { name: 'shirataki noodles', quantity: 100, unit: 'g' },
+      { name: 'kombu dashi', quantity: 600, unit: 'ml' },
+      { name: 'ponzu sauce', quantity: 60, unit: 'ml' },
+      { name: 'sesame dipping sauce', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 40, carbs: 22, fat: 30, fiber: 4, sugar: 6, sodium: 980 },
+    allergens: ['soy', 'sesame', 'fish'],
+    fodmap: ['high_fructan', 'high_mannitol'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // --- SAVORY PANCAKES ---
+  {
+    dish_name: 'Okonomiyaki',
+    ingredients: [
+      { name: 'flour', quantity: 100, unit: 'g' },
+      { name: 'cabbage', quantity: 200, unit: 'g' },
+      { name: 'pork belly', quantity: 100, unit: 'g' },
+      { name: 'egg', quantity: 2, unit: 'whole' },
+      { name: 'dashi broth', quantity: 100, unit: 'ml' },
+      { name: 'okonomiyaki sauce', quantity: 50, unit: 'ml' },
+      { name: 'mayonnaise', quantity: 30, unit: 'g' },
+      { name: 'bonito flakes', quantity: 10, unit: 'g' },
+      { name: 'aonori', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 22, carbs: 45, fat: 28, fiber: 4, sugar: 12, sodium: 920 },
+    allergens: ['gluten', 'egg', 'fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Takoyaki',
+    ingredients: [
+      { name: 'takoyaki batter', quantity: 200, unit: 'g' },
+      { name: 'octopus', quantity: 100, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'pickled ginger', quantity: 20, unit: 'g' },
+      { name: 'tenkasu', quantity: 20, unit: 'g' },
+      { name: 'takoyaki sauce', quantity: 40, unit: 'ml' },
+      { name: 'mayonnaise', quantity: 20, unit: 'g' },
+      { name: 'bonito flakes', quantity: 10, unit: 'g' },
+      { name: 'aonori', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 18, carbs: 42, fat: 16, fiber: 2, sugar: 8, sodium: 780 },
+    allergens: ['gluten', 'egg', 'shellfish', 'fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- RICE BALLS & DUMPLINGS ---
+  {
+    dish_name: 'Onigiri',
+    ingredients: [
+      { name: 'sushi rice', quantity: 200, unit: 'g' },
+      { name: 'nori', quantity: 2, unit: 'sheets' },
+      { name: 'salmon flakes', quantity: 50, unit: 'g' },
+      { name: 'umeboshi', quantity: 2, unit: 'pieces' },
+      { name: 'salt', quantity: 3, unit: 'g' },
+      { name: 'sesame seeds', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 12, carbs: 48, fat: 4, fiber: 1, sugar: 2, sodium: 580 },
+    allergens: ['fish', 'sesame'],
+    fodmap: ['low'],
+    diet_tags: ['dairy-free', 'gluten-free']
+  },
+  {
+    dish_name: 'Gyoza',
+    ingredients: [
+      { name: 'ground pork', quantity: 250, unit: 'g' },
+      { name: 'cabbage', quantity: 150, unit: 'g' },
+      { name: 'gyoza wrappers', quantity: 200, unit: 'g' },
+      { name: 'garlic', quantity: 3, unit: 'cloves' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'green onion', quantity: 30, unit: 'g' },
+      { name: 'soy sauce', quantity: 20, unit: 'ml' },
+      { name: 'sesame oil', quantity: 15, unit: 'ml' },
+      { name: 'rice vinegar', quantity: 20, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 24, carbs: 42, fat: 18, fiber: 3, sugar: 3, sodium: 720 },
+    allergens: ['gluten', 'soy', 'sesame'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+
+  // --- SOUP ---
+  {
+    dish_name: 'Miso Soup',
+    ingredients: [
+      { name: 'dashi broth', quantity: 400, unit: 'ml' },
+      { name: 'miso paste', quantity: 40, unit: 'g' },
+      { name: 'silken tofu', quantity: 100, unit: 'g' },
+      { name: 'wakame seaweed', quantity: 5, unit: 'g' },
+      { name: 'green onion', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 80, protein: 6, carbs: 8, fat: 3, fiber: 2, sugar: 3, sodium: 820 },
+    allergens: ['soy', 'fish'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegetarian', 'gluten-free', 'dairy-free', 'low-carb']
+  },
+
+  // --- DESSERTS ---
+  {
+    dish_name: 'Matcha Dessert',
+    ingredients: [
+      { name: 'matcha powder', quantity: 10, unit: 'g' },
+      { name: 'heavy cream', quantity: 200, unit: 'ml' },
+      { name: 'sugar', quantity: 60, unit: 'g' },
+      { name: 'milk', quantity: 150, unit: 'ml' },
+      { name: 'gelatin', quantity: 5, unit: 'g' },
+      { name: 'red bean paste', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 6, carbs: 38, fat: 18, fiber: 2, sugar: 32, sodium: 60 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose', 'high_gos'],
+    diet_tags: ['vegetarian', 'gluten-free']
+  },
+
+  // ============================================
   // === OTHER CUISINES ===
   // ============================================
 
@@ -1211,23 +1592,6 @@ const RECIPES = [
     allergens: ['shellfish', 'peanut', 'egg', 'soy', 'fish'],
     fodmap: ['high_fructan', 'high_gos'],
     diet_tags: ['gluten-free']
-  },
-  {
-    dish_name: 'Chicken Teriyaki',
-    ingredients: [
-      { name: 'chicken thigh', quantity: 250, unit: 'g' },
-      { name: 'soy sauce', quantity: 60, unit: 'ml' },
-      { name: 'mirin', quantity: 30, unit: 'ml' },
-      { name: 'sake', quantity: 30, unit: 'ml' },
-      { name: 'brown sugar', quantity: 20, unit: 'g' },
-      { name: 'ginger', quantity: 5, unit: 'g' },
-      { name: 'garlic', quantity: 2, unit: 'cloves' },
-      { name: 'sesame seeds', quantity: 5, unit: 'g' }
-    ],
-    nutrition: { calories: 380, protein: 32, carbs: 25, fat: 16, fiber: 0, sugar: 18, sodium: 1450 },
-    allergens: ['soy', 'sesame'],
-    fodmap: ['high_fructan'],
-    diet_tags: ['dairy-free']
   },
 
   // === MEXICAN ===
