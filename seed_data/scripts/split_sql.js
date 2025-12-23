@@ -111,6 +111,7 @@ async function main() {
     'additives',       // References ingredients
     'bioactives',      // References ingredients (FooDB polyphenols, carotenoids, etc.)
     'glycemic',        // References ingredients (GI/GL data)
+    'ontology',        // Food categories, cooking methods, tags
     'micronutrients',  // References ingredients
     'nutrients'        // References ingredients (USDA basic nutrients)
   ];
@@ -168,7 +169,7 @@ const files = fs.readdirSync(BATCH_DIR)
   .sort();
 
 // Group by type and import in correct order
-const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'quality_scores', 'additives', 'micronutrients', 'nutrients'];
+const order = ['ingredients', 'synonyms', 'sources', 'allergen_flags', 'quality_scores', 'additives', 'bioactives', 'glycemic', 'ontology', 'micronutrients', 'nutrients'];
 const grouped = {};
 
 for (const file of files) {

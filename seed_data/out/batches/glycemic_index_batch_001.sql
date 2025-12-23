@@ -1,5 +1,5 @@
 -- glycemic_index batch 1
--- Generated: 2025-12-23T06:06:42.452Z
+-- Generated: 2025-12-23T06:21:21.212Z
 
 INSERT OR IGNORE INTO ingredient_glycemic (ingredient_id, glycemic_index, glycemic_load, serving_size_g, gi_category, source, source_url) SELECT i.id, 75, 10.5, 30, 'high', 'international_tables_2021', 'https://glycemicindex.com' FROM ingredients i WHERE i.canonical_name = 'white bread';
 INSERT OR IGNORE INTO ingredient_glycemic (ingredient_id, glycemic_index, glycemic_load, serving_size_g, gi_category, source, source_url) SELECT i.id, 74, 8.9, 30, 'high', 'international_tables_2021', 'https://glycemicindex.com' FROM ingredients i WHERE i.canonical_name = 'whole wheat bread';
