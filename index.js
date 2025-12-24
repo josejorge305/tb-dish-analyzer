@@ -12894,6 +12894,143 @@ const _worker_impl = {
       return handleHealthz(env);
     }
 
+    // GET /uploads/* - Serve uploaded images from R2
+    if (pathname.startsWith("/uploads/") && request.method === "GET") {
+      if (!env.R2_BUCKET) {
+        return new Response("R2 not configured", { status: 503 });
+      }
+      const key = pathname.slice(1); // Remove leading slash: "uploads/..."
+      const obj = await env.R2_BUCKET.get(key);
+      if (!obj) {
+        return new Response("Not found", { status: 404 });
+      }
+      const headers = new Headers();
+      headers.set("Content-Type", obj.httpMetadata?.contentType || "image/jpeg");
+      headers.set("Cache-Control", "public, max-age=31536000"); // 1 year cache
+      headers.set("Access-Control-Allow-Origin", "*");
+      return new Response(obj.body, { status: 200, headers });
+    }
+
+    // OPTIONS preflight for /api/upload-image (CORS)
+    if (pathname === "/api/upload-image" && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // POST /api/upload-image - Upload image to R2 and return public URL
+    if (pathname === "/api/upload-image" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const imageB64 = body.image || body.imageB64 || body.image_b64 || null;
+        const mimeType = body.mimeType || body.mime_type || "image/jpeg";
+
+        if (!imageB64) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_image",
+              hint: "Provide 'image' (base64) in the request body."
+            }),
+            {
+              status: 400,
+              headers: { "Content-Type": "application/json", ...CORS_ALL }
+            }
+          );
+        }
+
+        if (!env.R2_BUCKET) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "r2_not_configured",
+              hint: "R2 storage is not configured."
+            }),
+            {
+              status: 503,
+              headers: { "Content-Type": "application/json", ...CORS_ALL }
+            }
+          );
+        }
+
+        // Strip data URL prefix if present
+        let cleanBase64 = imageB64;
+        if (imageB64.includes(",")) {
+          cleanBase64 = imageB64.split(",")[1];
+        }
+
+        // Decode base64 to binary
+        const binaryString = atob(cleanBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // Generate unique key
+        const ext = mimeType.includes("png") ? "png" : mimeType.includes("webp") ? "webp" : "jpg";
+        const timestamp = Date.now();
+        const randomId = crypto.randomUUID().slice(0, 8);
+        const key = `uploads/${timestamp}-${randomId}.${ext}`;
+
+        // Upload to R2
+        await env.R2_BUCKET.put(key, bytes.buffer, {
+          httpMetadata: {
+            contentType: mimeType
+          }
+        });
+
+        // Build public URL - serve through this worker
+        const workerHost = new URL(request.url).origin;
+        const publicUrl = `${workerHost}/uploads/${timestamp}-${randomId}.${ext}`;
+
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            url: publicUrl,
+            key: key,
+            size: bytes.length,
+            mimeType: mimeType
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json", ...CORS_ALL }
+          }
+        );
+      } catch (err) {
+        console.error("upload-image error:", err);
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "upload_failed",
+            details: err && err.message ? String(err.message) : String(err)
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json", ...CORS_ALL }
+          }
+        );
+      }
+    }
+
+    // OPTIONS preflight for /api/analyze/image (CORS)
+    if (pathname === "/api/analyze/image" && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
     // POST /api/analyze/image - Image recognition for food photos
     if (pathname === "/api/analyze/image" && request.method === "POST") {
       try {
@@ -14116,6 +14253,19 @@ const _worker_impl = {
 
     // ========== USER TRACKING API ENDPOINTS ==========
 
+    // OPTIONS preflight for /api/profile/* (CORS)
+    if (pathname.startsWith("/api/profile") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
     // GET /api/profile - Get user profile
     if (pathname === "/api/profile" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
@@ -14175,6 +14325,17 @@ const _worker_impl = {
       if (result.ok) {
         // Recalculate targets after profile update
         await calculateAndStoreTargets(env, userId);
+        // Fetch updated profile and targets to return to frontend
+        const updatedProfile = await getUserProfile(env, userId);
+        const updatedTargets = await getUserTargets(env, userId);
+        return new Response(JSON.stringify({
+          ok: true,
+          profile: updatedProfile,
+          targets: updatedTargets
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
       }
 
       return new Response(JSON.stringify(result), {
@@ -14198,6 +14359,17 @@ const _worker_impl = {
       const result = await upsertUserProfile(env, userId, body);
       if (result.ok) {
         await calculateAndStoreTargets(env, userId);
+        // Fetch updated profile and targets to return to frontend
+        const updatedProfile = await getUserProfile(env, userId);
+        const updatedTargets = await getUserTargets(env, userId);
+        return new Response(JSON.stringify({
+          ok: true,
+          profile: updatedProfile,
+          targets: updatedTargets
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
       }
 
       return new Response(JSON.stringify(result), {
@@ -14302,6 +14474,19 @@ const _worker_impl = {
       });
     }
 
+    // OPTIONS preflight for /api/meals/* (CORS)
+    if (pathname.startsWith("/api/meals") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
     // POST /api/meals/log - Log a meal
     if (pathname === "/api/meals/log" && request.method === "POST") {
       const body = await readJsonSafe(request);
@@ -14358,6 +14543,19 @@ const _worker_impl = {
       return new Response(JSON.stringify(result), {
         status: result.ok ? 200 : 404,
         headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // OPTIONS preflight for /api/tracker/* (CORS)
+    if (pathname.startsWith("/api/tracker") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
       });
     }
 
