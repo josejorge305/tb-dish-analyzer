@@ -3106,7 +3106,7 @@ function extractMenuItemsFromUber(raw, queryText = "") {
   if (results.length === 1) {
     chosenRestaurants = [results[0]];
   } else {
-    // legacy scoring, but choose only ONE best
+    // Improved scoring with minimum threshold to avoid wrong matches
     const scored = results.map((r) => {
       const name = (r.title || r.sanitizedTitle || r.name || "").toLowerCase();
       const q = (queryText || "").toLowerCase();
@@ -3116,24 +3116,40 @@ function extractMenuItemsFromUber(raw, queryText = "") {
         if (name === q) score = 100;
         else if (name.startsWith(q)) score = 90;
         else if (name.includes(q)) score = 80;
+        else if (q.includes(name) && name.length > 3) score = 75; // restaurant name is substring of query
         else {
+          // Word overlap scoring - require significant overlap
           const nTokens = name.split(/\s+/);
           const qTokens = q.split(/\s+/);
           const nSet = new Set(nTokens);
           let overlap = 0;
+          let keyWordMatch = false;
           for (const t of qTokens) {
-            if (nSet.has(t)) overlap++;
+            if (nSet.has(t)) {
+              overlap++;
+              // Check if this is a "key" word (not common words)
+              if (t.length > 4 && !['the', 'and', 'restaurant', 'cafe', 'bar', 'grill'].includes(t)) {
+                keyWordMatch = true;
+              }
+            }
           }
           const ratio = overlap / Math.max(1, qTokens.length);
-          score = Math.round(60 * ratio);
+          // Only give credit if key words match, not just common words like "factory"
+          score = keyWordMatch ? Math.round(60 * ratio) : Math.round(30 * ratio);
         }
       }
       return { r, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
-    if (scored[0]) {
-      chosenRestaurants = [scored[0].r]; // ONLY top one
+    // Require minimum score of 50 to avoid picking completely wrong restaurants
+    const MIN_MATCH_SCORE = 50;
+    if (scored[0] && scored[0].score >= MIN_MATCH_SCORE) {
+      chosenRestaurants = [scored[0].r]; // ONLY top one if score is good enough
+    } else if (scored[0]) {
+      // Log warning but still use best match if nothing better
+      console.warn(`[extractMenuItemsFromUber] Low match score ${scored[0].score} for query "${queryText}" -> "${scored[0].r.title || scored[0].r.name}"`);
+      chosenRestaurants = [scored[0].r];
     }
   }
 
@@ -12597,15 +12613,39 @@ function flattenUberPayloadToItemsGateway(payload, opts = {}) {
         .trim();
       let score = 0;
       if (title === targetName) score += 100;
-      if (title.includes(targetName)) score += 50;
-      if (targetName.includes(title) && title.length > 0) score += 40;
+      else if (title.startsWith(targetName)) score += 90;
+      else if (title.includes(targetName)) score += 80;
+      else if (targetName.includes(title) && title.length > 3) score += 70;
+      else {
+        // Word overlap scoring with key word matching
+        const titleTokens = title.split(/\s+/);
+        const targetTokens = targetName.split(/\s+/);
+        const titleSet = new Set(titleTokens);
+        let overlap = 0;
+        let keyWordMatch = false;
+        for (const t of targetTokens) {
+          if (titleSet.has(t)) {
+            overlap++;
+            if (t.length > 4 && !['the', 'and', 'restaurant', 'cafe', 'bar', 'grill'].includes(t)) {
+              keyWordMatch = true;
+            }
+          }
+        }
+        const ratio = overlap / Math.max(1, targetTokens.length);
+        score = keyWordMatch ? Math.round(60 * ratio) : Math.round(25 * ratio);
+      }
       return { s, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
     const bestScore = scored[0]?.score ?? 0;
+    const MIN_MATCH_SCORE = 50;
 
-    if (bestScore > 0) {
+    if (bestScore >= MIN_MATCH_SCORE) {
+      const best = scored.filter((x) => x.score === bestScore).map((x) => x.s);
+      stores = best.length ? best : stores;
+    } else if (bestScore > 0) {
+      console.warn(`[flattenUberPayloadToItemsGateway] Low match score ${bestScore} for "${targetName}"`);
       const best = scored.filter((x) => x.score === bestScore).map((x) => x.s);
       stores = best.length ? best : stores;
     }
