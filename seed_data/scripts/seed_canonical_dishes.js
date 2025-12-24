@@ -693,6 +693,6 @@ function main() {
 }
 
 // Export for use in other scripts
-module.exports = { normalizeDishName, canonicalDishes };
+export { normalizeDishName, canonicalDishes };
 
 main();
