@@ -6998,6 +6998,327 @@ const RECIPES = [
     allergens: ['wheat', 'milk', 'tree_nut'],
     fodmap: ['high_fructan', 'high_fructose', 'high_polyol'],
     diet_tags: ['vegetarian']
+  },
+
+  // ============================================
+  // === BRITISH / UK CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === CLASSIC MAINS ===
+  {
+    dish_name: 'Fish and Chips',
+    ingredients: [
+      { name: 'cod fillet', quantity: 300, unit: 'g' },
+      { name: 'flour', quantity: 150, unit: 'g' },
+      { name: 'beer', quantity: 200, unit: 'ml' },
+      { name: 'potatoes', quantity: 400, unit: 'g' },
+      { name: 'vegetable oil', quantity: 500, unit: 'ml' },
+      { name: 'mushy peas', quantity: 100, unit: 'g' },
+      { name: 'tartar sauce', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 820, protein: 38, carbs: 72, fat: 42, fiber: 6, sugar: 3, sodium: 680 },
+    allergens: ['fish', 'wheat', 'egg'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Full English Breakfast',
+    ingredients: [
+      { name: 'bacon', quantity: 100, unit: 'g' },
+      { name: 'sausages', quantity: 120, unit: 'g' },
+      { name: 'eggs', quantity: 2, unit: 'pieces' },
+      { name: 'baked beans', quantity: 150, unit: 'g' },
+      { name: 'mushrooms', quantity: 80, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'black pudding', quantity: 60, unit: 'g' },
+      { name: 'toast', quantity: 2, unit: 'slices' },
+      { name: 'butter', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 920, protein: 42, carbs: 48, fat: 62, fiber: 8, sugar: 12, sodium: 1680 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_gos', 'high_polyol'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Sunday Roast',
+    ingredients: [
+      { name: 'roast beef', quantity: 300, unit: 'g' },
+      { name: 'roast potatoes', quantity: 200, unit: 'g' },
+      { name: 'Yorkshire pudding', quantity: 100, unit: 'g' },
+      { name: 'carrots', quantity: 80, unit: 'g' },
+      { name: 'parsnips', quantity: 80, unit: 'g' },
+      { name: 'Brussels sprouts', quantity: 80, unit: 'g' },
+      { name: 'gravy', quantity: 100, unit: 'ml' },
+      { name: 'horseradish sauce', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 780, protein: 52, carbs: 54, fat: 38, fiber: 8, sugar: 10, sodium: 720 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_polyol', 'high_gos'],
+    diet_tags: []
+  },
+  {
+    dish_name: "Shepherd's Pie",
+    ingredients: [
+      { name: 'ground lamb', quantity: 500, unit: 'g' },
+      { name: 'mashed potatoes', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'peas', quantity: 80, unit: 'g' },
+      { name: 'beef stock', quantity: 200, unit: 'ml' },
+      { name: 'Worcestershire sauce', quantity: 15, unit: 'ml' },
+      { name: 'butter', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 35, carbs: 42, fat: 32, fiber: 6, sugar: 8, sodium: 680 },
+    allergens: ['milk', 'fish'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Cottage Pie',
+    ingredients: [
+      { name: 'ground beef', quantity: 500, unit: 'g' },
+      { name: 'mashed potatoes', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'peas', quantity: 80, unit: 'g' },
+      { name: 'beef stock', quantity: 200, unit: 'ml' },
+      { name: 'tomato paste', quantity: 30, unit: 'g' },
+      { name: 'butter', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 560, protein: 38, carbs: 42, fat: 28, fiber: 6, sugar: 8, sodium: 720 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Bangers and Mash',
+    ingredients: [
+      { name: 'pork sausages', quantity: 300, unit: 'g' },
+      { name: 'mashed potatoes', quantity: 350, unit: 'g' },
+      { name: 'onion gravy', quantity: 150, unit: 'ml' },
+      { name: 'butter', quantity: 40, unit: 'g' },
+      { name: 'milk', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 680, protein: 28, carbs: 48, fat: 42, fiber: 4, sugar: 6, sodium: 1020 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Beef Wellington',
+    ingredients: [
+      { name: 'beef tenderloin', quantity: 500, unit: 'g' },
+      { name: 'puff pastry', quantity: 400, unit: 'g' },
+      { name: 'mushroom duxelles', quantity: 200, unit: 'g' },
+      { name: 'pâté', quantity: 80, unit: 'g' },
+      { name: 'egg wash', quantity: 1, unit: 'piece' },
+      { name: 'Dijon mustard', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 720, protein: 48, carbs: 38, fat: 44, fiber: 2, sugar: 2, sodium: 620 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Chicken Tikka Masala (UK)',
+    ingredients: [
+      { name: 'chicken breast', quantity: 400, unit: 'g' },
+      { name: 'tikka masala sauce', quantity: 300, unit: 'ml' },
+      { name: 'yogurt', quantity: 100, unit: 'g' },
+      { name: 'cream', quantity: 100, unit: 'ml' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'basmati rice', quantity: 200, unit: 'g' }
+    ],
+    nutrition: { calories: 620, protein: 45, carbs: 52, fat: 26, fiber: 3, sugar: 10, sodium: 780 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Steak and Ale Pie',
+    ingredients: [
+      { name: 'beef chuck', quantity: 500, unit: 'g' },
+      { name: 'puff pastry', quantity: 300, unit: 'g' },
+      { name: 'ale', quantity: 300, unit: 'ml' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'carrots', quantity: 80, unit: 'g' },
+      { name: 'mushrooms', quantity: 100, unit: 'g' },
+      { name: 'beef stock', quantity: 200, unit: 'ml' },
+      { name: 'flour', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 42, carbs: 48, fat: 36, fiber: 4, sugar: 6, sodium: 720 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Cornish Pasty',
+    ingredients: [
+      { name: 'beef skirt', quantity: 250, unit: 'g' },
+      { name: 'shortcrust pastry', quantity: 300, unit: 'g' },
+      { name: 'potatoes', quantity: 150, unit: 'g' },
+      { name: 'swede', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'butter', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 28, carbs: 52, fat: 30, fiber: 4, sugar: 4, sodium: 620 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+
+  // === SNACKS & LIGHT MEALS ===
+  {
+    dish_name: 'Scotch Egg',
+    ingredients: [
+      { name: 'hard-boiled eggs', quantity: 4, unit: 'pieces' },
+      { name: 'sausage meat', quantity: 400, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 100, unit: 'g' },
+      { name: 'flour', quantity: 50, unit: 'g' },
+      { name: 'egg wash', quantity: 2, unit: 'pieces' },
+      { name: 'vegetable oil', quantity: 500, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 22, carbs: 18, fat: 26, fiber: 1, sugar: 1, sodium: 580 },
+    allergens: ['wheat', 'egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Yorkshire Pudding',
+    ingredients: [
+      { name: 'flour', quantity: 150, unit: 'g' },
+      { name: 'eggs', quantity: 3, unit: 'pieces' },
+      { name: 'milk', quantity: 200, unit: 'ml' },
+      { name: 'beef dripping', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 7, carbs: 22, fat: 8, fiber: 1, sugar: 2, sodium: 120 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: "Ploughman's Lunch",
+    ingredients: [
+      { name: 'cheddar cheese', quantity: 100, unit: 'g' },
+      { name: 'crusty bread', quantity: 100, unit: 'g' },
+      { name: 'pickled onions', quantity: 60, unit: 'g' },
+      { name: 'Branston pickle', quantity: 40, unit: 'g' },
+      { name: 'ham', quantity: 80, unit: 'g' },
+      { name: 'apple', quantity: 1, unit: 'piece' },
+      { name: 'butter', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 620, protein: 28, carbs: 48, fat: 36, fiber: 4, sugar: 18, sodium: 1280 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose', 'high_polyol'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Welsh Rarebit',
+    ingredients: [
+      { name: 'cheddar cheese', quantity: 200, unit: 'g' },
+      { name: 'toast', quantity: 2, unit: 'slices' },
+      { name: 'beer', quantity: 60, unit: 'ml' },
+      { name: 'Worcestershire sauce', quantity: 10, unit: 'ml' },
+      { name: 'mustard', quantity: 10, unit: 'g' },
+      { name: 'egg yolk', quantity: 1, unit: 'piece' }
+    ],
+    nutrition: { calories: 480, protein: 24, carbs: 28, fat: 32, fiber: 2, sugar: 3, sodium: 920 },
+    allergens: ['wheat', 'milk', 'egg', 'fish'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Tea Sandwiches',
+    ingredients: [
+      { name: 'white bread', quantity: 8, unit: 'slices' },
+      { name: 'cucumber', quantity: 100, unit: 'g' },
+      { name: 'smoked salmon', quantity: 80, unit: 'g' },
+      { name: 'egg salad', quantity: 100, unit: 'g' },
+      { name: 'cream cheese', quantity: 60, unit: 'g' },
+      { name: 'butter', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 18, carbs: 38, fat: 24, fiber: 2, sugar: 4, sodium: 680 },
+    allergens: ['wheat', 'fish', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+
+  // === DESSERTS ===
+  {
+    dish_name: 'Sticky Toffee Pudding',
+    ingredients: [
+      { name: 'dates', quantity: 200, unit: 'g' },
+      { name: 'flour', quantity: 180, unit: 'g' },
+      { name: 'butter', quantity: 100, unit: 'g' },
+      { name: 'brown sugar', quantity: 150, unit: 'g' },
+      { name: 'eggs', quantity: 2, unit: 'pieces' },
+      { name: 'toffee sauce', quantity: 200, unit: 'ml' },
+      { name: 'cream', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 6, carbs: 72, fat: 24, fiber: 3, sugar: 52, sodium: 280 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_fructose', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Trifle',
+    ingredients: [
+      { name: 'sponge cake', quantity: 200, unit: 'g' },
+      { name: 'custard', quantity: 300, unit: 'ml' },
+      { name: 'whipped cream', quantity: 200, unit: 'ml' },
+      { name: 'mixed berries', quantity: 200, unit: 'g' },
+      { name: 'sherry', quantity: 60, unit: 'ml' },
+      { name: 'jam', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 8, carbs: 52, fat: 20, fiber: 2, sugar: 38, sodium: 140 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Scones with Clotted Cream',
+    ingredients: [
+      { name: 'flour', quantity: 350, unit: 'g' },
+      { name: 'butter', quantity: 80, unit: 'g' },
+      { name: 'milk', quantity: 150, unit: 'ml' },
+      { name: 'clotted cream', quantity: 100, unit: 'g' },
+      { name: 'strawberry jam', quantity: 80, unit: 'g' },
+      { name: 'sugar', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 8, carbs: 58, fat: 26, fiber: 2, sugar: 22, sodium: 380 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Eton Mess',
+    ingredients: [
+      { name: 'meringue', quantity: 100, unit: 'g' },
+      { name: 'whipped cream', quantity: 300, unit: 'ml' },
+      { name: 'strawberries', quantity: 300, unit: 'g' },
+      { name: 'vanilla extract', quantity: 5, unit: 'ml' }
+    ],
+    nutrition: { calories: 380, protein: 4, carbs: 42, fat: 22, fiber: 2, sugar: 38, sodium: 60 },
+    allergens: ['egg', 'milk'],
+    fodmap: ['high_lactose', 'high_fructose'],
+    diet_tags: ['gluten-free', 'vegetarian']
+  },
+  {
+    dish_name: 'Banoffee Pie',
+    ingredients: [
+      { name: 'digestive biscuits', quantity: 250, unit: 'g' },
+      { name: 'butter', quantity: 120, unit: 'g' },
+      { name: 'dulce de leche', quantity: 400, unit: 'g' },
+      { name: 'bananas', quantity: 3, unit: 'pieces' },
+      { name: 'whipped cream', quantity: 300, unit: 'ml' },
+      { name: 'dark chocolate', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 6, carbs: 62, fat: 28, fiber: 2, sugar: 48, sodium: 320 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose', 'high_fructose'],
+    diet_tags: ['vegetarian']
   }
 ];
 
