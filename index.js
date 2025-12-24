@@ -14940,7 +14940,7 @@ const _worker_impl = {
       let totalDeleted = 0;
       let cursor = undefined;
       do {
-        const list = await kv.list({ prefix: "menu:", limit: 100, cursor });
+        const list = await kv.list({ prefix: "menu/", limit: 100, cursor });
         for (const k of list.keys) {
           await kv.delete(k.name);
           totalDeleted++;
