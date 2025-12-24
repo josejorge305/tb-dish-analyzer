@@ -6066,6 +6066,938 @@ const RECIPES = [
     allergens: [],
     fodmap: [],
     diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+
+  // ============================================
+  // === ETHIOPIAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === MAIN DISHES ===
+  {
+    dish_name: 'Injera with Mixed Wot Platter',
+    ingredients: [
+      { name: 'teff flour', quantity: 400, unit: 'g' },
+      { name: 'doro wot', quantity: 200, unit: 'g' },
+      { name: 'misir wot', quantity: 200, unit: 'g' },
+      { name: 'gomen', quantity: 150, unit: 'g' },
+      { name: 'shiro', quantity: 150, unit: 'g' },
+      { name: 'atakilt wat', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 680, protein: 32, carbs: 82, fat: 24, fiber: 12, sugar: 8, sodium: 780 },
+    allergens: ['egg'],
+    fodmap: ['high_fructan', 'high_gos'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Doro Wat',
+    ingredients: [
+      { name: 'chicken pieces', quantity: 800, unit: 'g' },
+      { name: 'berbere spice', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 400, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 100, unit: 'g' },
+      { name: 'hard-boiled eggs', quantity: 6, unit: 'pieces' },
+      { name: 'garlic', quantity: 30, unit: 'g' },
+      { name: 'ginger', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 42, carbs: 18, fat: 28, fiber: 4, sugar: 8, sodium: 680 },
+    allergens: ['egg', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free']
+  },
+  {
+    dish_name: 'Tibs',
+    ingredients: [
+      { name: 'beef sirloin', quantity: 500, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 100, unit: 'g' },
+      { name: 'jalapeño', quantity: 40, unit: 'g' },
+      { name: 'rosemary', quantity: 5, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 40, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 45, carbs: 12, fat: 22, fiber: 3, sugar: 6, sodium: 520 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Kitfo',
+    ingredients: [
+      { name: 'lean beef', quantity: 400, unit: 'g' },
+      { name: 'mitmita spice', quantity: 15, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 60, unit: 'g' },
+      { name: 'kocho', quantity: 100, unit: 'g' },
+      { name: 'ayib cheese', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 42, carbs: 8, fat: 32, fiber: 2, sugar: 2, sodium: 480 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['gluten-free', 'low-carb', 'keto']
+  },
+  {
+    dish_name: 'Shiro',
+    ingredients: [
+      { name: 'chickpea flour', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'berbere spice', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 40, unit: 'g' },
+      { name: 'tomato paste', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 14, carbs: 38, fat: 14, fiber: 8, sugar: 6, sodium: 420 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['gluten-free', 'vegetarian']
+  },
+  {
+    dish_name: 'Misir Wat',
+    ingredients: [
+      { name: 'red lentils', quantity: 300, unit: 'g' },
+      { name: 'berbere spice', quantity: 30, unit: 'g' },
+      { name: 'onion', quantity: 200, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 340, protein: 18, carbs: 48, fat: 10, fiber: 16, sugar: 6, sodium: 380 },
+    allergens: ['milk'],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['gluten-free', 'vegetarian', 'high-fiber']
+  },
+  {
+    dish_name: 'Gomen',
+    ingredients: [
+      { name: 'collard greens', quantity: 500, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'vegetable oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 180, protein: 6, carbs: 18, fat: 10, fiber: 8, sugar: 4, sodium: 280 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'low-carb']
+  },
+  {
+    dish_name: 'Alicha Wot',
+    ingredients: [
+      { name: 'chicken', quantity: 500, unit: 'g' },
+      { name: 'onion', quantity: 200, unit: 'g' },
+      { name: 'turmeric', quantity: 10, unit: 'g' },
+      { name: 'ginger', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 38, carbs: 12, fat: 20, fiber: 2, sugar: 6, sodium: 480 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Berbere Chicken',
+    ingredients: [
+      { name: 'chicken thighs', quantity: 600, unit: 'g' },
+      { name: 'berbere spice', quantity: 40, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 50, unit: 'g' },
+      { name: 'tomato paste', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 40, carbs: 14, fat: 24, fiber: 3, sugar: 6, sodium: 580 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Ethiopian Lentil Stew',
+    ingredients: [
+      { name: 'brown lentils', quantity: 300, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'berbere spice', quantity: 20, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 18, carbs: 46, fat: 8, fiber: 16, sugar: 6, sodium: 380 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Ethiopian Chickpea Stew',
+    ingredients: [
+      { name: 'chickpeas', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'berbere spice', quantity: 25, unit: 'g' },
+      { name: 'tomato paste', quantity: 40, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'vegetable oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 340, protein: 16, carbs: 48, fat: 10, fiber: 12, sugar: 8, sodium: 420 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Siga Wat',
+    ingredients: [
+      { name: 'beef chunks', quantity: 600, unit: 'g' },
+      { name: 'berbere spice', quantity: 50, unit: 'g' },
+      { name: 'onion', quantity: 300, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 60, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'ginger', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 45, carbs: 16, fat: 28, fiber: 4, sugar: 8, sodium: 620 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Key Wat',
+    ingredients: [
+      { name: 'beef', quantity: 500, unit: 'g' },
+      { name: 'berbere spice', quantity: 45, unit: 'g' },
+      { name: 'onion', quantity: 250, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 50, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'cardamom', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 460, protein: 42, carbs: 18, fat: 26, fiber: 4, sugar: 8, sodium: 580 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+  {
+    dish_name: 'Atakilt Wat',
+    ingredients: [
+      { name: 'cabbage', quantity: 300, unit: 'g' },
+      { name: 'carrots', quantity: 150, unit: 'g' },
+      { name: 'potatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'turmeric', quantity: 8, unit: 'g' },
+      { name: 'garlic', quantity: 10, unit: 'g' },
+      { name: 'vegetable oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 240, protein: 5, carbs: 36, fat: 10, fiber: 8, sugar: 8, sodium: 320 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Firfir',
+    ingredients: [
+      { name: 'injera', quantity: 200, unit: 'g' },
+      { name: 'berbere spice', quantity: 20, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 40, unit: 'g' },
+      { name: 'tomatoes', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 8, carbs: 42, fat: 14, fiber: 6, sugar: 6, sodium: 420 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'vegetarian']
+  },
+  {
+    dish_name: 'Ethiopian Sambusa',
+    ingredients: [
+      { name: 'pastry dough', quantity: 300, unit: 'g' },
+      { name: 'ground beef', quantity: 250, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'jalapeño', quantity: 30, unit: 'g' },
+      { name: 'berbere spice', quantity: 10, unit: 'g' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 16, carbs: 28, fat: 18, fiber: 2, sugar: 2, sodium: 420 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Dulet',
+    ingredients: [
+      { name: 'lamb liver', quantity: 200, unit: 'g' },
+      { name: 'lamb tripe', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'jalapeño', quantity: 40, unit: 'g' },
+      { name: 'niter kibbeh', quantity: 40, unit: 'g' },
+      { name: 'cardamom', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 32, carbs: 12, fat: 24, fiber: 2, sugar: 4, sodium: 520 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'low-carb']
+  },
+
+  // === DRINKS & DESSERTS ===
+  {
+    dish_name: 'Ethiopian Coffee Ceremony',
+    ingredients: [
+      { name: 'coffee beans', quantity: 100, unit: 'g' },
+      { name: 'water', quantity: 500, unit: 'ml' },
+      { name: 'sugar', quantity: 30, unit: 'g' }
+    ],
+    nutrition: { calories: 30, protein: 0, carbs: 8, fat: 0, fiber: 0, sugar: 8, sodium: 2 },
+    allergens: [],
+    fodmap: [],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Tej (Honey Wine)',
+    ingredients: [
+      { name: 'honey', quantity: 500, unit: 'g' },
+      { name: 'water', quantity: 2000, unit: 'ml' },
+      { name: 'gesho leaves', quantity: 50, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 0, carbs: 42, fat: 0, fiber: 0, sugar: 40, sodium: 5 },
+    allergens: [],
+    fodmap: ['high_fructose'],
+    diet_tags: ['gluten-free', 'dairy-free', 'vegetarian']
+  },
+  {
+    dish_name: 'Ethiopian Spiced Tea',
+    ingredients: [
+      { name: 'black tea', quantity: 10, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' },
+      { name: 'cloves', quantity: 2, unit: 'g' },
+      { name: 'cardamom', quantity: 2, unit: 'g' },
+      { name: 'sugar', quantity: 20, unit: 'g' },
+      { name: 'milk', quantity: 100, unit: 'ml' }
+    ],
+    nutrition: { calories: 80, protein: 2, carbs: 16, fat: 2, fiber: 0, sugar: 14, sodium: 40 },
+    allergens: ['milk'],
+    fodmap: ['high_lactose'],
+    diet_tags: ['gluten-free', 'vegetarian']
+  },
+
+  // ============================================
+  // === MOROCCAN / NORTH AFRICAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === TAGINES ===
+  {
+    dish_name: 'Chicken Tagine with Preserved Lemon',
+    ingredients: [
+      { name: 'chicken pieces', quantity: 800, unit: 'g' },
+      { name: 'preserved lemons', quantity: 60, unit: 'g' },
+      { name: 'olives', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'saffron', quantity: 1, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' },
+      { name: 'cilantro', quantity: 20, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 420, protein: 42, carbs: 12, fat: 24, fiber: 3, sugar: 4, sodium: 680 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Lamb Tagine',
+    ingredients: [
+      { name: 'lamb shoulder', quantity: 600, unit: 'g' },
+      { name: 'dried apricots', quantity: 100, unit: 'g' },
+      { name: 'almonds', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'honey', quantity: 40, unit: 'g' },
+      { name: 'cinnamon', quantity: 5, unit: 'g' },
+      { name: 'ras el hanout', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' }
+    ],
+    nutrition: { calories: 520, protein: 38, carbs: 32, fat: 28, fiber: 4, sugar: 24, sodium: 520 },
+    allergens: ['tree_nut'],
+    fodmap: ['high_fructan', 'high_fructose', 'high_polyol'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Moroccan Couscous',
+    ingredients: [
+      { name: 'couscous', quantity: 300, unit: 'g' },
+      { name: 'lamb', quantity: 300, unit: 'g' },
+      { name: 'chickpeas', quantity: 150, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'zucchini', quantity: 100, unit: 'g' },
+      { name: 'turnips', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'raisins', quantity: 40, unit: 'g' },
+      { name: 'harissa', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 32, carbs: 68, fat: 20, fiber: 8, sugar: 14, sodium: 620 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan', 'high_gos', 'high_fructose'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Harira Soup',
+    ingredients: [
+      { name: 'lamb', quantity: 200, unit: 'g' },
+      { name: 'chickpeas', quantity: 150, unit: 'g' },
+      { name: 'lentils', quantity: 100, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'celery', quantity: 50, unit: 'g' },
+      { name: 'flour', quantity: 30, unit: 'g' },
+      { name: 'cilantro', quantity: 20, unit: 'g' },
+      { name: 'ginger', quantity: 10, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 24, carbs: 42, fat: 14, fiber: 10, sugar: 8, sodium: 580 },
+    allergens: ['wheat'],
+    fodmap: ['high_gos', 'high_fructan', 'high_polyol'],
+    diet_tags: ['dairy-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Pastilla (Bastilla)',
+    ingredients: [
+      { name: 'pigeon or chicken', quantity: 500, unit: 'g' },
+      { name: 'phyllo dough', quantity: 300, unit: 'g' },
+      { name: 'almonds', quantity: 150, unit: 'g' },
+      { name: 'eggs', quantity: 6, unit: 'pieces' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'butter', quantity: 100, unit: 'g' },
+      { name: 'cinnamon', quantity: 8, unit: 'g' },
+      { name: 'powdered sugar', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 520, protein: 32, carbs: 38, fat: 30, fiber: 3, sugar: 12, sodium: 480 },
+    allergens: ['wheat', 'egg', 'milk', 'tree_nut'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Kefta Meatballs',
+    ingredients: [
+      { name: 'ground beef', quantity: 400, unit: 'g' },
+      { name: 'ground lamb', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'parsley', quantity: 30, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 32, carbs: 6, fat: 26, fiber: 1, sugar: 2, sodium: 520 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'low-carb']
+  },
+  {
+    dish_name: 'Kefta Tagine with Eggs',
+    ingredients: [
+      { name: 'ground beef', quantity: 400, unit: 'g' },
+      { name: 'eggs', quantity: 4, unit: 'pieces' },
+      { name: 'tomatoes', quantity: 300, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'parsley', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 36, carbs: 12, fat: 26, fiber: 3, sugar: 6, sodium: 580 },
+    allergens: ['egg'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'low-carb']
+  },
+  {
+    dish_name: 'Mechoui (Roast Lamb)',
+    ingredients: [
+      { name: 'whole lamb leg', quantity: 2000, unit: 'g' },
+      { name: 'cumin', quantity: 20, unit: 'g' },
+      { name: 'coriander', quantity: 15, unit: 'g' },
+      { name: 'garlic', quantity: 30, unit: 'g' },
+      { name: 'butter', quantity: 100, unit: 'g' },
+      { name: 'salt', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 45, carbs: 2, fat: 32, fiber: 0, sugar: 0, sodium: 680 },
+    allergens: ['milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'keto', 'low-carb']
+  },
+  {
+    dish_name: 'Merguez',
+    ingredients: [
+      { name: 'lamb', quantity: 400, unit: 'g' },
+      { name: 'beef', quantity: 200, unit: 'g' },
+      { name: 'harissa', quantity: 30, unit: 'g' },
+      { name: 'cumin', quantity: 10, unit: 'g' },
+      { name: 'fennel seeds', quantity: 5, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'sausage casing', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 28, carbs: 4, fat: 28, fiber: 1, sugar: 1, sodium: 780 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'keto', 'low-carb']
+  },
+
+  // === SALADS & SIDES ===
+  {
+    dish_name: 'Zaalouk',
+    ingredients: [
+      { name: 'eggplant', quantity: 400, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'cilantro', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 4, carbs: 18, fat: 12, fiber: 6, sugar: 8, sodium: 280 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Taktouka',
+    ingredients: [
+      { name: 'bell peppers', quantity: 300, unit: 'g' },
+      { name: 'tomatoes', quantity: 300, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'cumin', quantity: 5, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 160, protein: 3, carbs: 16, fat: 10, fiber: 4, sugar: 10, sodium: 240 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Briouats',
+    ingredients: [
+      { name: 'phyllo dough', quantity: 200, unit: 'g' },
+      { name: 'ground beef', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'almonds', quantity: 40, unit: 'g' },
+      { name: 'cinnamon', quantity: 3, unit: 'g' },
+      { name: 'egg', quantity: 1, unit: 'piece' },
+      { name: 'vegetable oil', quantity: 200, unit: 'ml' }
+    ],
+    nutrition: { calories: 280, protein: 14, carbs: 22, fat: 16, fiber: 2, sugar: 2, sodium: 320 },
+    allergens: ['wheat', 'egg', 'tree_nut'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Moroccan Lentil Stew',
+    ingredients: [
+      { name: 'lentils', quantity: 300, unit: 'g' },
+      { name: 'tomatoes', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'turmeric', quantity: 5, unit: 'g' },
+      { name: 'cilantro', quantity: 20, unit: 'g' },
+      { name: 'olive oil', quantity: 30, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 18, carbs: 46, fat: 8, fiber: 16, sugar: 6, sodium: 380 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Bissara (Fava Bean Soup)',
+    ingredients: [
+      { name: 'dried fava beans', quantity: 400, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'cumin', quantity: 10, unit: 'g' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' },
+      { name: 'paprika', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 340, protein: 20, carbs: 44, fat: 10, fiber: 14, sugar: 4, sodium: 320 },
+    allergens: [],
+    fodmap: ['high_gos', 'high_fructan'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'high-fiber']
+  },
+  {
+    dish_name: 'Chermoula Fish',
+    ingredients: [
+      { name: 'white fish fillets', quantity: 500, unit: 'g' },
+      { name: 'cilantro', quantity: 40, unit: 'g' },
+      { name: 'parsley', quantity: 30, unit: 'g' },
+      { name: 'garlic', quantity: 20, unit: 'g' },
+      { name: 'cumin', quantity: 8, unit: 'g' },
+      { name: 'paprika', quantity: 5, unit: 'g' },
+      { name: 'lemon juice', quantity: 40, unit: 'ml' },
+      { name: 'olive oil', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 38, carbs: 6, fat: 16, fiber: 2, sugar: 2, sodium: 420 },
+    allergens: ['fish'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'low-carb']
+  },
+  {
+    dish_name: 'Moroccan Salad Assortment',
+    ingredients: [
+      { name: 'tomatoes', quantity: 150, unit: 'g' },
+      { name: 'cucumbers', quantity: 150, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'beets', quantity: 100, unit: 'g' },
+      { name: 'olive oil', quantity: 40, unit: 'ml' },
+      { name: 'lemon juice', quantity: 30, unit: 'ml' },
+      { name: 'cumin', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 3, carbs: 18, fat: 12, fiber: 5, sugar: 12, sodium: 180 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+
+  // === DRINKS & DESSERTS ===
+  {
+    dish_name: 'Moroccan Mint Tea',
+    ingredients: [
+      { name: 'green tea', quantity: 15, unit: 'g' },
+      { name: 'fresh mint', quantity: 30, unit: 'g' },
+      { name: 'sugar', quantity: 40, unit: 'g' },
+      { name: 'water', quantity: 500, unit: 'ml' }
+    ],
+    nutrition: { calories: 60, protein: 0, carbs: 16, fat: 0, fiber: 0, sugar: 16, sodium: 5 },
+    allergens: [],
+    fodmap: [],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Sfenj (Moroccan Donuts)',
+    ingredients: [
+      { name: 'flour', quantity: 400, unit: 'g' },
+      { name: 'yeast', quantity: 10, unit: 'g' },
+      { name: 'salt', quantity: 8, unit: 'g' },
+      { name: 'vegetable oil', quantity: 500, unit: 'ml' },
+      { name: 'sugar', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 5, carbs: 38, fat: 12, fiber: 1, sugar: 8, sodium: 280 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegan', 'dairy-free']
+  },
+  {
+    dish_name: 'Chebakia',
+    ingredients: [
+      { name: 'flour', quantity: 500, unit: 'g' },
+      { name: 'sesame seeds', quantity: 100, unit: 'g' },
+      { name: 'almonds', quantity: 100, unit: 'g' },
+      { name: 'honey', quantity: 200, unit: 'g' },
+      { name: 'butter', quantity: 80, unit: 'g' },
+      { name: 'orange blossom water', quantity: 30, unit: 'ml' },
+      { name: 'cinnamon', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 320, protein: 6, carbs: 42, fat: 14, fiber: 2, sugar: 22, sodium: 120 },
+    allergens: ['wheat', 'sesame', 'tree_nut', 'milk'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Orange Cinnamon Dessert',
+    ingredients: [
+      { name: 'oranges', quantity: 600, unit: 'g' },
+      { name: 'cinnamon', quantity: 8, unit: 'g' },
+      { name: 'orange blossom water', quantity: 15, unit: 'ml' },
+      { name: 'powdered sugar', quantity: 30, unit: 'g' },
+      { name: 'almonds', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 180, protein: 4, carbs: 36, fat: 4, fiber: 4, sugar: 28, sodium: 10 },
+    allergens: ['tree_nut'],
+    fodmap: ['high_fructose'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free']
+  },
+
+  // ============================================
+  // === GERMAN CUISINE (20 base recipes) ===
+  // ============================================
+
+  // === MEAT DISHES ===
+  {
+    dish_name: 'Schnitzel',
+    ingredients: [
+      { name: 'pork cutlet', quantity: 200, unit: 'g' },
+      { name: 'flour', quantity: 50, unit: 'g' },
+      { name: 'eggs', quantity: 2, unit: 'pieces' },
+      { name: 'breadcrumbs', quantity: 100, unit: 'g' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'lemon', quantity: 1, unit: 'piece' }
+    ],
+    nutrition: { calories: 520, protein: 38, carbs: 32, fat: 28, fiber: 1, sugar: 1, sodium: 480 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Bratwurst',
+    ingredients: [
+      { name: 'pork sausage', quantity: 200, unit: 'g' },
+      { name: 'bread roll', quantity: 1, unit: 'piece' },
+      { name: 'mustard', quantity: 20, unit: 'g' },
+      { name: 'sauerkraut', quantity: 100, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 22, carbs: 32, fat: 30, fiber: 3, sugar: 4, sodium: 1100 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Currywurst',
+    ingredients: [
+      { name: 'pork sausage', quantity: 150, unit: 'g' },
+      { name: 'curry ketchup', quantity: 80, unit: 'ml' },
+      { name: 'curry powder', quantity: 10, unit: 'g' },
+      { name: 'french fries', quantity: 150, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 18, carbs: 48, fat: 36, fiber: 3, sugar: 16, sodium: 1020 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Schweinshaxe (Pork Knuckle)',
+    ingredients: [
+      { name: 'pork knuckle', quantity: 800, unit: 'g' },
+      { name: 'caraway seeds', quantity: 5, unit: 'g' },
+      { name: 'garlic', quantity: 15, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'beer', quantity: 250, unit: 'ml' }
+    ],
+    nutrition: { calories: 680, protein: 52, carbs: 8, fat: 48, fiber: 1, sugar: 2, sodium: 780 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+  {
+    dish_name: 'Sauerbraten',
+    ingredients: [
+      { name: 'beef roast', quantity: 800, unit: 'g' },
+      { name: 'red wine vinegar', quantity: 200, unit: 'ml' },
+      { name: 'red wine', quantity: 200, unit: 'ml' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'carrots', quantity: 100, unit: 'g' },
+      { name: 'ginger snaps', quantity: 80, unit: 'g' },
+      { name: 'bay leaves', quantity: 3, unit: 'pieces' }
+    ],
+    nutrition: { calories: 480, protein: 45, carbs: 22, fat: 24, fiber: 2, sugar: 10, sodium: 520 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'Rouladen',
+    ingredients: [
+      { name: 'beef slices', quantity: 500, unit: 'g' },
+      { name: 'bacon', quantity: 100, unit: 'g' },
+      { name: 'pickles', quantity: 80, unit: 'g' },
+      { name: 'onion', quantity: 100, unit: 'g' },
+      { name: 'mustard', quantity: 30, unit: 'g' },
+      { name: 'beef broth', quantity: 300, unit: 'ml' }
+    ],
+    nutrition: { calories: 480, protein: 42, carbs: 8, fat: 32, fiber: 1, sugar: 3, sodium: 920 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'low-carb']
+  },
+  {
+    dish_name: 'Weisswurst',
+    ingredients: [
+      { name: 'veal sausage', quantity: 200, unit: 'g' },
+      { name: 'sweet mustard', quantity: 30, unit: 'g' },
+      { name: 'pretzel', quantity: 1, unit: 'piece' },
+      { name: 'parsley', quantity: 5, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 24, carbs: 32, fat: 22, fiber: 1, sugar: 4, sodium: 920 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Leberkäse',
+    ingredients: [
+      { name: 'pork', quantity: 300, unit: 'g' },
+      { name: 'beef', quantity: 200, unit: 'g' },
+      { name: 'bacon', quantity: 100, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'marjoram', quantity: 3, unit: 'g' },
+      { name: 'bread roll', quantity: 1, unit: 'piece' }
+    ],
+    nutrition: { calories: 520, protein: 28, carbs: 28, fat: 34, fiber: 1, sugar: 3, sodium: 1080 },
+    allergens: ['wheat'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['dairy-free']
+  },
+  {
+    dish_name: 'German Goulash Soup',
+    ingredients: [
+      { name: 'beef chunks', quantity: 400, unit: 'g' },
+      { name: 'onion', quantity: 200, unit: 'g' },
+      { name: 'bell peppers', quantity: 150, unit: 'g' },
+      { name: 'tomato paste', quantity: 40, unit: 'g' },
+      { name: 'paprika', quantity: 20, unit: 'g' },
+      { name: 'caraway seeds', quantity: 5, unit: 'g' },
+      { name: 'potatoes', quantity: 200, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 35, carbs: 32, fat: 18, fiber: 5, sugar: 8, sodium: 680 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free']
+  },
+
+  // === SIDES ===
+  {
+    dish_name: 'Sauerkraut',
+    ingredients: [
+      { name: 'fermented cabbage', quantity: 300, unit: 'g' },
+      { name: 'bacon', quantity: 60, unit: 'g' },
+      { name: 'onion', quantity: 60, unit: 'g' },
+      { name: 'caraway seeds', quantity: 5, unit: 'g' },
+      { name: 'white wine', quantity: 60, unit: 'ml' }
+    ],
+    nutrition: { calories: 180, protein: 6, carbs: 12, fat: 12, fiber: 5, sugar: 4, sodium: 780 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'low-carb']
+  },
+  {
+    dish_name: 'Pretzels',
+    ingredients: [
+      { name: 'flour', quantity: 500, unit: 'g' },
+      { name: 'yeast', quantity: 10, unit: 'g' },
+      { name: 'butter', quantity: 30, unit: 'g' },
+      { name: 'baking soda', quantity: 60, unit: 'g' },
+      { name: 'coarse salt', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 8, carbs: 52, fat: 4, fiber: 2, sugar: 2, sodium: 920 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Spätzle',
+    ingredients: [
+      { name: 'flour', quantity: 300, unit: 'g' },
+      { name: 'eggs', quantity: 4, unit: 'pieces' },
+      { name: 'milk', quantity: 100, unit: 'ml' },
+      { name: 'nutmeg', quantity: 2, unit: 'g' },
+      { name: 'butter', quantity: 40, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 14, carbs: 52, fat: 14, fiber: 2, sugar: 3, sodium: 280 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Kartoffelsalat (Potato Salad)',
+    ingredients: [
+      { name: 'potatoes', quantity: 600, unit: 'g' },
+      { name: 'onion', quantity: 80, unit: 'g' },
+      { name: 'beef broth', quantity: 150, unit: 'ml' },
+      { name: 'white wine vinegar', quantity: 40, unit: 'ml' },
+      { name: 'vegetable oil', quantity: 60, unit: 'ml' },
+      { name: 'mustard', quantity: 20, unit: 'g' }
+    ],
+    nutrition: { calories: 280, protein: 5, carbs: 38, fat: 12, fiber: 4, sugar: 3, sodium: 420 },
+    allergens: [],
+    fodmap: ['high_fructan'],
+    diet_tags: ['gluten-free', 'dairy-free', 'vegan']
+  },
+  {
+    dish_name: 'Käsespätzle',
+    ingredients: [
+      { name: 'spätzle', quantity: 400, unit: 'g' },
+      { name: 'emmental cheese', quantity: 200, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'chives', quantity: 15, unit: 'g' }
+    ],
+    nutrition: { calories: 580, protein: 24, carbs: 48, fat: 34, fiber: 2, sugar: 4, sodium: 580 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Flammkuchen',
+    ingredients: [
+      { name: 'thin dough', quantity: 250, unit: 'g' },
+      { name: 'crème fraîche', quantity: 150, unit: 'g' },
+      { name: 'bacon', quantity: 150, unit: 'g' },
+      { name: 'onion', quantity: 150, unit: 'g' },
+      { name: 'nutmeg', quantity: 2, unit: 'g' }
+    ],
+    nutrition: { calories: 480, protein: 16, carbs: 38, fat: 30, fiber: 2, sugar: 4, sodium: 780 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_lactose'],
+    diet_tags: []
+  },
+  {
+    dish_name: 'Rotkohl (Red Cabbage)',
+    ingredients: [
+      { name: 'red cabbage', quantity: 500, unit: 'g' },
+      { name: 'apple', quantity: 100, unit: 'g' },
+      { name: 'red wine vinegar', quantity: 40, unit: 'ml' },
+      { name: 'sugar', quantity: 30, unit: 'g' },
+      { name: 'cloves', quantity: 3, unit: 'pieces' },
+      { name: 'bay leaf', quantity: 1, unit: 'piece' }
+    ],
+    nutrition: { calories: 120, protein: 3, carbs: 26, fat: 1, fiber: 5, sugar: 18, sodium: 180 },
+    allergens: [],
+    fodmap: ['high_fructan', 'high_polyol'],
+    diet_tags: ['vegan', 'gluten-free', 'dairy-free', 'low-fat']
+  },
+
+  // === DESSERTS ===
+  {
+    dish_name: 'Black Forest Cake',
+    ingredients: [
+      { name: 'chocolate sponge', quantity: 400, unit: 'g' },
+      { name: 'cherries', quantity: 300, unit: 'g' },
+      { name: 'whipped cream', quantity: 500, unit: 'ml' },
+      { name: 'kirsch', quantity: 60, unit: 'ml' },
+      { name: 'chocolate shavings', quantity: 80, unit: 'g' }
+    ],
+    nutrition: { calories: 420, protein: 6, carbs: 48, fat: 24, fiber: 2, sugar: 36, sodium: 120 },
+    allergens: ['wheat', 'milk', 'egg'],
+    fodmap: ['high_lactose', 'high_polyol'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Apple Strudel',
+    ingredients: [
+      { name: 'apples', quantity: 600, unit: 'g' },
+      { name: 'strudel dough', quantity: 200, unit: 'g' },
+      { name: 'breadcrumbs', quantity: 60, unit: 'g' },
+      { name: 'butter', quantity: 80, unit: 'g' },
+      { name: 'sugar', quantity: 80, unit: 'g' },
+      { name: 'cinnamon', quantity: 5, unit: 'g' },
+      { name: 'raisins', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 340, protein: 4, carbs: 52, fat: 14, fiber: 3, sugar: 32, sodium: 180 },
+    allergens: ['wheat', 'milk'],
+    fodmap: ['high_fructan', 'high_polyol', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Berliner (Jam Donut)',
+    ingredients: [
+      { name: 'flour', quantity: 400, unit: 'g' },
+      { name: 'yeast', quantity: 15, unit: 'g' },
+      { name: 'butter', quantity: 60, unit: 'g' },
+      { name: 'eggs', quantity: 2, unit: 'pieces' },
+      { name: 'jam', quantity: 150, unit: 'g' },
+      { name: 'powdered sugar', quantity: 60, unit: 'g' },
+      { name: 'vegetable oil', quantity: 500, unit: 'ml' }
+    ],
+    nutrition: { calories: 320, protein: 6, carbs: 46, fat: 14, fiber: 1, sugar: 22, sodium: 140 },
+    allergens: ['wheat', 'egg', 'milk'],
+    fodmap: ['high_fructan', 'high_fructose'],
+    diet_tags: ['vegetarian']
+  },
+  {
+    dish_name: 'Stollen',
+    ingredients: [
+      { name: 'flour', quantity: 500, unit: 'g' },
+      { name: 'butter', quantity: 200, unit: 'g' },
+      { name: 'marzipan', quantity: 150, unit: 'g' },
+      { name: 'raisins', quantity: 150, unit: 'g' },
+      { name: 'candied citrus peel', quantity: 100, unit: 'g' },
+      { name: 'almonds', quantity: 80, unit: 'g' },
+      { name: 'powdered sugar', quantity: 60, unit: 'g' }
+    ],
+    nutrition: { calories: 380, protein: 6, carbs: 52, fat: 18, fiber: 2, sugar: 28, sodium: 160 },
+    allergens: ['wheat', 'milk', 'tree_nut'],
+    fodmap: ['high_fructan', 'high_fructose', 'high_polyol'],
+    diet_tags: ['vegetarian']
   }
 ];
 
