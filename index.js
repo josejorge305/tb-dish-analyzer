@@ -15008,6 +15008,219 @@ const _worker_impl = {
       }, null, 2), { headers: { "content-type": "application/json" } });
     }
 
+    // === Franchise Menu System Endpoints ===
+
+    // GET /store/:id/menu - Get effective menu for a store
+    if (pathname.startsWith("/store/") && pathname.endsWith("/menu") && request.method === "GET") {
+      const storeId = pathname.replace("/store/", "").replace("/menu", "");
+      if (!storeId || isNaN(Number(storeId))) {
+        return jsonResponse({ ok: false, error: "Invalid store ID" }, 400);
+      }
+      const result = await getEffectiveMenu(env, Number(storeId));
+      return jsonResponse(result, result.ok ? 200 : 404);
+    }
+
+    // GET /franchise/brands - List all brands
+    if (pathname === "/franchise/brands" && request.method === "GET") {
+      try {
+        const brands = await env.D1_DB.prepare("SELECT * FROM brands ORDER BY canonical_name").all();
+        return jsonResponse({ ok: true, brands: brands.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /franchise/brands/:id/items - Get menu items for a brand
+    if (pathname.startsWith("/franchise/brands/") && pathname.endsWith("/items") && request.method === "GET") {
+      const brandId = pathname.replace("/franchise/brands/", "").replace("/items", "");
+      if (!brandId || isNaN(Number(brandId))) {
+        return jsonResponse({ ok: false, error: "Invalid brand ID" }, 400);
+      }
+      try {
+        const items = await env.D1_DB.prepare(`
+          SELECT fmi.*,
+            (SELECT COUNT(*) FROM menu_item_scopes WHERE menu_item_id = fmi.id AND status = 'ACTIVE') as active_scopes
+          FROM franchise_menu_items fmi
+          WHERE fmi.brand_id = ?
+          ORDER BY fmi.category, fmi.canonical_name
+        `).bind(Number(brandId)).all();
+        return jsonResponse({ ok: true, items: items.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /franchise/stores - List franchise stores
+    if (pathname === "/franchise/stores" && request.method === "GET") {
+      const limit = Number(searchParams.get("limit") || "50");
+      const brandId = searchParams.get("brand_id");
+      try {
+        let query = `
+          SELECT s.*, b.canonical_name as brand_name
+          FROM stores s
+          LEFT JOIN brands b ON b.id = s.brand_id
+          WHERE s.brand_id IS NOT NULL
+        `;
+        const params = [];
+        if (brandId) {
+          query += " AND s.brand_id = ?";
+          params.push(Number(brandId));
+        }
+        query += " ORDER BY s.updated_at DESC LIMIT ?";
+        params.push(limit);
+
+        const stores = await env.D1_DB.prepare(query).bind(...params).all();
+        return jsonResponse({ ok: true, stores: stores.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /franchise/detect-brand - Detect brand from place data
+    if (pathname === "/franchise/detect-brand" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      if (!body.name) {
+        return jsonResponse({ ok: false, error: "Missing 'name' in body" }, 400);
+      }
+      const brand = await detectBrand(env, body);
+      return jsonResponse({
+        ok: true,
+        input: body.name,
+        normalized: normalizeBrandName(body.name),
+        brand: brand || null,
+        is_franchise: !!brand
+      });
+    }
+
+    // POST /franchise/onboard-store - Onboard a store (detect brand, create store record)
+    if (pathname === "/franchise/onboard-store" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      if (!body.name) {
+        return jsonResponse({ ok: false, error: "Missing 'name' in body" }, 400);
+      }
+
+      // Detect brand
+      const brand = await detectBrand(env, body);
+
+      // Upsert store
+      const store = await upsertStore(env, {
+        place_id: body.place_id,
+        uber_store_id: body.uber_store_id,
+        brand_id: brand?.id || null,
+        name: body.name,
+        address: body.address,
+        city: body.city,
+        state_province: body.state_province || body.state,
+        postal_code: body.postal_code,
+        country_code: body.country_code || "US",
+        latitude: body.latitude || body.lat,
+        longitude: body.longitude || body.lng,
+        source: body.source || "api"
+      });
+
+      return jsonResponse({
+        ok: true,
+        brand: brand || null,
+        is_franchise: !!brand,
+        store
+      });
+    }
+
+    // POST /internal/store/:id/delta - Trigger delta discovery (internal)
+    if (pathname.startsWith("/internal/store/") && pathname.endsWith("/delta") && request.method === "POST") {
+      const storeId = pathname.replace("/internal/store/", "").replace("/delta", "");
+      if (!storeId || isNaN(Number(storeId))) {
+        return jsonResponse({ ok: false, error: "Invalid store ID" }, 400);
+      }
+
+      const body = await request.json().catch(() => ({}));
+      if (!body.items || !Array.isArray(body.items)) {
+        return jsonResponse({ ok: false, error: "Missing 'items' array in body" }, 400);
+      }
+
+      const result = await deltaMenuDiscovery(env, Number(storeId), body.items, body.source_type || "ubereats");
+      return jsonResponse(result);
+    }
+
+    // POST /internal/jobs/promote - Run promotion jobs (cron/internal)
+    if (pathname === "/internal/jobs/promote" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const brandId = body.brand_id;
+
+      if (!brandId) {
+        return jsonResponse({ ok: false, error: "Missing 'brand_id' in body" }, 400);
+      }
+
+      const storeToRegion = await promoteStoreToRegion(env, brandId);
+      const regionToCountry = await promoteRegionToCountry(env, brandId);
+      const staleInactive = await markStaleInactive(env, brandId);
+
+      return jsonResponse({
+        ok: true,
+        brand_id: brandId,
+        promotions: {
+          store_to_region: storeToRegion,
+          region_to_country: regionToCountry
+        },
+        stale_inactive: staleInactive
+      });
+    }
+
+    // POST /internal/jobs/reconcile-batch - Run reconcile for scheduled stores (cron/internal)
+    if (pathname === "/internal/jobs/reconcile-batch" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const limit = body.limit || 10;
+
+      const stores = await getStoresDueForReconcile(env, limit);
+
+      return jsonResponse({
+        ok: true,
+        stores_due: stores.length,
+        stores: stores.map(s => ({
+          id: s.id,
+          name: s.name,
+          brand_name: s.brand_name,
+          last_reconciled_at: s.last_reconciled_at,
+          next_reconcile_after: s.next_reconcile_after
+        })),
+        hint: "Call /internal/store/:id/delta with menu items to reconcile each store"
+      });
+    }
+
+    // GET /franchise/stats - Get franchise system stats
+    if (pathname === "/franchise/stats" && request.method === "GET") {
+      try {
+        const brandCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM brands").first();
+        const storeCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM stores WHERE brand_id IS NOT NULL").first();
+        const itemCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM franchise_menu_items").first();
+        const scopeCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM menu_item_scopes").first();
+        const sightingCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM menu_item_sightings").first();
+        const snapshotCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM store_menu_snapshots").first();
+
+        const scopesByType = await env.D1_DB.prepare(`
+          SELECT scope_type, status, COUNT(*) as count
+          FROM menu_item_scopes
+          GROUP BY scope_type, status
+        `).all();
+
+        return jsonResponse({
+          ok: true,
+          stats: {
+            brands: brandCount?.count || 0,
+            franchise_stores: storeCount?.count || 0,
+            menu_items: itemCount?.count || 0,
+            scopes: scopeCount?.count || 0,
+            sightings: sightingCount?.count || 0,
+            snapshots: snapshotCount?.count || 0
+          },
+          scopes_by_type: scopesByType.results || [],
+          config: FRANCHISE_CONFIG
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
     if (pathname === "/debug/r2-list") {
       const prefix = searchParams.get("prefix") || "";
       const limit = Number(searchParams.get("limit") || "25");
@@ -17827,6 +18040,45 @@ const _worker_impl = {
           failed
         }), { expirationTtl: 7 * 24 * 3600 });
       }
+
+      // --- Franchise reconciliation (15-day cycle) ---
+      console.log("[scheduled] Starting franchise reconciliation...");
+      const franchiseStart = Date.now();
+      let franchiseReconciled = 0;
+
+      try {
+        // Get stores due for reconciliation
+        const storesDue = await getStoresDueForReconcile(env, 5);
+        console.log(`[scheduled] Found ${storesDue.length} franchise store(s) due for reconciliation`);
+
+        // Log which stores are due (but actual reconciliation needs menu data from external source)
+        // The actual reconciliation happens when /internal/store/:id/delta is called with menu items
+        // This cron just identifies which stores need attention
+
+        if (env.MENUS_CACHE && storesDue.length > 0) {
+          await env.MENUS_CACHE.put("cron/franchise_reconcile", JSON.stringify({
+            ran_at: new Date().toISOString(),
+            stores_due: storesDue.map(s => ({
+              id: s.id,
+              name: s.name,
+              brand_name: s.brand_name,
+              last_reconciled_at: s.last_reconciled_at
+            }))
+          }), { expirationTtl: 7 * 24 * 3600 });
+        }
+
+        // Run promotion jobs for all brands with recent activity
+        const brands = await env.D1_DB?.prepare("SELECT id FROM brands LIMIT 10").all();
+        for (const brand of brands?.results || []) {
+          await promoteStoreToRegion(env, brand.id);
+          await markStaleInactive(env, brand.id);
+        }
+
+        console.log(`[scheduled] Franchise reconciliation complete (${Date.now() - franchiseStart}ms)`);
+      } catch (franchiseErr) {
+        console.log(`[scheduled] Franchise reconciliation error: ${franchiseErr?.message}`);
+      }
+
     } catch (err) {
       console.log(`[scheduled] Cron error: ${err?.message}`);
     }
@@ -19578,6 +19830,878 @@ async function getStaleMenuEntries(env, limit = 50) {
 
   return staleEntries;
 }
+// ==========================================================================
+
+// === Franchise Menu System =================================================
+// Implements hierarchical menu inheritance (GLOBAL → COUNTRY → REGION → STORE)
+// with append-only provenance tracking and 15-day auto-renewal.
+// CRITICAL: NOTHING IS EVER DELETED - only status updates to INACTIVE.
+
+// Configuration constants
+const FRANCHISE_CONFIG = {
+  ACTIVE_WINDOW_DAYS: 45,        // Items seen within this window are considered active
+  INACTIVE_AFTER_DAYS: 90,       // Mark as INACTIVE if not seen for this long
+  STORE_REFRESH_INTERVAL_DAYS: 15, // Reconcile stores every N days
+  FUZZY_MATCH_THRESHOLD: 0.92,   // Minimum similarity for fuzzy matching
+  TOKEN_OVERLAP_THRESHOLD: 0.85, // Minimum token overlap for matching
+  PROMOTION_THRESHOLDS: {
+    STORE_TO_REGION: { min_stores: 3, min_confidence: 0.70, window_days: 30 },
+    REGION_TO_COUNTRY: { min_regions: 3, min_confidence: 0.75, window_days: 45 },
+    COUNTRY_TO_GLOBAL: { min_countries: 3, min_confidence: 0.80, window_days: 90 }
+  }
+};
+
+// --- Brand Detection ---
+
+/**
+ * Normalize a restaurant name for brand matching
+ * @param {string} name - Restaurant name (e.g., "McDonald's #12345")
+ * @returns {string} - Normalized name (e.g., "mcdonalds")
+ */
+function normalizeBrandName(name) {
+  if (!name) return "";
+  return String(name)
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[''`]/g, "")                    // Remove apostrophes
+    .replace(/[®™©]/g, "")                    // Remove trademark symbols
+    .replace(/#\s*\d+/g, "")                  // Remove store numbers (#123)
+    .replace(/\(\s*[^)]*\s*\)/g, "")          // Remove parentheticals
+    .replace(/\s+(at|in|on|near)\s+.*/i, "") // Remove location suffixes
+    .replace(/-\s*(terminal|gate|mall|plaza|airport|station).*$/i, "") // Remove venue suffixes
+    .replace(/[^a-z0-9]/g, "")                // Keep only alphanumeric
+    .trim();
+}
+
+/**
+ * Detect brand from a place object
+ * @param {Object} env - Cloudflare env bindings
+ * @param {Object} place - Place object with name, address, etc.
+ * @returns {Promise<Object|null>} - Brand record or null
+ */
+async function detectBrand(env, place) {
+  if (!env?.D1_DB || !place?.name) return null;
+
+  const normalized = normalizeBrandName(place.name);
+  if (!normalized) return null;
+
+  try {
+    // Try exact match first
+    const exact = await env.D1_DB.prepare(
+      "SELECT * FROM brands WHERE normalized_name = ?"
+    ).bind(normalized).first();
+
+    if (exact) return exact;
+
+    // Try contains match (for names like "The McDonald's Restaurant")
+    const contains = await env.D1_DB.prepare(
+      "SELECT * FROM brands WHERE ? LIKE '%' || normalized_name || '%' ORDER BY LENGTH(normalized_name) DESC LIMIT 1"
+    ).bind(normalized).first();
+
+    return contains || null;
+  } catch (err) {
+    console.log("[franchise] Brand detection error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Derive region code from address components
+ * Format: {COUNTRY}-{STATE/PROVINCE} e.g., "US-FL", "US-CA", "GB-LND", "MX-CDMX"
+ */
+function deriveRegionCode(countryCode, stateProvince) {
+  if (!countryCode) return null;
+  const cc = countryCode.toUpperCase();
+  if (!stateProvince) return cc;
+
+  // Normalize state/province
+  const sp = stateProvince.toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .slice(0, 4); // Max 4 chars
+
+  return `${cc}-${sp}`;
+}
+
+// --- Store Management ---
+
+/**
+ * Upsert a store record (create or update, never delete)
+ */
+async function upsertStore(env, storeData) {
+  if (!env?.D1_DB) return null;
+
+  const {
+    place_id, uber_store_id, brand_id,
+    name, address, city, state_province, postal_code,
+    country_code, latitude, longitude, source
+  } = storeData;
+
+  const normalized_name = normalizeBrandName(name);
+  const region_code = deriveRegionCode(country_code, state_province);
+  const now = new Date().toISOString();
+
+  try {
+    // Try to find existing store
+    let existing = null;
+    if (place_id) {
+      existing = await env.D1_DB.prepare(
+        "SELECT * FROM stores WHERE place_id = ?"
+      ).bind(place_id).first();
+    }
+    if (!existing && uber_store_id) {
+      existing = await env.D1_DB.prepare(
+        "SELECT * FROM stores WHERE uber_store_id = ?"
+      ).bind(uber_store_id).first();
+    }
+
+    if (existing) {
+      // Update existing store
+      await env.D1_DB.prepare(`
+        UPDATE stores SET
+          brand_id = COALESCE(?, brand_id),
+          name = COALESCE(?, name),
+          normalized_name = COALESCE(?, normalized_name),
+          address = COALESCE(?, address),
+          city = COALESCE(?, city),
+          state_province = COALESCE(?, state_province),
+          postal_code = COALESCE(?, postal_code),
+          country_code = COALESCE(?, country_code),
+          region_code = COALESCE(?, region_code),
+          latitude = COALESCE(?, latitude),
+          longitude = COALESCE(?, longitude),
+          uber_store_id = COALESCE(?, uber_store_id),
+          last_seen_at = ?,
+          status = 'ACTIVE',
+          updated_at = ?
+        WHERE id = ?
+      `).bind(
+        brand_id, name, normalized_name, address, city, state_province,
+        postal_code, country_code, region_code, latitude, longitude,
+        uber_store_id, now, now, existing.id
+      ).run();
+
+      return { ...existing, brand_id, updated: true };
+    } else {
+      // Insert new store
+      const result = await env.D1_DB.prepare(`
+        INSERT INTO stores (
+          place_id, uber_store_id, brand_id, name, normalized_name,
+          address, city, state_province, postal_code, country_code, region_code,
+          latitude, longitude, source, status, first_seen_at, last_seen_at,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
+      `).bind(
+        place_id, uber_store_id, brand_id, name, normalized_name,
+        address, city, state_province, postal_code, country_code, region_code,
+        latitude, longitude, source, now, now, now, now
+      ).run();
+
+      return { id: result.meta?.last_row_id, place_id, brand_id, created: true };
+    }
+  } catch (err) {
+    console.log("[franchise] Store upsert error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Get store by place_id or uber_store_id
+ */
+async function getStore(env, { place_id, uber_store_id, store_id }) {
+  if (!env?.D1_DB) return null;
+
+  try {
+    if (store_id) {
+      return await env.D1_DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store_id).first();
+    }
+    if (place_id) {
+      return await env.D1_DB.prepare("SELECT * FROM stores WHERE place_id = ?").bind(place_id).first();
+    }
+    if (uber_store_id) {
+      return await env.D1_DB.prepare("SELECT * FROM stores WHERE uber_store_id = ?").bind(uber_store_id).first();
+    }
+    return null;
+  } catch (err) {
+    console.log("[franchise] Get store error:", err?.message);
+    return null;
+  }
+}
+
+// --- Menu Item Identity Resolution ---
+
+/**
+ * Normalize menu item name for matching
+ */
+function normalizeMenuItemName(name) {
+  if (!name) return "";
+  return String(name)
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[®™©]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim();
+}
+
+/**
+ * Resolve an observed menu item name to a canonical franchise_menu_items record
+ * Uses: exact match → alias match → fuzzy match → create new
+ */
+async function resolveMenuItem(env, brandId, observedName, observedData = {}) {
+  if (!env?.D1_DB || !brandId || !observedName) return null;
+
+  const normalized = normalizeMenuItemName(observedName);
+  if (!normalized) return null;
+
+  try {
+    // 1. Exact match on franchise_menu_items
+    const exactItem = await env.D1_DB.prepare(`
+      SELECT * FROM franchise_menu_items
+      WHERE brand_id = ? AND normalized_name = ?
+    `).bind(brandId, normalized).first();
+
+    if (exactItem) {
+      return { item: exactItem, matchMethod: "exact" };
+    }
+
+    // 2. Alias match
+    const aliasMatch = await env.D1_DB.prepare(`
+      SELECT fmi.* FROM franchise_menu_items fmi
+      JOIN menu_item_aliases mia ON mia.menu_item_id = fmi.id
+      WHERE fmi.brand_id = ? AND mia.alias_normalized = ?
+    `).bind(brandId, normalized).first();
+
+    if (aliasMatch) {
+      return { item: aliasMatch, matchMethod: "alias" };
+    }
+
+    // 3. Create new item (conservative - no fuzzy matching for now)
+    const now = new Date().toISOString();
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO franchise_menu_items (
+        brand_id, canonical_name, normalized_name, category, description,
+        calories, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'CANDIDATE', ?, ?)
+    `).bind(
+      brandId, observedName, normalized,
+      observedData.category || observedData.section || null,
+      observedData.description || null,
+      observedData.calories || null,
+      now, now
+    ).run();
+
+    const newItem = await env.D1_DB.prepare(
+      "SELECT * FROM franchise_menu_items WHERE id = ?"
+    ).bind(result.meta?.last_row_id).first();
+
+    // Add the original observed name as an alias
+    if (newItem) {
+      await env.D1_DB.prepare(`
+        INSERT OR IGNORE INTO menu_item_aliases (menu_item_id, alias_text, alias_normalized, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(newItem.id, observedName, normalized, now).run();
+    }
+
+    return { item: newItem, matchMethod: "created", isNew: true };
+  } catch (err) {
+    console.log("[franchise] Resolve menu item error:", err?.message);
+    return null;
+  }
+}
+
+// --- Sightings (Append-Only Provenance) ---
+
+/**
+ * Record a menu item sighting (immutable - never update or delete)
+ */
+async function recordSighting(env, {
+  menu_item_id, store_id, source_type, source_ref,
+  observed_name, observed_description, observed_price_cents,
+  observed_calories, observed_section, observed_image_url,
+  confidence, match_method, raw_payload_ref
+}) {
+  if (!env?.D1_DB || !menu_item_id || !store_id) return null;
+
+  const now = new Date().toISOString();
+
+  try {
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO menu_item_sightings (
+        menu_item_id, store_id, source_type, source_ref,
+        observed_name, observed_description, observed_price_cents,
+        observed_calories, observed_section, observed_image_url,
+        confidence, match_method, observed_at, raw_payload_ref, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      menu_item_id, store_id, source_type || "ubereats", source_ref,
+      observed_name, observed_description, observed_price_cents,
+      observed_calories, observed_section, observed_image_url,
+      confidence || 0.7, match_method, now, raw_payload_ref, now
+    ).run();
+
+    return { id: result.meta?.last_row_id, recorded: true };
+  } catch (err) {
+    console.log("[franchise] Record sighting error:", err?.message);
+    return null;
+  }
+}
+
+// --- Scope Management (Current State - Mutable) ---
+
+/**
+ * Upsert a menu item scope (GLOBAL/COUNTRY/REGION/STORE)
+ * NEVER deletes - only updates status
+ */
+async function upsertScope(env, {
+  menu_item_id, scope_type, scope_key, status, confidence, price_cents
+}) {
+  if (!env?.D1_DB || !menu_item_id || !scope_type) return null;
+
+  const now = new Date().toISOString();
+
+  try {
+    // Check if scope exists
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM menu_item_scopes
+      WHERE menu_item_id = ? AND scope_type = ? AND (scope_key = ? OR (scope_key IS NULL AND ? IS NULL))
+    `).bind(menu_item_id, scope_type, scope_key, scope_key).first();
+
+    if (existing) {
+      // Update existing scope
+      await env.D1_DB.prepare(`
+        UPDATE menu_item_scopes SET
+          status = COALESCE(?, status),
+          confidence = COALESCE(?, confidence),
+          last_seen_at = ?,
+          last_reconciled_at = ?,
+          price_cents = COALESCE(?, price_cents),
+          updated_at = ?
+        WHERE id = ?
+      `).bind(
+        status, confidence, now, now, price_cents, now, existing.id
+      ).run();
+
+      return { id: existing.id, updated: true };
+    } else {
+      // Insert new scope
+      const result = await env.D1_DB.prepare(`
+        INSERT INTO menu_item_scopes (
+          menu_item_id, scope_type, scope_key, status, confidence,
+          first_seen_at, last_seen_at, last_reconciled_at,
+          price_cents, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        menu_item_id, scope_type, scope_key,
+        status || "CANDIDATE", confidence || 0.5,
+        now, now, now, price_cents, now, now
+      ).run();
+
+      return { id: result.meta?.last_row_id, created: true };
+    }
+  } catch (err) {
+    console.log("[franchise] Upsert scope error:", err?.message);
+    return null;
+  }
+}
+
+// --- Effective Menu Builder (Inheritance) ---
+
+/**
+ * Get effective menu for a store using hierarchical inheritance
+ * GLOBAL → COUNTRY → REGION → STORE (later overrides earlier)
+ */
+async function getEffectiveMenu(env, storeId) {
+  if (!env?.D1_DB || !storeId) return null;
+
+  try {
+    // Get store with brand info
+    const store = await env.D1_DB.prepare(`
+      SELECT s.*, b.canonical_name as brand_name
+      FROM stores s
+      LEFT JOIN brands b ON b.id = s.brand_id
+      WHERE s.id = ?
+    `).bind(storeId).first();
+
+    if (!store) return { ok: false, error: "Store not found" };
+    if (!store.brand_id) {
+      // Non-franchise store - fall back to regular menu cache
+      return { ok: false, error: "Not a franchise store", store };
+    }
+
+    // Build scope keys for inheritance
+    const scopeKeys = {
+      GLOBAL: null,
+      COUNTRY: store.country_code,
+      REGION: store.region_code,
+      STORE: String(store.id)
+    };
+
+    // Query all relevant scopes with item details
+    const scopes = await env.D1_DB.prepare(`
+      SELECT
+        fmi.id as item_id,
+        fmi.canonical_name,
+        fmi.normalized_name,
+        fmi.category,
+        fmi.description,
+        fmi.calories,
+        mis.scope_type,
+        mis.scope_key,
+        mis.status,
+        mis.confidence,
+        mis.first_seen_at,
+        mis.last_seen_at,
+        mis.price_cents
+      FROM menu_item_scopes mis
+      JOIN franchise_menu_items fmi ON fmi.id = mis.menu_item_id
+      WHERE fmi.brand_id = ?
+        AND (
+          (mis.scope_type = 'GLOBAL' AND mis.scope_key IS NULL)
+          OR (mis.scope_type = 'COUNTRY' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'REGION' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'STORE' AND mis.scope_key = ?)
+        )
+      ORDER BY fmi.id,
+        CASE mis.scope_type
+          WHEN 'GLOBAL' THEN 1
+          WHEN 'COUNTRY' THEN 2
+          WHEN 'REGION' THEN 3
+          WHEN 'STORE' THEN 4
+        END
+    `).bind(
+      store.brand_id,
+      scopeKeys.COUNTRY,
+      scopeKeys.REGION,
+      scopeKeys.STORE
+    ).all();
+
+    // Merge items with inheritance (later scope overrides earlier)
+    const itemMap = new Map();
+    const scopePriority = { GLOBAL: 1, COUNTRY: 2, REGION: 3, STORE: 4 };
+
+    for (const row of scopes.results || []) {
+      const existing = itemMap.get(row.item_id);
+      const newPriority = scopePriority[row.scope_type] || 0;
+      const existingPriority = existing ? (scopePriority[existing.scope_type] || 0) : 0;
+
+      // INACTIVE at a later scope suppresses earlier scope
+      if (row.status === "INACTIVE" && newPriority > existingPriority) {
+        itemMap.delete(row.item_id);
+        continue;
+      }
+
+      // Later scope overrides earlier, or update if same scope with higher confidence
+      if (!existing || newPriority > existingPriority ||
+          (newPriority === existingPriority && row.confidence > existing.confidence)) {
+        itemMap.set(row.item_id, {
+          id: row.item_id,
+          name: row.canonical_name,
+          normalized_name: row.normalized_name,
+          category: row.category,
+          description: row.description,
+          calories: row.calories,
+          price_cents: row.price_cents,
+          status: row.status,
+          confidence: row.confidence,
+          scope_type: row.scope_type,
+          last_seen_at: row.last_seen_at
+        });
+      }
+    }
+
+    // Filter to only ACTIVE/SEASONAL items
+    const activeItems = Array.from(itemMap.values())
+      .filter(item => item.status === "ACTIVE" || item.status === "SEASONAL");
+
+    return {
+      ok: true,
+      store: {
+        id: store.id,
+        name: store.name,
+        brand_id: store.brand_id,
+        brand_name: store.brand_name,
+        country_code: store.country_code,
+        region_code: store.region_code
+      },
+      items: activeItems,
+      item_count: activeItems.length,
+      scope_summary: {
+        GLOBAL: activeItems.filter(i => i.scope_type === "GLOBAL").length,
+        COUNTRY: activeItems.filter(i => i.scope_type === "COUNTRY").length,
+        REGION: activeItems.filter(i => i.scope_type === "REGION").length,
+        STORE: activeItems.filter(i => i.scope_type === "STORE").length
+      }
+    };
+  } catch (err) {
+    console.log("[franchise] Get effective menu error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// --- Store Menu Snapshots (Append-Only) ---
+
+/**
+ * Create a store menu snapshot (immutable)
+ */
+async function createSnapshot(env, storeId, menuItems, sourceType, sourceUrl) {
+  if (!env?.D1_DB || !storeId || !menuItems) return null;
+
+  const now = new Date().toISOString();
+
+  // Compute menu hash for change detection
+  const normalizedMenu = menuItems
+    .map(item => normalizeMenuItemName(item.name || item.title))
+    .sort()
+    .join("|");
+
+  const encoder = new TextEncoder();
+  const data = encoder.encode(normalizedMenu);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const menuHash = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+  try {
+    // Check if identical snapshot already exists (same hash)
+    const existing = await env.D1_DB.prepare(`
+      SELECT id FROM store_menu_snapshots
+      WHERE store_id = ? AND menu_hash = ?
+      ORDER BY snapshot_at DESC LIMIT 1
+    `).bind(storeId, menuHash).first();
+
+    if (existing) {
+      return { id: existing.id, unchanged: true, menuHash };
+    }
+
+    // Store payload in R2 if available
+    let payloadRef = null;
+    if (env.R2_BUCKET) {
+      const payloadKey = `snapshots/${storeId}/${now.replace(/[:.]/g, "-")}.json`;
+      await env.R2_BUCKET.put(payloadKey, JSON.stringify({
+        store_id: storeId,
+        snapshot_at: now,
+        source_type: sourceType,
+        source_url: sourceUrl,
+        items: menuItems
+      }));
+      payloadRef = payloadKey;
+    }
+
+    // Insert snapshot
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO store_menu_snapshots (
+        store_id, snapshot_at, menu_hash, item_count,
+        source_type, source_url, payload_ref, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      storeId, now, menuHash, menuItems.length,
+      sourceType || "ubereats", sourceUrl, payloadRef, now
+    ).run();
+
+    return {
+      id: result.meta?.last_row_id,
+      menuHash,
+      itemCount: menuItems.length,
+      payloadRef,
+      created: true
+    };
+  } catch (err) {
+    console.log("[franchise] Create snapshot error:", err?.message);
+    return null;
+  }
+}
+
+// --- Delta Discovery ---
+
+/**
+ * Run delta discovery for a store (background job)
+ * Extracts menu, creates snapshot, resolves items, records sightings, updates scopes
+ */
+async function deltaMenuDiscovery(env, storeId, menuItems, sourceType = "ubereats") {
+  if (!env?.D1_DB || !storeId || !menuItems?.length) {
+    return { ok: false, error: "Missing required data" };
+  }
+
+  try {
+    // Get store
+    const store = await getStore(env, { store_id: storeId });
+    if (!store || !store.brand_id) {
+      return { ok: false, error: "Store not found or not a franchise" };
+    }
+
+    // Create snapshot
+    const snapshot = await createSnapshot(env, storeId, menuItems, sourceType);
+    if (snapshot?.unchanged) {
+      console.log(`[franchise] Delta discovery: no changes for store ${storeId}`);
+      return { ok: true, unchanged: true, snapshot };
+    }
+
+    // Process each menu item
+    const results = {
+      resolved: 0,
+      created: 0,
+      sightings: 0,
+      scopes_updated: 0
+    };
+
+    const now = new Date().toISOString();
+    const seenItemIds = new Set();
+
+    for (const menuItem of menuItems) {
+      const observedName = menuItem.name || menuItem.title;
+      if (!observedName) continue;
+
+      // Resolve to canonical item
+      const resolved = await resolveMenuItem(env, store.brand_id, observedName, {
+        category: menuItem.section || menuItem.category,
+        description: menuItem.description,
+        calories: menuItem.restaurantCalories || menuItem.calories
+      });
+
+      if (!resolved?.item) continue;
+
+      const item = resolved.item;
+      seenItemIds.add(item.id);
+
+      if (resolved.isNew) {
+        results.created++;
+      } else {
+        results.resolved++;
+      }
+
+      // Record sighting
+      const sighting = await recordSighting(env, {
+        menu_item_id: item.id,
+        store_id: storeId,
+        source_type: sourceType,
+        observed_name: observedName,
+        observed_description: menuItem.description,
+        observed_price_cents: menuItem.price,
+        observed_calories: menuItem.restaurantCalories || menuItem.calories,
+        observed_section: menuItem.section,
+        observed_image_url: menuItem.imageUrl,
+        confidence: resolved.isNew ? 0.55 : 0.75,
+        match_method: resolved.matchMethod,
+        raw_payload_ref: snapshot?.payloadRef
+      });
+
+      if (sighting) results.sightings++;
+
+      // Update STORE scope
+      const scope = await upsertScope(env, {
+        menu_item_id: item.id,
+        scope_type: "STORE",
+        scope_key: String(storeId),
+        status: "ACTIVE",
+        confidence: resolved.isNew ? 0.55 : 0.75,
+        price_cents: menuItem.price
+      });
+
+      if (scope) results.scopes_updated++;
+    }
+
+    // Mark items NOT seen as potentially inactive (only if last_seen > INACTIVE_AFTER_DAYS)
+    const inactiveCutoff = new Date(Date.now() - FRANCHISE_CONFIG.INACTIVE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+    await env.D1_DB.prepare(`
+      UPDATE menu_item_scopes
+      SET status = 'INACTIVE', updated_at = ?
+      WHERE scope_type = 'STORE' AND scope_key = ?
+        AND status != 'INACTIVE'
+        AND last_seen_at < ?
+        AND menu_item_id NOT IN (${Array.from(seenItemIds).join(",") || "0"})
+    `).bind(now, String(storeId), inactiveCutoff).run();
+
+    // Update store reconciliation timestamp
+    const nextReconcile = new Date(Date.now() + FRANCHISE_CONFIG.STORE_REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    await env.D1_DB.prepare(`
+      UPDATE stores SET
+        last_reconciled_at = ?,
+        next_reconcile_after = ?,
+        updated_at = ?
+      WHERE id = ?
+    `).bind(now, nextReconcile, now, storeId).run();
+
+    return {
+      ok: true,
+      store_id: storeId,
+      snapshot,
+      results
+    };
+  } catch (err) {
+    console.log("[franchise] Delta discovery error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// --- Reconciliation Batch Job ---
+
+/**
+ * Get stores due for reconciliation (for cron job)
+ */
+async function getStoresDueForReconcile(env, limit = 10) {
+  if (!env?.D1_DB) return [];
+
+  const now = new Date().toISOString();
+
+  try {
+    // Get stores where next_reconcile_after has passed or is NULL
+    const result = await env.D1_DB.prepare(`
+      SELECT s.*, b.canonical_name as brand_name
+      FROM stores s
+      LEFT JOIN brands b ON b.id = s.brand_id
+      WHERE s.status = 'ACTIVE'
+        AND s.brand_id IS NOT NULL
+        AND (s.next_reconcile_after IS NULL OR s.next_reconcile_after <= ?)
+      ORDER BY s.next_reconcile_after ASC NULLS FIRST
+      LIMIT ?
+    `).bind(now, limit).all();
+
+    return result.results || [];
+  } catch (err) {
+    console.log("[franchise] Get stores for reconcile error:", err?.message);
+    return [];
+  }
+}
+
+// --- Promotion Jobs ---
+
+/**
+ * Promote items from STORE scope to REGION scope
+ * Runs periodically to identify widely available items
+ */
+async function promoteStoreToRegion(env, brandId) {
+  if (!env?.D1_DB || !brandId) return { ok: false };
+
+  const config = FRANCHISE_CONFIG.PROMOTION_THRESHOLDS.STORE_TO_REGION;
+  const cutoffDate = new Date(Date.now() - config.window_days * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  try {
+    // Find items seen in multiple stores in the same region
+    const candidates = await env.D1_DB.prepare(`
+      SELECT
+        fmi.id as menu_item_id,
+        s.region_code,
+        COUNT(DISTINCT s.id) as store_count,
+        AVG(mis.confidence) as avg_confidence
+      FROM menu_item_sightings mis
+      JOIN franchise_menu_items fmi ON fmi.id = mis.menu_item_id
+      JOIN stores s ON s.id = mis.store_id
+      WHERE fmi.brand_id = ?
+        AND mis.observed_at >= ?
+        AND s.region_code IS NOT NULL
+      GROUP BY fmi.id, s.region_code
+      HAVING store_count >= ? AND avg_confidence >= ?
+    `).bind(brandId, cutoffDate, config.min_stores, config.min_confidence).all();
+
+    let promoted = 0;
+    for (const candidate of candidates.results || []) {
+      // Check if REGION scope already exists
+      const existing = await env.D1_DB.prepare(`
+        SELECT id FROM menu_item_scopes
+        WHERE menu_item_id = ? AND scope_type = 'REGION' AND scope_key = ?
+      `).bind(candidate.menu_item_id, candidate.region_code).first();
+
+      if (!existing) {
+        await upsertScope(env, {
+          menu_item_id: candidate.menu_item_id,
+          scope_type: "REGION",
+          scope_key: candidate.region_code,
+          status: "ACTIVE",
+          confidence: candidate.avg_confidence
+        });
+        promoted++;
+      }
+    }
+
+    return { ok: true, promoted, checked: candidates.results?.length || 0 };
+  } catch (err) {
+    console.log("[franchise] Promote store to region error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Promote items from REGION scope to COUNTRY scope
+ */
+async function promoteRegionToCountry(env, brandId) {
+  if (!env?.D1_DB || !brandId) return { ok: false };
+
+  const config = FRANCHISE_CONFIG.PROMOTION_THRESHOLDS.REGION_TO_COUNTRY;
+  const cutoffDate = new Date(Date.now() - config.window_days * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const candidates = await env.D1_DB.prepare(`
+      SELECT
+        mis_scope.menu_item_id,
+        s.country_code,
+        COUNT(DISTINCT s.region_code) as region_count,
+        AVG(mis_scope.confidence) as avg_confidence
+      FROM menu_item_scopes mis_scope
+      JOIN franchise_menu_items fmi ON fmi.id = mis_scope.menu_item_id
+      JOIN stores s ON mis_scope.scope_key = s.region_code
+      WHERE fmi.brand_id = ?
+        AND mis_scope.scope_type = 'REGION'
+        AND mis_scope.status = 'ACTIVE'
+        AND mis_scope.last_seen_at >= ?
+        AND s.country_code IS NOT NULL
+      GROUP BY mis_scope.menu_item_id, s.country_code
+      HAVING region_count >= ? AND avg_confidence >= ?
+    `).bind(brandId, cutoffDate, config.min_regions, config.min_confidence).all();
+
+    let promoted = 0;
+    for (const candidate of candidates.results || []) {
+      const existing = await env.D1_DB.prepare(`
+        SELECT id FROM menu_item_scopes
+        WHERE menu_item_id = ? AND scope_type = 'COUNTRY' AND scope_key = ?
+      `).bind(candidate.menu_item_id, candidate.country_code).first();
+
+      if (!existing) {
+        await upsertScope(env, {
+          menu_item_id: candidate.menu_item_id,
+          scope_type: "COUNTRY",
+          scope_key: candidate.country_code,
+          status: "ACTIVE",
+          confidence: candidate.avg_confidence
+        });
+        promoted++;
+      }
+    }
+
+    return { ok: true, promoted, checked: candidates.results?.length || 0 };
+  } catch (err) {
+    console.log("[franchise] Promote region to country error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Mark stale scopes as INACTIVE (NO DELETION - status flip only)
+ */
+async function markStaleInactive(env, brandId) {
+  if (!env?.D1_DB) return { ok: false };
+
+  const inactiveCutoff = new Date(Date.now() - FRANCHISE_CONFIG.INACTIVE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  try {
+    const result = await env.D1_DB.prepare(`
+      UPDATE menu_item_scopes
+      SET status = 'INACTIVE', updated_at = ?
+      WHERE menu_item_id IN (
+        SELECT id FROM franchise_menu_items WHERE brand_id = ?
+      )
+      AND status != 'INACTIVE'
+      AND last_seen_at < ?
+    `).bind(now, brandId, inactiveCutoff).run();
+
+    return { ok: true, marked_inactive: result.meta?.changes || 0 };
+  } catch (err) {
+    console.log("[franchise] Mark stale inactive error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
 // ==========================================================================
 
 // ---- Network helpers ----
