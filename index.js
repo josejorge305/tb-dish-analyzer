@@ -21889,10 +21889,10 @@ const FRANCHISE_SEED_LIST = [
  * Timezone configuration with reference coordinates for representative store search
  */
 const DAYPART_TIMEZONES = {
-  "America/New_York": { lat: 40.7580, lng: -73.9855, label: "NYC" },
-  "America/Chicago": { lat: 41.8781, lng: -87.6298, label: "Chicago" },
-  "America/Denver": { lat: 39.7392, lng: -104.9903, label: "Denver" },
-  "America/Los_Angeles": { lat: 34.0522, lng: -118.2437, label: "LA" }
+  "America/New_York": { lat: 40.7580, lng: -73.9855, label: "NYC", address: "New York, NY" },
+  "America/Chicago": { lat: 41.8781, lng: -87.6298, label: "Chicago", address: "Chicago, IL" },
+  "America/Denver": { lat: 39.7392, lng: -104.9903, label: "Denver", address: "Denver, CO" },
+  "America/Los_Angeles": { lat: 34.0522, lng: -118.2437, label: "LA", address: "Los Angeles, CA" }
 };
 
 /**
@@ -21921,7 +21921,8 @@ async function findRepresentativeStore(env, brandName, tzid) {
   const tzConfig = DAYPART_TIMEZONES[tzid];
   if (!tzConfig) return { ok: false, error: `Unknown timezone: ${tzid}` };
 
-  const address = `${tzConfig.lat},${tzConfig.lng}`;
+  // Use proper city address for UberEats search (not just coordinates)
+  const address = tzConfig.address || `${tzConfig.label}, USA`;
 
   try {
     // Fetch up to 3 restaurant results to find a matching store, with full menu data
@@ -22291,7 +22292,8 @@ async function processDaypartJob(env, ctx, job) {
     if (!repStore) throw new Error(`No representative store for brand ${job.brand_id} in ${job.tzid}`);
 
     const tzConfig = DAYPART_TIMEZONES[job.tzid];
-    const menuResult = await fetchMenuFromUberEatsTiered(env, job.brand_name, `${tzConfig.lat},${tzConfig.lng}`, 1);
+    const address = tzConfig.address || `${tzConfig.label}, USA`;
+    const menuResult = await fetchMenuFromUberEatsTiered(env, job.brand_name, address, 3);
     if (!menuResult?.ok) throw new Error(`Menu fetch failed: ${menuResult?.error}`);
 
     const menuItems = menuResult.menu || [];
