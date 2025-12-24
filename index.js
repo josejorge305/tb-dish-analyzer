@@ -7776,6 +7776,8 @@ IMPORTANT:
 
 ${EVIDENCE_GUIDELINES}
 
+${getVisionCorrectionPromptAddendum()}
+
 OUTPUT:
 Return ONE JSON object with this exact shape:
 
@@ -21140,6 +21142,452 @@ async function markStaleInactive(env, brandId) {
 
 // ==========================================================================
 
+// === Vision Correction System ==============================================
+// Corrects recipe/ingredient data based on visual evidence from dish photos.
+// When vision detects a mismatch (e.g., sees spaghetti but recipe says penne),
+// the correction is applied to align the analysis with visual reality.
+
+/**
+ * Food attribute categories that vision can correct
+ */
+const VISION_CORRECTION_CATEGORIES = {
+  // Pasta types - what vision might see vs recipe variations
+  pasta: {
+    variants: [
+      "spaghetti", "penne", "rigatoni", "fettuccine", "linguine", "tagliatelle",
+      "fusilli", "farfalle", "rotini", "macaroni", "ziti", "bucatini",
+      "angel hair", "capellini", "orzo", "lasagna", "ravioli", "tortellini",
+      "gnocchi", "pappardelle", "orecchiette", "cavatappi"
+    ],
+    visual_cues: {
+      spaghetti: ["long thin round strands", "round cross-section noodles"],
+      penne: ["tube-shaped", "diagonal cut ends", "hollow tubes"],
+      rigatoni: ["large ridged tubes", "wide hollow cylinders"],
+      fettuccine: ["flat wide ribbons", "thick flat noodles"],
+      linguine: ["flat thin strands", "elliptical cross-section"],
+      fusilli: ["spiral shaped", "corkscrew pasta"],
+      farfalle: ["bow-tie shaped", "butterfly pasta"],
+      lasagna: ["wide flat sheets", "layered flat pasta"],
+      ravioli: ["filled square pillows", "stuffed pasta squares"],
+      tortellini: ["ring-shaped filled pasta", "belly button pasta"],
+      gnocchi: ["small dumplings", "pillowy potato pasta"]
+    }
+  },
+
+  // Rice types
+  rice: {
+    variants: [
+      "white rice", "brown rice", "fried rice", "jasmine rice", "basmati rice",
+      "wild rice", "risotto", "sushi rice", "sticky rice", "pilaf",
+      "yellow rice", "spanish rice", "coconut rice", "rice pilaf"
+    ],
+    visual_cues: {
+      "white rice": ["plain white grains", "steamed white"],
+      "brown rice": ["tan/brown grains", "darker grain color"],
+      "fried rice": ["mixed with vegetables/egg", "stir-fried appearance", "glossy oily grains"],
+      "yellow rice": ["yellow-tinted grains", "saffron/turmeric colored"],
+      "wild rice": ["dark brown/black grains", "long dark grains"]
+    }
+  },
+
+  // Bread types
+  bread: {
+    variants: [
+      "white bread", "whole wheat", "sourdough", "ciabatta", "baguette",
+      "brioche", "focaccia", "pita", "naan", "tortilla", "croissant",
+      "rye bread", "pumpernickel", "multigrain", "flatbread"
+    ],
+    visual_cues: {
+      sourdough: ["rustic crust", "open crumb structure", "artisan appearance"],
+      brioche: ["golden shiny top", "rich yellow crumb"],
+      ciabatta: ["flat rustic shape", "large holes in crumb"],
+      baguette: ["long thin loaf", "crusty exterior"],
+      "whole wheat": ["darker brown color", "visible grain specks"]
+    }
+  },
+
+  // Protein types
+  protein: {
+    variants: [
+      "chicken", "beef", "pork", "lamb", "turkey", "duck",
+      "salmon", "tuna", "cod", "tilapia", "shrimp", "lobster", "crab",
+      "tofu", "tempeh", "seitan"
+    ],
+    visual_cues: {
+      salmon: ["orange-pink flesh", "distinctive salmon color"],
+      tuna: ["deep red/pink flesh", "steak-like appearance"],
+      shrimp: ["curved pink bodies", "visible tail segments"],
+      chicken: ["white meat", "light colored flesh"],
+      beef: ["red/brown meat", "darker meat color"]
+    }
+  },
+
+  // Cooking methods
+  cooking_method: {
+    variants: [
+      "grilled", "fried", "deep-fried", "baked", "roasted", "steamed",
+      "boiled", "sautéed", "broiled", "poached", "braised", "smoked", "raw"
+    ],
+    visual_cues: {
+      grilled: ["char marks", "grill lines", "charred edges"],
+      fried: ["golden crispy coating", "oil sheen"],
+      "deep-fried": ["thick crispy batter", "golden brown all over"],
+      steamed: ["moist appearance", "no browning"],
+      roasted: ["caramelized surface", "browned exterior"]
+    }
+  },
+
+  // Cheese types
+  cheese: {
+    variants: [
+      "mozzarella", "cheddar", "parmesan", "swiss", "provolone",
+      "feta", "goat cheese", "blue cheese", "brie", "cream cheese",
+      "american cheese", "pepper jack", "ricotta", "gouda"
+    ],
+    visual_cues: {
+      mozzarella: ["white stretchy cheese", "melted stringy appearance"],
+      cheddar: ["orange/yellow color", "firm sliced"],
+      parmesan: ["shaved/grated", "hard aged appearance"],
+      feta: ["white crumbled chunks", "crumbly texture"],
+      "blue cheese": ["visible blue veins", "marbled blue-white"]
+    }
+  }
+};
+
+/**
+ * Apply vision corrections to recipe/ingredient data
+ * @param {Object} visionInsights - Output from vision analysis
+ * @param {Object} recipeData - Recipe/ingredient data to correct
+ * @returns {Object} - Corrected data with change log
+ */
+function applyVisionCorrections(visionInsights, recipeData) {
+  if (!visionInsights || !recipeData) {
+    return { corrected: recipeData, corrections: [], applied: false };
+  }
+
+  const corrections = [];
+  let correctedIngredients = [...(recipeData.ingredients || recipeData.ingredients_parsed || [])];
+  let correctedDescription = recipeData.description || recipeData.menuDescription || "";
+
+  // Extract visual evidence
+  const visualIngredients = visionInsights.visual_ingredients || [];
+  const visualCookingMethod = visionInsights.visual_cooking_method || {};
+  const plateComponents = visionInsights.plate_components || [];
+
+  // Helper: find visual evidence for a category
+  const findVisualEvidence = (category) => {
+    return visualIngredients.filter(vi =>
+      vi.category === category ||
+      vi.guess?.toLowerCase().includes(category)
+    );
+  };
+
+  // Helper: check if ingredient list mentions a food type
+  const ingredientMentions = (variants) => {
+    const ingredientStr = correctedIngredients.join(" ").toLowerCase();
+    const descStr = correctedDescription.toLowerCase();
+    const combined = ingredientStr + " " + descStr;
+
+    for (const variant of variants) {
+      if (combined.includes(variant.toLowerCase())) {
+        return variant;
+      }
+    }
+    return null;
+  };
+
+  // 1. PASTA TYPE CORRECTION
+  const pastaEvidence = plateComponents.find(pc =>
+    pc.category === "pasta" || pc.label?.toLowerCase().includes("pasta")
+  );
+
+  if (pastaEvidence && pastaEvidence.confidence >= 0.6) {
+    const visualPastaType = detectPastaTypeFromVisual(pastaEvidence, visualIngredients);
+    const recipePastaType = ingredientMentions(VISION_CORRECTION_CATEGORIES.pasta.variants);
+
+    if (visualPastaType && recipePastaType &&
+        visualPastaType.toLowerCase() !== recipePastaType.toLowerCase()) {
+      // Apply correction
+      const correction = {
+        category: "pasta_type",
+        visual_detected: visualPastaType,
+        recipe_claimed: recipePastaType,
+        confidence: pastaEvidence.confidence,
+        action: "replace",
+        reason: `Vision detected ${visualPastaType} but recipe mentions ${recipePastaType}`
+      };
+
+      correctedIngredients = correctedIngredients.map(ing =>
+        ing.toLowerCase().includes(recipePastaType.toLowerCase())
+          ? ing.replace(new RegExp(recipePastaType, "gi"), visualPastaType)
+          : ing
+      );
+
+      correctedDescription = correctedDescription.replace(
+        new RegExp(recipePastaType, "gi"),
+        visualPastaType
+      );
+
+      corrections.push(correction);
+    }
+  }
+
+  // 2. RICE TYPE CORRECTION
+  const riceEvidence = visualIngredients.find(vi =>
+    vi.category === "grain" && vi.guess?.toLowerCase().includes("rice")
+  );
+
+  if (riceEvidence && riceEvidence.confidence >= 0.6) {
+    const visualRiceType = detectRiceTypeFromVisual(riceEvidence);
+    const recipeRiceType = ingredientMentions(VISION_CORRECTION_CATEGORIES.rice.variants);
+
+    if (visualRiceType && recipeRiceType &&
+        !visualRiceType.toLowerCase().includes(recipeRiceType.toLowerCase()) &&
+        !recipeRiceType.toLowerCase().includes(visualRiceType.toLowerCase())) {
+
+      const correction = {
+        category: "rice_type",
+        visual_detected: visualRiceType,
+        recipe_claimed: recipeRiceType,
+        confidence: riceEvidence.confidence,
+        action: "replace",
+        reason: `Vision detected ${visualRiceType} but recipe mentions ${recipeRiceType}`
+      };
+
+      correctedIngredients = correctedIngredients.map(ing =>
+        ing.toLowerCase().includes(recipeRiceType.toLowerCase())
+          ? ing.replace(new RegExp(recipeRiceType, "gi"), visualRiceType)
+          : ing
+      );
+
+      corrections.push(correction);
+    }
+  }
+
+  // 3. COOKING METHOD CORRECTION
+  if (visualCookingMethod.primary &&
+      visualCookingMethod.confidence >= 0.7 &&
+      visualCookingMethod.primary !== "unknown") {
+
+    const visualMethod = visualCookingMethod.primary;
+    const recipeMethod = ingredientMentions(VISION_CORRECTION_CATEGORIES.cooking_method.variants);
+
+    if (recipeMethod && visualMethod.toLowerCase() !== recipeMethod.toLowerCase()) {
+      const correction = {
+        category: "cooking_method",
+        visual_detected: visualMethod,
+        recipe_claimed: recipeMethod,
+        confidence: visualCookingMethod.confidence,
+        action: "replace",
+        reason: `Vision shows ${visualMethod} preparation but recipe says ${recipeMethod}. ${visualCookingMethod.reason || ""}`
+      };
+
+      correctedDescription = correctedDescription.replace(
+        new RegExp(recipeMethod, "gi"),
+        visualMethod
+      );
+
+      corrections.push(correction);
+    }
+  }
+
+  // 4. PROTEIN TYPE CORRECTION (fish species, meat type)
+  const proteinEvidence = visualIngredients.filter(vi =>
+    ["fish", "shellfish", "red_meat", "poultry"].includes(vi.category)
+  );
+
+  for (const protein of proteinEvidence) {
+    if (protein.confidence >= 0.7) {
+      const visualProtein = protein.guess?.toLowerCase();
+      const recipeProtein = ingredientMentions(VISION_CORRECTION_CATEGORIES.protein.variants);
+
+      if (visualProtein && recipeProtein &&
+          !visualProtein.includes(recipeProtein.toLowerCase()) &&
+          !recipeProtein.toLowerCase().includes(visualProtein)) {
+
+        // Check if they're in the same category (e.g., both fish, both meat)
+        const sameCategory = areSameProteinCategory(visualProtein, recipeProtein);
+
+        if (sameCategory) {
+          const correction = {
+            category: "protein_type",
+            visual_detected: visualProtein,
+            recipe_claimed: recipeProtein,
+            confidence: protein.confidence,
+            action: "replace",
+            reason: `Vision detected ${visualProtein} but recipe mentions ${recipeProtein}. ${protein.evidence || ""}`
+          };
+
+          correctedIngredients = correctedIngredients.map(ing =>
+            ing.toLowerCase().includes(recipeProtein.toLowerCase())
+              ? ing.replace(new RegExp(recipeProtein, "gi"), visualProtein)
+              : ing
+          );
+
+          corrections.push(correction);
+          break; // Only apply first protein correction
+        }
+      }
+    }
+  }
+
+  // 5. ADD VISUAL-ONLY INGREDIENTS (seen but not in recipe)
+  const highConfidenceVisual = visualIngredients.filter(vi =>
+    vi.confidence >= 0.8 &&
+    ["egg", "dairy", "shellfish", "nut", "sesame", "processed_meat"].includes(vi.category)
+  );
+
+  for (const visual of highConfidenceVisual) {
+    const alreadyInRecipe = correctedIngredients.some(ing =>
+      ing.toLowerCase().includes(visual.guess?.toLowerCase().split(" ")[0])
+    );
+
+    if (!alreadyInRecipe) {
+      const correction = {
+        category: "missing_ingredient",
+        visual_detected: visual.guess,
+        recipe_claimed: null,
+        confidence: visual.confidence,
+        action: "add",
+        reason: `Vision clearly shows ${visual.guess} but not in recipe. ${visual.evidence || ""}`
+      };
+
+      // Add to ingredients with visual marker
+      correctedIngredients.push(`${visual.guess} (visible in image)`);
+      corrections.push(correction);
+    }
+  }
+
+  return {
+    corrected: {
+      ...recipeData,
+      ingredients: correctedIngredients,
+      ingredients_parsed: correctedIngredients,
+      description: correctedDescription,
+      vision_corrected: corrections.length > 0
+    },
+    corrections,
+    applied: corrections.length > 0,
+    correction_count: corrections.length
+  };
+}
+
+/**
+ * Detect pasta type from visual evidence
+ */
+function detectPastaTypeFromVisual(plateComponent, visualIngredients) {
+  const label = (plateComponent.label || "").toLowerCase();
+  const guess = visualIngredients.find(vi =>
+    vi.category === "grain" && vi.guess?.toLowerCase().includes("pasta")
+  )?.guess?.toLowerCase();
+
+  // Check for specific pasta mentions in label or guess
+  for (const pastaType of VISION_CORRECTION_CATEGORIES.pasta.variants) {
+    if (label.includes(pastaType) || (guess && guess.includes(pastaType))) {
+      return pastaType;
+    }
+  }
+
+  // Infer from visual description
+  if (label.includes("long") && label.includes("thin")) return "spaghetti";
+  if (label.includes("tube") || label.includes("hollow")) return "penne";
+  if (label.includes("spiral") || label.includes("twist")) return "fusilli";
+  if (label.includes("flat") && label.includes("wide")) return "fettuccine";
+  if (label.includes("bow") || label.includes("butterfly")) return "farfalle";
+  if (label.includes("shell")) return "shells";
+
+  return null;
+}
+
+/**
+ * Detect rice type from visual evidence
+ */
+function detectRiceTypeFromVisual(riceEvidence) {
+  const guess = (riceEvidence.guess || "").toLowerCase();
+  const evidence = (riceEvidence.evidence || "").toLowerCase();
+
+  if (guess.includes("fried") || evidence.includes("fried") || evidence.includes("wok")) {
+    return "fried rice";
+  }
+  if (guess.includes("brown") || evidence.includes("brown") || evidence.includes("tan")) {
+    return "brown rice";
+  }
+  if (guess.includes("yellow") || evidence.includes("yellow") || evidence.includes("saffron")) {
+    return "yellow rice";
+  }
+  if (guess.includes("wild") || evidence.includes("dark") || evidence.includes("black grains")) {
+    return "wild rice";
+  }
+
+  return guess || "white rice";
+}
+
+/**
+ * Check if two proteins are in the same category (for valid swaps)
+ */
+function areSameProteinCategory(protein1, protein2) {
+  const fishTypes = ["salmon", "tuna", "cod", "tilapia", "halibut", "trout", "bass", "snapper", "mahi"];
+  const shellfishTypes = ["shrimp", "lobster", "crab", "scallop", "mussel", "clam", "oyster"];
+  const poultryTypes = ["chicken", "turkey", "duck", "cornish"];
+  const redMeatTypes = ["beef", "steak", "lamb", "pork", "veal"];
+
+  const categories = [fishTypes, shellfishTypes, poultryTypes, redMeatTypes];
+
+  for (const category of categories) {
+    const p1InCategory = category.some(t => protein1.includes(t));
+    const p2InCategory = category.some(t => protein2.includes(t));
+
+    if (p1InCategory && p2InCategory) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Generate vision correction prompt enhancement for more detailed food identification
+ */
+function getVisionCorrectionPromptAddendum() {
+  return `
+ADDITIONAL FOOD IDENTIFICATION (for recipe correction):
+
+When analyzing the image, also identify these specific food attributes with HIGH PRECISION:
+
+1. PASTA TYPE (if pasta visible):
+   - Identify exact pasta shape: spaghetti, penne, rigatoni, fettuccine, linguine, fusilli, farfalle, etc.
+   - Look for: strand shape (round vs flat), tube vs solid, spiral vs straight, size
+   - Add to visual_ingredients with category "pasta_type" and high confidence if clear
+
+2. RICE TYPE (if rice visible):
+   - Identify: white rice, brown rice, fried rice, yellow rice, wild rice, sushi rice
+   - Look for: grain color, preparation style (plain vs mixed), glossiness
+   - Add to visual_ingredients with category "rice_type"
+
+3. BREAD TYPE (if bread visible):
+   - Identify: white, whole wheat, sourdough, brioche, ciabatta, baguette, pita, etc.
+   - Look for: crust color, crumb texture, shape
+
+4. SPECIFIC PROTEIN (be precise):
+   - Fish: salmon (orange-pink) vs tuna (red) vs white fish (cod, tilapia, halibut)
+   - Meat: beef vs pork vs lamb (look at color, fat marbling)
+   - Add specific type, not just "fish" or "meat"
+
+5. CHEESE TYPE (if cheese visible):
+   - Identify: mozzarella (white, stringy), cheddar (orange), parmesan (shaved), feta (crumbled white)
+
+For each identification, include in visual_ingredients:
+{
+  "guess": "spaghetti pasta" (be specific),
+  "category": "pasta_type" or "rice_type" or "bread_type" or "protein_specific" or "cheese_type",
+  "confidence": 0.0-1.0,
+  "evidence": "long thin round strands visible, clearly spaghetti not penne"
+}
+`.trim();
+}
+
+// ==========================================================================
+
 // ---- Network helpers ----
 function cleanHost(h) {
   const s = (h || "").trim();
@@ -23389,7 +23837,23 @@ async function runDishAnalysis(env, body, ctx) {
 
   // Build Likely Recipe (merges recipe + vision ingredients + adjusted cooking method)
   const visionInsightsForRecipe = debug.vision_insights || null;
-  const likely_recipe = buildLikelyRecipe(recipeResult, visionInsightsForRecipe, nutritionBreakdown);
+
+  // Apply vision corrections to recipe (e.g., image shows spaghetti but recipe says penne)
+  let correctedRecipeResult = recipeResult;
+  let visionCorrections = null;
+  if (visionInsightsForRecipe && recipeResult) {
+    visionCorrections = applyVisionCorrections(visionInsightsForRecipe, recipeResult);
+    if (visionCorrections && visionCorrections.applied && visionCorrections.corrections.length > 0) {
+      correctedRecipeResult = visionCorrections.corrected;
+      debug.vision_corrections = {
+        applied: visionCorrections.corrections,
+        count: visionCorrections.correction_count,
+        original_recipe_source: recipeResult?.source || recipeResult?.responseSource || "unknown"
+      };
+    }
+  }
+
+  const likely_recipe = buildLikelyRecipe(correctedRecipeResult, visionInsightsForRecipe, nutritionBreakdown);
 
   // Build Full Recipe if requested (cookbook-style with LLM)
   let full_recipe = null;
@@ -23589,9 +24053,10 @@ async function runDishAnalysis(env, body, ctx) {
     imageUrl: dishImageUrl,
     recipe_image: recipeImage,
     summary,
-    recipe: recipeResult,
+    recipe: correctedRecipeResult,
     likely_recipe,
     full_recipe,
+    vision_corrections: visionCorrections?.corrections?.length > 0 ? visionCorrections.corrections : null,
     normalized,
     organs,
     organs_pending: skipOrgans, // Flag for frontend to poll for organs
