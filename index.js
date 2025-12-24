@@ -15418,7 +15418,7 @@ const _worker_impl = {
           headers: { "content-type": "application/json" }
         });
       }
-      const prefix = searchParams.get("prefix") || "menu:";
+      const prefix = searchParams.get("prefix") || "menu/";
       const limit = Number(searchParams.get("limit") || "50");
       const list = await kv.list({ prefix, limit });
       return new Response(JSON.stringify({
@@ -19960,27 +19960,38 @@ function cacheKeyForMenu(query, address, forceUS = false) {
 
 // Read a cached menu snapshot from KV. Returns { savedAt, data } or null.
 async function readMenuFromCache(env, key) {
-  if (!env?.MENUS_CACHE) return null;
+  if (!env?.MENUS_CACHE) {
+    console.warn('[MenuCache] MENUS_CACHE binding not available');
+    return null;
+  }
   try {
     const raw = await env.MENUS_CACHE.get(key);
     if (!raw) return null;
     const js = JSON.parse(raw);
     // Expect shape: { savedAt: ISO, data: { query, address, forceUS, items: [...] } }
     if (!js || typeof js !== "object" || !js.data) return null;
+    console.log(`[MenuCache] Cache HIT for key: ${key.slice(0, 80)}...`);
     return js;
-  } catch {
+  } catch (e) {
+    console.error(`[MenuCache] Read error for key ${key}:`, e.message);
     return null;
   }
 }
 
 // Write a cached menu snapshot to KV (best-effort).
 async function writeMenuToCache(env, key, data) {
-  if (!env?.MENUS_CACHE) return false;
+  if (!env?.MENUS_CACHE) {
+    console.warn('[MenuCache] MENUS_CACHE binding not available - cannot write');
+    return false;
+  }
   try {
     const body = JSON.stringify({ savedAt: new Date().toISOString(), data });
+    const sizeKB = (body.length / 1024).toFixed(1);
     await env.MENUS_CACHE.put(key, body, { expirationTtl: MENU_TTL_SECONDS });
+    console.log(`[MenuCache] Wrote ${sizeKB}KB to key: ${key.slice(0, 80)}...`);
     return true;
-  } catch {
+  } catch (e) {
+    console.error(`[MenuCache] Write FAILED for key ${key}:`, e.message);
     return false;
   }
 }
