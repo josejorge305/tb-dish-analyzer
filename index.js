@@ -6078,6 +6078,134 @@ function normalizeDishNameForCache(name) {
     .trim();
 }
 
+// ============================================
+// Canonical Dish Resolution System
+// ============================================
+
+/**
+ * Fluff tokens to strip from dish names for canonical matching.
+ * These are common marketing/descriptive words that don't affect dish identity.
+ */
+const CANONICAL_FLUFF_TOKENS = new Set([
+  'chef', 'chefs', 'signature', 'house', 'style', 'famous', 'special',
+  'classic', 'homemade', 'handmade', 'artisan', 'artisanal', 'authentic',
+  'traditional', 'our', 'the', 'a', 'an', 'fresh', 'freshly', 'made',
+  'prepared', 'served', 'topped', 'drizzled', 'garnished', 'featuring',
+  'with', 'new', 'seasonal', 'limited', 'award', 'winning', 'world', 'best'
+]);
+
+/**
+ * Enhanced normalization for canonical dish matching.
+ * More aggressive than normalizeDishNameForCache - strips fluff tokens.
+ * @param {string} input - Raw dish name from menu
+ * @returns {string} - Normalized alias key
+ */
+function normalizeDishNameCanonical(input) {
+  if (!input) return '';
+  let s = String(input);
+
+  // 1. Trim + lowercase
+  s = s.trim().toLowerCase();
+
+  // 2. Unicode normalize (NFKD) and strip diacritics
+  s = s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+
+  // 3. Expand common abbreviations
+  s = s.replace(/\bw\//g, 'with');
+  s = s.replace(/\s*&\s*/g, ' and ');
+
+  // 4. Remove parenthetical content (usually portion sizes, prices)
+  s = s.replace(/\([^)]*\)/g, '');
+
+  // 5. Remove all non-alphanumeric except spaces
+  s = s.replace(/[^a-z0-9\s]/g, ' ');
+
+  // 6. Collapse multiple spaces
+  s = s.replace(/\s+/g, ' ');
+
+  // 7. Strip fluff tokens
+  const words = s.split(' ').filter(w => w && !CANONICAL_FLUFF_TOKENS.has(w));
+
+  return words.join(' ').trim();
+}
+
+/**
+ * Resolve a dish name to its canonical ID using the dish_aliases table.
+ * Falls back gracefully if no match found.
+ *
+ * @param {object} env - Cloudflare env with D1_DB binding
+ * @param {string} dishName - Raw dish name to resolve
+ * @param {string} locale - Locale code (default: 'en')
+ * @returns {Promise<object|null>} - { canonicalId, canonicalName, cuisine, confidence, matchType } or null
+ */
+async function resolveCanonicalDish(env, dishName, locale = 'en') {
+  if (!env?.D1_DB || !dishName) return null;
+
+  const aliasNorm = normalizeDishNameCanonical(dishName);
+  if (!aliasNorm) return null;
+
+  try {
+    // Try exact match first
+    const exactMatch = await env.D1_DB.prepare(`
+      SELECT
+        da.canonical_id,
+        da.confidence,
+        da.match_type,
+        dc.canonical_name,
+        dc.cuisine,
+        dc.course,
+        dc.tags_json
+      FROM dish_aliases da
+      JOIN dish_canonicals dc ON da.canonical_id = dc.canonical_id
+      WHERE da.alias_norm = ?
+        AND da.locale = ?
+        AND da.is_active = 1
+    `).bind(aliasNorm, locale).first();
+
+    if (exactMatch) {
+      return {
+        canonicalId: exactMatch.canonical_id,
+        canonicalName: exactMatch.canonical_name,
+        cuisine: exactMatch.cuisine,
+        course: exactMatch.course,
+        tags: safeJsonParse(exactMatch.tags_json, []),
+        confidence: exactMatch.confidence,
+        matchType: exactMatch.match_type,
+        resolvedFrom: aliasNorm
+      };
+    }
+
+    // No match - log to suggestions table for future alias creation
+    await logUnmatchedDish(env, aliasNorm, dishName, 'pipeline');
+
+    return null;
+  } catch (e) {
+    console.error('resolveCanonicalDish error:', e);
+    return null;
+  }
+}
+
+/**
+ * Log an unmatched dish name for later review and alias creation.
+ * Uses UPSERT to increment count if already seen.
+ */
+async function logUnmatchedDish(env, aliasNorm, rawInput, source = 'unknown', context = null) {
+  if (!env?.D1_DB || !aliasNorm) return;
+
+  try {
+    await env.D1_DB.prepare(`
+      INSERT INTO dish_alias_suggestions (alias_norm, raw_input, source, context_json, occurrence_count)
+      VALUES (?, ?, ?, ?, 1)
+      ON CONFLICT(alias_norm) DO UPDATE SET
+        occurrence_count = occurrence_count + 1,
+        last_seen_at = datetime('now')
+    `).bind(aliasNorm, rawInput, source, context ? JSON.stringify(context) : null).run();
+  } catch (e) {
+    // Non-critical, just log
+    console.warn('logUnmatchedDish error:', e.message);
+  }
+}
+
 /**
  * Lookup a cached base recipe from D1.
  * Returns the recipe with ingredients, nutrition, and flags if found.
@@ -19967,6 +20095,36 @@ async function runDishAnalysis(env, body, ctx) {
     };
   }
 
+  // ---- Canonical Dish Resolution ----
+  // Try to resolve menu dish name to a stable canonical ID
+  let canonicalResolution = null;
+  let effectiveDishName = dishName; // May be overridden by canonical name
+  try {
+    canonicalResolution = await resolveCanonicalDish(env, dishName, lang);
+    if (canonicalResolution) {
+      // Use canonical name for better cache consistency
+      effectiveDishName = canonicalResolution.canonicalName;
+      debug.canonical_resolution = {
+        matched: true,
+        canonicalId: canonicalResolution.canonicalId,
+        canonicalName: canonicalResolution.canonicalName,
+        cuisine: canonicalResolution.cuisine,
+        confidence: canonicalResolution.confidence,
+        matchType: canonicalResolution.matchType,
+        originalInput: dishName,
+        normalizedTo: canonicalResolution.resolvedFrom
+      };
+    } else {
+      debug.canonical_resolution = {
+        matched: false,
+        originalInput: dishName,
+        normalizedTo: normalizeDishNameCanonical(dishName)
+      };
+    }
+  } catch (e) {
+    debug.canonical_resolution_error = String(e);
+  }
+
   // ---- Dish-level cache (KV) ----
   const forceReanalyze =
     body.force_reanalyze === true ||
@@ -20043,9 +20201,10 @@ async function runDishAnalysis(env, body, ctx) {
     const t0 = Date.now();
 
     // RECIPE CACHE: Try D1 cached_recipes first (faster than API calls)
+    // Use effectiveDishName (canonical name if resolved) for better cache consistency
     if (!forceReanalyze && env?.D1_DB) {
       try {
-        const cachedBase = await lookupCachedBaseRecipe(env, dishName);
+        const cachedBase = await lookupCachedBaseRecipe(env, effectiveDishName);
         if (cachedBase) {
           d1CachedRecipe = cachedBase;
           usedD1RecipeCache = true;
@@ -22387,6 +22546,9 @@ async function runDishAnalysis(env, body, ctx) {
     apiVersion: "v1",
     source: "pipeline.analyze-dish",
     dishName,
+    dishNameCanonical: canonicalResolution ? canonicalResolution.canonicalName : null,
+    canonicalId: canonicalResolution ? canonicalResolution.canonicalId : null,
+    canonicalCuisine: canonicalResolution ? canonicalResolution.cuisine : null,
     restaurantName,
     imageUrl: dishImageUrl,
     recipe_image: recipeImage,
