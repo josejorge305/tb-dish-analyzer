@@ -3390,7 +3390,7 @@ function filterAndRankItems(items, searchParams, env) {
     );
   }
 
-  const HITS_LIMIT = Number(searchParams.get("top") || env.HITS_LIMIT || "25");
+  const HITS_LIMIT = Number(searchParams.get("top") || env.HITS_LIMIT || "250");
   return rankTop(candidates, HITS_LIMIT);
 }
 
@@ -11496,7 +11496,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
 // ========== Uber Eats (Apify) — Tier 1 Scraper ==========
 // ========== Apify Async with Webhooks ==========
 // Start an async Apify run and get notified via webhook when complete
-async function startApifyRunAsync(env, query, address, maxRows = 15, locale = "en-US", jobId = null) {
+async function startApifyRunAsync(env, query, address, maxRows = 250, locale = "en-US", jobId = null) {
   const token = env.APIFY_TOKEN;
   const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
 
@@ -11594,7 +11594,7 @@ async function fetchMenuFromApify(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 15,
+  maxRows = 250,
   locale = "en-US"
 ) {
   const token = env.APIFY_TOKEN;
@@ -11677,7 +11677,7 @@ async function fetchMenuFromUberEatsTiered(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 15,
+  maxRows = 250,
   lat = null,
   lng = null,
   radius = 5000
@@ -11726,7 +11726,7 @@ async function fetchMenuFromUberEatsTiered(
 // Returns same interface as postJobByAddress: { ok, immediate, raw, job_id?, _tier }
 // Runs both scrapers in parallel and returns the first successful response
 async function postJobByAddressTiered(
-  { query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null },
+  { query, address, maxRows = 250, locale = "en-US", page = 1, webhook = null },
   env
 ) {
   const apifyEnabled = !!env.APIFY_TOKEN;
@@ -11796,7 +11796,7 @@ async function postJobByAddressTiered(
 // ========== Uber Eats Tiered Job by Location (GPS) — Apify (Tier 1) → RapidAPI (Tier 2) ==========
 // Returns same interface as postJobByLocation: { ok, data/results, _tier }
 async function postJobByLocationTiered(
-  { query, lat, lng, radius = 6000, maxRows = 25 },
+  { query, lat, lng, radius = 6000, maxRows = 250 },
   env
 ) {
   const tier1Enabled = !!env.APIFY_TOKEN;
@@ -12200,7 +12200,7 @@ async function searchNearbyCandidates(
 
 // ---- UBER EATS: CREATE A JOB BY ADDRESS (exact vendor format) ----
 async function postJobByAddress(
-  { query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null },
+  { query, address, maxRows = 250, locale = "en-US", page = 1, webhook = null },
   env
 ) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
@@ -12214,7 +12214,7 @@ async function postJobByAddress(
   // ✅ Exact body per vendor docs
   const body = {
     scraper: {
-      maxRows: Number(maxRows) || 15,
+      maxRows: Number(maxRows) || 250,
       query: String(query || ""),
       address: String(address),
       locale: String(locale || "en-US"),
@@ -13076,7 +13076,7 @@ async function runAddressJobRaw(
   {
     query = "seafood",
     address = "South Miami, FL, USA",
-    maxRows = 3,
+    maxRows = 250,
     locale = "en-US",
     page = 1
   },
@@ -13086,7 +13086,7 @@ async function runAddressJobRaw(
   const key = env.RAPIDAPI_KEY || "";
   const body = {
     scraper: {
-      maxRows: Number(maxRows) || 3,
+      maxRows: Number(maxRows) || 250,
       query,
       address,
       locale,
@@ -21884,7 +21884,8 @@ async function findRepresentativeStore(env, brandName, tzid) {
   const address = `${tzConfig.lat},${tzConfig.lng}`;
 
   try {
-    const menuResult = await fetchMenuFromUberEatsTiered(env, brandName, address, 1);
+    // Fetch up to 3 restaurant results to find a matching store, with full menu data
+    const menuResult = await fetchMenuFromUberEatsTiered(env, brandName, address, 3);
     if (!menuResult?.ok || !menuResult?.restaurants?.length) {
       return { ok: false, error: "No store found via provider search" };
     }
