@@ -15722,6 +15722,34 @@ const _worker_impl = {
       }
     }
 
+    // POST /internal/seeding/pause - Pause the current seeding run
+    if (pathname === "/internal/seeding/pause" && request.method === "POST") {
+      try {
+        const result = await env.D1_DB.prepare(`
+          UPDATE franchise_seed_runs
+          SET status = 'PAUSED', updated_at = datetime('now')
+          WHERE status = 'RUNNING'
+        `).run();
+        return jsonResponse({ ok: true, paused: result.meta?.changes > 0 });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/seeding/resume - Resume a paused seeding run
+    if (pathname === "/internal/seeding/resume" && request.method === "POST") {
+      try {
+        const result = await env.D1_DB.prepare(`
+          UPDATE franchise_seed_runs
+          SET status = 'RUNNING', updated_at = datetime('now')
+          WHERE status = 'PAUSED'
+        `).run();
+        return jsonResponse({ ok: true, resumed: result.meta?.changes > 0 });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
     // POST /internal/dayparts/tick - Process due daypart jobs
     if (pathname === "/internal/dayparts/tick" && request.method === "POST") {
       try {
