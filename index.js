@@ -14711,6 +14711,33 @@ const _worker_impl = {
             }),
             { expirationTtl: 3600 }
           );
+
+          // ALSO cache under menu/ key for readMenuFromCache lookups
+          if (existing?.query && existing?.address && Array.isArray(data) && data.length > 0) {
+            const menuCacheKey = cacheKeyForMenu(existing.query, existing.address, false);
+            // Flatten menu items from Apify response
+            const flattenedItems = data.flatMap(store => {
+              if (!store?.menu?.categories) return [];
+              return store.menu.categories.flatMap(cat =>
+                (cat.items || []).map(item => ({
+                  name: item.title || item.name,
+                  description: item.description || '',
+                  price: item.price || null,
+                  category: cat.name || cat.title || 'Uncategorized',
+                  imageUrl: item.imageUrl || null
+                }))
+              );
+            });
+            if (flattenedItems.length > 0) {
+              await writeMenuToCache(env, menuCacheKey, {
+                query: existing.query,
+                address: existing.address,
+                forceUS: false,
+                items: flattenedItems
+              });
+              console.log(`[Apify Webhook] Cached ${flattenedItems.length} menu items under ${menuCacheKey}`);
+            }
+          }
         }
 
         // Return 200 to acknowledge webhook
