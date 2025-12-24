@@ -15223,6 +15223,135 @@ const _worker_impl = {
       }
     }
 
+    // === DAYPART SEEDING ENDPOINTS ===
+
+    // POST /internal/seeding/start - Start or resume a seeding run
+    if (pathname === "/internal/seeding/start" && request.method === "POST") {
+      try {
+        const body = await readJson(request) || {};
+        const runType = body.run_type || 'INITIAL';
+        const result = await startOrResumeSeedRun(env, runType);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/seeding/tick - Process one franchise (for cron or manual triggering)
+    if (pathname === "/internal/seeding/tick" && request.method === "POST") {
+      try {
+        const result = await seedingTick(env, ctx);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/seeding/status - Get seeding run status
+    if (pathname === "/internal/seeding/status" && request.method === "GET") {
+      try {
+        const runId = searchParams.get("run_id");
+        if (runId) {
+          const status = await getSeedRunStatus(env, runId);
+          return jsonResponse({ ok: true, ...status });
+        }
+        // Get latest run
+        const latest = await env.D1_DB.prepare(`
+          SELECT * FROM franchise_seed_runs ORDER BY started_at DESC LIMIT 1
+        `).first();
+        if (!latest) return jsonResponse({ ok: true, message: "No seed runs found" });
+        const status = await getSeedRunStatus(env, latest.run_id);
+        return jsonResponse({ ok: true, ...status });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/seeding/done-list - Get completed franchises list
+    if (pathname === "/internal/seeding/done-list" && request.method === "GET") {
+      try {
+        const runId = searchParams.get("run_id");
+        let targetRunId = runId;
+        if (!targetRunId) {
+          const latest = await env.D1_DB.prepare(`
+            SELECT run_id FROM franchise_seed_runs ORDER BY started_at DESC LIMIT 1
+          `).first();
+          targetRunId = latest?.run_id;
+        }
+        if (!targetRunId) return new Response("No seed runs found", { status: 404 });
+        const report = await getCompletedFranchisesList(env, targetRunId);
+        return new Response(report || "No data", { status: 200, headers: { "Content-Type": "text/plain" } });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/dayparts/tick - Process due daypart jobs
+    if (pathname === "/internal/dayparts/tick" && request.method === "POST") {
+      try {
+        const result = await daypartJobTick(env, ctx);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/dayparts/promote - Run daypart promotion
+    if (pathname === "/internal/dayparts/promote" && request.method === "POST") {
+      try {
+        const body = await readJson(request) || {};
+        const brandId = body.brand_id || null;
+        const result = await promoteDayparts(env, brandId);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/dayparts/status - Get daypart coverage status
+    if (pathname === "/internal/dayparts/status" && request.method === "GET") {
+      try {
+        const status = await getDaypartStatus(env);
+        return jsonResponse({ ok: true, ...status });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/dayparts/jobs - List daypart jobs
+    if (pathname === "/internal/dayparts/jobs" && request.method === "GET") {
+      try {
+        const brandId = searchParams.get("brand_id");
+        const status = searchParams.get("status") || 'ACTIVE';
+        let query = `SELECT dj.*, b.canonical_name as brand_name FROM franchise_daypart_jobs dj
+          JOIN brands b ON b.id = dj.brand_id WHERE dj.status = ?`;
+        let params = [status];
+        if (brandId) {
+          query += ` AND dj.brand_id = ?`;
+          params.push(brandId);
+        }
+        query += ` ORDER BY dj.next_run_at_utc LIMIT 100`;
+        const result = await env.D1_DB.prepare(query).bind(...params).all();
+        return jsonResponse({ ok: true, jobs: result.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /store/:id/menu/daypart - Get effective menu with daypart filtering
+    if (pathname.match(/^\/store\/\d+\/menu\/daypart$/) && request.method === "GET") {
+      try {
+        const storeId = parseInt(pathname.split("/")[2]);
+        const daypart = searchParams.get("daypart");
+        const tzid = searchParams.get("tzid") || "America/New_York";
+        const includeAll = searchParams.get("all") === "true";
+        const result = await getEffectiveMenuWithDaypart(env, storeId, { daypart, tzid, includeAllDayparts: includeAll });
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
     if (pathname === "/debug/r2-list") {
       const prefix = searchParams.get("prefix") || "";
       const limit = Number(searchParams.get("limit") || "25");
@@ -18079,6 +18208,46 @@ const _worker_impl = {
         console.log(`[scheduled] Franchise reconciliation complete (${Date.now() - franchiseStart}ms)`);
       } catch (franchiseErr) {
         console.log(`[scheduled] Franchise reconciliation error: ${franchiseErr?.message}`);
+      }
+
+      // --- Daypart Seeding System ---
+      console.log("[scheduled] Starting daypart seeding jobs...");
+      const daypartStart = Date.now();
+
+      try {
+        // 1. Process seeding tick (if active run exists)
+        const seedingResult = await seedingTick(env, ctx);
+        if (seedingResult.brand) {
+          console.log(`[scheduled] Seeded franchise: ${seedingResult.brand}`);
+        }
+
+        // 2. Process due daypart jobs (sample menus at scheduled local times)
+        const daypartJobResult = await daypartJobTick(env, ctx);
+        if (daypartJobResult.processed > 0) {
+          console.log(`[scheduled] Processed ${daypartJobResult.processed} daypart job(s)`);
+        }
+
+        // 3. Run daypart promotions (analyze sightings and promote items to GLOBAL scope)
+        // Run daily - only if it's around 4 AM UTC to avoid running too frequently
+        const currentHour = new Date().getUTCHours();
+        if (currentHour >= 3 && currentHour <= 5) {
+          const promoResult = await promoteDayparts(env);
+          console.log(`[scheduled] Daypart promotion: ${promoResult.promoted} items promoted`);
+        }
+
+        // Log stats to KV
+        if (env.MENUS_CACHE) {
+          await env.MENUS_CACHE.put("cron/daypart_jobs", JSON.stringify({
+            ran_at: new Date().toISOString(),
+            elapsed_ms: Date.now() - daypartStart,
+            seeding: seedingResult,
+            daypart_jobs: daypartJobResult
+          }), { expirationTtl: 7 * 24 * 3600 });
+        }
+
+        console.log(`[scheduled] Daypart jobs complete (${Date.now() - daypartStart}ms)`);
+      } catch (daypartErr) {
+        console.log(`[scheduled] Daypart jobs error: ${daypartErr?.message}`);
       }
 
     } catch (err) {
@@ -21148,6 +21317,818 @@ For each identification, include in visual_ingredients:
   "evidence": "long thin round strands visible, clearly spaghetti not penne"
 }
 `.trim();
+}
+
+// ==========================================================================
+// === DAYPART SEEDING SYSTEM ================================================
+// Automatic time-zone aware daypart classification for franchise menus
+// CRITICAL: NO DELETIONS - only status updates and appends
+// ==========================================================================
+
+/**
+ * Canonical list of 50 franchises to seed (ordered by location count)
+ */
+const FRANCHISE_SEED_LIST = [
+  { name: "Subway", locations: 20576 },
+  { name: "Starbucks", locations: 15873 },
+  { name: "McDonald's", locations: 13444 },
+  { name: "Dunkin'", locations: 9370 },
+  { name: "Taco Bell", locations: 7198 },
+  { name: "Burger King", locations: 7043 },
+  { name: "Domino's", locations: 6686 },
+  { name: "Pizza Hut", locations: 6561 },
+  { name: "Wendy's", locations: 5994 },
+  { name: "Dairy Queen", locations: 4307 },
+  { name: "Little Caesars", locations: 4173 },
+  { name: "KFC", locations: 3918 },
+  { name: "Sonic Drive-In", locations: 3546 },
+  { name: "Arby's", locations: 3415 },
+  { name: "Papa Johns", locations: 3376 },
+  { name: "Chipotle", locations: 3129 },
+  { name: "Popeyes Louisiana Kitchen", locations: 2946 },
+  { name: "Chick-fil-A", locations: 2837 },
+  { name: "Jimmy John's", locations: 2637 },
+  { name: "Jersey Mike's", locations: 2397 },
+  { name: "Panda Express", locations: 2393 },
+  { name: "Baskin-Robbins", locations: 2253 },
+  { name: "Jack in the Box", locations: 2180 },
+  { name: "Panera Bread", locations: 2102 },
+  { name: "Wingstop", locations: 1721 },
+  { name: "Hardee's", locations: 1707 },
+  { name: "Five Guys", locations: 1409 },
+  { name: "Tropical Smoothie Café", locations: 1198 },
+  { name: "Firehouse Subs", locations: 1187 },
+  { name: "Papa Murphy's", locations: 1168 },
+  { name: "Carl's Jr.", locations: 1068 },
+  { name: "Marco's Pizza", locations: 1067 },
+  { name: "Whataburger", locations: 925 },
+  { name: "Zaxby's", locations: 922 },
+  { name: "Culver's", locations: 892 },
+  { name: "Church's Chicken", locations: 812 },
+  { name: "Checkers/Rally's", locations: 806 },
+  { name: "Bojangles", locations: 788 },
+  { name: "Qdoba", locations: 728 },
+  { name: "Crumbl Cookies", locations: 688 },
+  { name: "Dutch Bros", locations: 671 },
+  { name: "Raising Cane's", locations: 646 },
+  { name: "Moe's", locations: 637 },
+  { name: "Del Taco", locations: 591 },
+  { name: "McAlister's Deli", locations: 525 },
+  { name: "El Pollo Loco", locations: 490 },
+  { name: "Freddy's Frozen Custard & Steakburgers", locations: 456 },
+  { name: "In-N-Out Burger", locations: 379 },
+  { name: "Krispy Kreme", locations: 352 },
+  { name: "Shake Shack", locations: 287 }
+];
+
+/**
+ * Timezone configuration with reference coordinates for representative store search
+ */
+const DAYPART_TIMEZONES = {
+  "America/New_York": { lat: 40.7580, lng: -73.9855, label: "NYC" },
+  "America/Chicago": { lat: 41.8781, lng: -87.6298, label: "Chicago" },
+  "America/Denver": { lat: 39.7392, lng: -104.9903, label: "Denver" },
+  "America/Los_Angeles": { lat: 34.0522, lng: -118.2437, label: "LA" }
+};
+
+/**
+ * Daypart definitions with local times (minutes from midnight)
+ */
+const DAYPART_CONFIG = {
+  BREAKFAST: { local_time_min: 510, label: "08:30" },
+  LUNCH: { local_time_min: 780, label: "13:00" },
+  DINNER: { local_time_min: 1140, label: "19:00" },
+  LATE_NIGHT: { local_time_min: 1410, label: "23:30" }
+};
+
+/**
+ * Generate a UUID for run tracking
+ */
+function generateSeedRunId() {
+  return 'seed-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+// --- Representative Store Selection ---
+
+/**
+ * Find a representative store for a brand in a specific timezone
+ */
+async function findRepresentativeStore(env, brandName, tzid) {
+  const tzConfig = DAYPART_TIMEZONES[tzid];
+  if (!tzConfig) return { ok: false, error: `Unknown timezone: ${tzid}` };
+
+  const address = `${tzConfig.lat},${tzConfig.lng}`;
+
+  try {
+    const menuResult = await fetchMenuFromUberEatsTiered(env, brandName, address, 1);
+    if (!menuResult?.ok || !menuResult?.restaurants?.length) {
+      return { ok: false, error: "No store found via provider search" };
+    }
+
+    const restaurant = menuResult.restaurants[0];
+    const brand = await detectBrand(env, { name: brandName });
+    if (!brand) return { ok: false, error: "Brand not found in database" };
+
+    const store = await upsertStore(env, {
+      place_id: restaurant.place_id || `uber-${restaurant.store_id || Date.now()}`,
+      uber_store_id: restaurant.store_id,
+      brand_id: brand.id,
+      name: restaurant.name || brandName,
+      address: restaurant.address || address,
+      city: restaurant.city || tzConfig.label,
+      state_province: restaurant.state,
+      country_code: "US",
+      latitude: tzConfig.lat,
+      longitude: tzConfig.lng,
+      source: "daypart_seed"
+    });
+
+    if (!store) return { ok: false, error: "Failed to upsert store" };
+
+    await upsertRepresentativeStore(env, {
+      brand_id: brand.id, store_id: store.id, tzid,
+      priority: 1, selection_method: "auto_search",
+      search_coords: JSON.stringify({ lat: tzConfig.lat, lng: tzConfig.lng })
+    });
+
+    return { ok: true, store, brand, menu: menuResult.menu || [], restaurant };
+  } catch (err) {
+    console.log(`[daypart-seed] Error finding rep store for ${brandName} in ${tzid}:`, err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Upsert a representative store record
+ */
+async function upsertRepresentativeStore(env, data) {
+  if (!env?.D1_DB) return null;
+  const { brand_id, store_id, tzid, priority, selection_method, search_coords } = data;
+  const now = new Date().toISOString();
+
+  try {
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM franchise_representative_stores WHERE brand_id = ? AND tzid = ? AND store_id = ?
+    `).bind(brand_id, tzid, store_id).first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE franchise_representative_stores SET status = 'ACTIVE', last_success_at = ?, updated_at = ? WHERE id = ?
+      `).bind(now, now, existing.id).run();
+      return { ...existing, status: 'ACTIVE', last_success_at: now };
+    }
+
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO franchise_representative_stores
+        (brand_id, store_id, tzid, priority, selection_method, search_coords, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+    `).bind(brand_id, store_id, tzid, priority || 1, selection_method, search_coords, now, now).run();
+
+    return { id: result.meta?.last_row_id, brand_id, store_id, tzid, status: 'ACTIVE' };
+  } catch (err) {
+    console.log("[daypart-seed] Upsert rep store error:", err?.message);
+    return null;
+  }
+}
+
+// --- Seed Run Management ---
+
+/**
+ * Start or resume a seeding run
+ */
+async function startOrResumeSeedRun(env, runType = 'INITIAL') {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+
+  try {
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM franchise_seed_runs WHERE status IN ('RUNNING', 'PAUSED') ORDER BY started_at DESC LIMIT 1
+    `).first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE franchise_seed_runs SET status = 'RUNNING', updated_at = ? WHERE run_id = ?
+      `).bind(new Date().toISOString(), existing.run_id).run();
+      return { ok: true, run_id: existing.run_id, resumed: true, current_index: existing.current_index };
+    }
+
+    const runId = generateSeedRunId();
+    const now = new Date().toISOString();
+
+    await env.D1_DB.prepare(`
+      INSERT INTO franchise_seed_runs (run_id, status, run_type, current_index, total_count, started_at, created_at, updated_at)
+      VALUES (?, 'RUNNING', ?, 0, ?, ?, ?, ?)
+    `).bind(runId, runType, FRANCHISE_SEED_LIST.length, now, now, now).run();
+
+    for (const brand of FRANCHISE_SEED_LIST) {
+      await env.D1_DB.prepare(`
+        INSERT OR IGNORE INTO franchise_seed_progress (run_id, brand_name, status, created_at, updated_at) VALUES (?, ?, 'PENDING', ?, ?)
+      `).bind(runId, brand.name, now, now).run();
+    }
+
+    return { ok: true, run_id: runId, resumed: false, current_index: 0 };
+  } catch (err) {
+    console.log("[daypart-seed] Start run error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Get current seed run status
+ */
+async function getSeedRunStatus(env, runId) {
+  if (!env?.D1_DB) return null;
+  try {
+    const run = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_runs WHERE run_id = ?`).bind(runId).first();
+    if (!run) return null;
+
+    const progress = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_progress WHERE run_id = ? ORDER BY id`).bind(runId).all();
+    const counts = { pending: 0, in_progress: 0, done: 0, failed: 0, skipped: 0 };
+    for (const p of (progress.results || [])) {
+      counts[p.status.toLowerCase()] = (counts[p.status.toLowerCase()] || 0) + 1;
+    }
+    return { ...run, progress: progress.results || [], counts };
+  } catch (err) {
+    console.log("[daypart-seed] Get run status error:", err?.message);
+    return null;
+  }
+}
+
+// --- Initial Seeding ---
+
+/**
+ * Seed one franchise
+ */
+async function seedOneFranchise(env, ctx, runId, brandName) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  const now = new Date().toISOString();
+  const warnings = [];
+
+  try {
+    await env.D1_DB.prepare(`
+      UPDATE franchise_seed_progress SET status = 'IN_PROGRESS', started_at = ?, updated_at = ? WHERE run_id = ? AND brand_name = ?
+    `).bind(now, now, runId, brandName).run();
+
+    let brand = await detectBrand(env, { name: brandName });
+    if (!brand) {
+      const normalized = normalizeBrandName(brandName);
+      await env.D1_DB.prepare(`INSERT OR IGNORE INTO brands (canonical_name, normalized_name, created_at, updated_at) VALUES (?, ?, ?, ?)`).bind(brandName, normalized, now, now).run();
+      brand = await detectBrand(env, { name: brandName });
+    }
+    if (!brand) throw new Error("Failed to create/find brand");
+
+    await env.D1_DB.prepare(`UPDATE franchise_seed_progress SET brand_id = ?, updated_at = ? WHERE run_id = ? AND brand_name = ?`).bind(brand.id, now, runId, brandName).run();
+
+    let repStoresFound = 0, primaryStore = null, menuItems = [];
+
+    for (const [tzid] of Object.entries(DAYPART_TIMEZONES)) {
+      console.log(`[daypart-seed] Finding rep store for ${brandName} in ${tzid}...`);
+      const result = await findRepresentativeStore(env, brandName, tzid);
+      if (result.ok) {
+        repStoresFound++;
+        if (!primaryStore) { primaryStore = result.store; menuItems = result.menu || []; }
+      } else {
+        warnings.push(`No store in ${tzid}: ${result.error}`);
+        await logSeedFailure(env, runId, brandName, null, 'REP_STORE', result.error);
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (!primaryStore) throw new Error("No representative stores found");
+
+    let menuItemCount = 0, analyzedCount = 0, qaPassedCount = 0, qaFailedCount = 0;
+
+    if (menuItems.length > 0) {
+      const deltaResult = await deltaMenuDiscovery(env, primaryStore.id, menuItems, "daypart_seed");
+      if (deltaResult.ok) menuItemCount = (deltaResult.results?.created || 0) + (deltaResult.results?.resolved || 0);
+    }
+
+    const brandItems = await env.D1_DB.prepare(`SELECT * FROM franchise_menu_items WHERE brand_id = ? AND status = 'ACTIVE'`).bind(brand.id).all();
+    const items = brandItems.results || [];
+    menuItemCount = items.length;
+
+    for (const item of items) {
+      try {
+        const analysisResult = await ensureItemAnalyzed(env, ctx, brand, item);
+        if (analysisResult.ok) {
+          analyzedCount++;
+          if (analysisResult.qa_passed) qaPassedCount++; else { qaFailedCount++; warnings.push(`QA failed for ${item.canonical_name}`); }
+        } else {
+          qaFailedCount++;
+          await logSeedFailure(env, runId, brandName, item.canonical_name, 'ANALYZE', analysisResult.error);
+        }
+      } catch (err) {
+        qaFailedCount++;
+        await logSeedFailure(env, runId, brandName, item.canonical_name, 'ANALYZE', err?.message);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    let daypartJobsCreated = 0;
+    for (const [tzid] of Object.entries(DAYPART_TIMEZONES)) {
+      for (const [daypart, config] of Object.entries(DAYPART_CONFIG)) {
+        if (await createDaypartJob(env, brand.id, tzid, daypart, config.local_time_min)) daypartJobsCreated++;
+      }
+    }
+
+    const finishedAt = new Date().toISOString();
+    await env.D1_DB.prepare(`
+      UPDATE franchise_seed_progress SET status = 'DONE', finished_at = ?, menu_item_count = ?, analyzed_count = ?,
+        qa_passed = ?, qa_failed_count = ?, rep_stores_found = ?, daypart_jobs_created = ?, warnings_json = ?, updated_at = ?
+      WHERE run_id = ? AND brand_name = ?
+    `).bind(finishedAt, menuItemCount, analyzedCount, qaPassedCount > 0 ? 1 : 0, qaFailedCount, repStoresFound, daypartJobsCreated,
+      warnings.length > 0 ? JSON.stringify(warnings) : null, finishedAt, runId, brandName).run();
+
+    return { ok: true, brand_id: brand.id, rep_stores_found: repStoresFound, menu_item_count: menuItemCount,
+      analyzed_count: analyzedCount, qa_passed: qaPassedCount, qa_failed: qaFailedCount, daypart_jobs_created: daypartJobsCreated, warnings };
+  } catch (err) {
+    console.log(`[daypart-seed] Error seeding ${brandName}:`, err?.message);
+    await env.D1_DB.prepare(`
+      UPDATE franchise_seed_progress SET status = 'FAILED', error = ?, warnings_json = ?, updated_at = ? WHERE run_id = ? AND brand_name = ?
+    `).bind(err?.message, warnings.length > 0 ? JSON.stringify(warnings) : null, new Date().toISOString(), runId, brandName).run();
+    await logSeedFailure(env, runId, brandName, null, 'ONBOARD', err?.message);
+    return { ok: false, error: err?.message, warnings };
+  }
+}
+
+/**
+ * Ensure a menu item has been analyzed
+ */
+async function ensureItemAnalyzed(env, ctx, brand, item) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  try {
+    const existing = await env.D1_DB.prepare(`SELECT * FROM franchise_analysis_cache WHERE brand_id = ? AND menu_item_id = ?`).bind(brand.id, item.id).first();
+    if (existing && existing.status === 'COMPLETE' && existing.qa_passed) return { ok: true, cached: true, qa_passed: true };
+
+    const { status, result } = await runDishAnalysis(env, {
+      dishName: item.canonical_name, restaurantName: brand.canonical_name,
+      menuDescription: item.description, brand_id: brand.id, menu_item_id: item.id, skipCache: false
+    }, ctx);
+
+    if (status !== 200 || !result?.ok) return { ok: false, error: result?.error || "Analysis failed" };
+
+    const qa = validateAnalysisQA(result);
+    const cacheKey = `franchise/${brand.id}/${item.id}`;
+    const now = new Date().toISOString();
+
+    await env.D1_DB.prepare(`
+      INSERT INTO franchise_analysis_cache (brand_id, menu_item_id, status, cache_key, qa_passed, qa_allergens, qa_organs, qa_nutrition, analyzed_at, last_validated_at, created_at, updated_at)
+      VALUES (?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(brand_id, menu_item_id) DO UPDATE SET status = 'COMPLETE', cache_key = ?, qa_passed = ?, qa_allergens = ?, qa_organs = ?, qa_nutrition = ?, analyzed_at = ?, last_validated_at = ?, updated_at = ?
+    `).bind(brand.id, item.id, cacheKey, qa.passed ? 1 : 0, qa.allergens ? 1 : 0, qa.organs ? 1 : 0, qa.nutrition ? 1 : 0, now, now, now, now,
+      cacheKey, qa.passed ? 1 : 0, qa.allergens ? 1 : 0, qa.organs ? 1 : 0, qa.nutrition ? 1 : 0, now, now, now).run();
+
+    return { ok: true, qa_passed: qa.passed, qa_reason: qa.reason, cache_key: cacheKey };
+  } catch (err) {
+    console.log(`[daypart-seed] Analysis error for ${item.canonical_name}:`, err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Validate analysis result meets QA requirements
+ */
+function validateAnalysisQA(result) {
+  const qa = { passed: false, allergens: false, organs: false, nutrition: false, reason: null };
+  if (result.allergen_flags && Array.isArray(result.allergen_flags)) qa.allergens = true;
+  else if (result.allergen_summary) qa.allergens = true;
+  if (result.organs && typeof result.organs === 'object' && Object.keys(result.organs).length > 0) qa.organs = true;
+  if (result.nutrition_summary || result.normalized?.calories) qa.nutrition = true;
+  qa.passed = qa.allergens && qa.organs;
+  if (!qa.passed) {
+    const missing = [];
+    if (!qa.allergens) missing.push("allergens");
+    if (!qa.organs) missing.push("organs");
+    qa.reason = `Missing: ${missing.join(", ")}`;
+  }
+  return qa;
+}
+
+/**
+ * Log a seed failure (append-only)
+ */
+async function logSeedFailure(env, runId, brandName, menuItemName, stage, error) {
+  if (!env?.D1_DB) return;
+  try {
+    await env.D1_DB.prepare(`INSERT INTO franchise_seed_failures (run_id, brand_name, menu_item_name, stage, error, created_at) VALUES (?, ?, ?, ?, ?, ?)`).bind(runId, brandName, menuItemName, stage, error, new Date().toISOString()).run();
+  } catch (err) { console.log("[daypart-seed] Failed to log failure:", err?.message); }
+}
+
+// --- Daypart Job Management ---
+
+/**
+ * Create a daypart job
+ */
+async function createDaypartJob(env, brandId, tzid, daypart, localTimeMin) {
+  if (!env?.D1_DB) return false;
+  try {
+    const nextRunUtc = calculateNextRunUtc(tzid, localTimeMin);
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare(`
+      INSERT INTO franchise_daypart_jobs (brand_id, tzid, daypart, local_time_min, next_run_at_utc, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+      ON CONFLICT(brand_id, tzid, daypart) DO UPDATE SET local_time_min = ?, next_run_at_utc = ?, status = 'ACTIVE', updated_at = ?
+    `).bind(brandId, tzid, daypart, localTimeMin, nextRunUtc, now, now, localTimeMin, nextRunUtc, now).run();
+    return true;
+  } catch (err) {
+    console.log("[daypart-seed] Create daypart job error:", err?.message);
+    return false;
+  }
+}
+
+/**
+ * Calculate next run time in UTC for a given local time
+ */
+function calculateNextRunUtc(tzid, localTimeMin) {
+  const tzOffsets = { "America/New_York": -5, "America/Chicago": -6, "America/Denver": -7, "America/Los_Angeles": -8 };
+  const offset = tzOffsets[tzid] || -5;
+  const now = new Date();
+  const utcHours = Math.floor(localTimeMin / 60) - offset;
+  const utcMinutes = localTimeMin % 60;
+  const nextRun = new Date(now);
+  nextRun.setUTCHours(utcHours, utcMinutes, 0, 0);
+  if (nextRun <= now) nextRun.setUTCDate(nextRun.getUTCDate() + 1);
+  return nextRun.toISOString();
+}
+
+/**
+ * Get due daypart jobs
+ */
+async function getDueDaypartJobs(env, limit = 5) {
+  if (!env?.D1_DB) return [];
+  try {
+    const now = new Date().toISOString();
+    const result = await env.D1_DB.prepare(`
+      SELECT dj.*, b.canonical_name as brand_name FROM franchise_daypart_jobs dj
+      JOIN brands b ON b.id = dj.brand_id WHERE dj.status = 'ACTIVE' AND dj.next_run_at_utc <= ?
+      ORDER BY dj.next_run_at_utc ASC LIMIT ?
+    `).bind(now, limit).all();
+    return result.results || [];
+  } catch (err) {
+    console.log("[daypart-seed] Get due jobs error:", err?.message);
+    return [];
+  }
+}
+
+/**
+ * Process one daypart job
+ */
+async function processDaypartJob(env, ctx, job) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  console.log(`[daypart-job] Processing ${job.brand_name} ${job.tzid} ${job.daypart}...`);
+
+  try {
+    const repStore = await env.D1_DB.prepare(`
+      SELECT rs.*, s.name as store_name FROM franchise_representative_stores rs
+      JOIN stores s ON s.id = rs.store_id WHERE rs.brand_id = ? AND rs.tzid = ? AND rs.status = 'ACTIVE'
+      ORDER BY rs.priority LIMIT 1
+    `).bind(job.brand_id, job.tzid).first();
+
+    if (!repStore) throw new Error(`No representative store for brand ${job.brand_id} in ${job.tzid}`);
+
+    const tzConfig = DAYPART_TIMEZONES[job.tzid];
+    const menuResult = await fetchMenuFromUberEatsTiered(env, job.brand_name, `${tzConfig.lat},${tzConfig.lng}`, 1);
+    if (!menuResult?.ok) throw new Error(`Menu fetch failed: ${menuResult?.error}`);
+
+    const menuItems = menuResult.menu || [];
+    let itemsSeen = 0, sightingsRecorded = 0;
+
+    for (const menuItem of menuItems) {
+      const observedName = menuItem.name || menuItem.title;
+      if (!observedName) continue;
+      itemsSeen++;
+
+      const resolved = await resolveMenuItem(env, job.brand_id, observedName, {
+        category: menuItem.section, description: menuItem.description, calories: menuItem.restaurantCalories || menuItem.calories
+      });
+      if (!resolved?.item) continue;
+
+      await recordSightingWithDaypart(env, {
+        menu_item_id: resolved.item.id, store_id: repStore.store_id, source_type: "daypart_sample",
+        observed_name: observedName, observed_description: menuItem.description,
+        observed_price_cents: menuItem.price, observed_calories: menuItem.restaurantCalories || menuItem.calories,
+        observed_section: menuItem.section, observed_image_url: menuItem.imageUrl,
+        confidence: resolved.isNew ? 0.55 : 0.75, match_method: resolved.matchMethod, daypart: job.daypart
+      });
+      sightingsRecorded++;
+
+      await upsertScopeWithDaypart(env, {
+        menu_item_id: resolved.item.id, scope_type: "STORE", scope_key: String(repStore.store_id),
+        status: "ACTIVE", confidence: resolved.isNew ? 0.55 : 0.75, price_cents: menuItem.price, daypart: job.daypart
+      });
+    }
+
+    const nextRunUtc = calculateNextRunUtc(job.tzid, job.local_time_min);
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare(`
+      UPDATE franchise_daypart_jobs SET last_run_at_utc = ?, next_run_at_utc = ?, total_runs = total_runs + 1,
+        total_items_seen = total_items_seen + ?, consecutive_failures = 0, updated_at = ? WHERE id = ?
+    `).bind(now, nextRunUtc, itemsSeen, now, job.id).run();
+
+    console.log(`[daypart-job] Completed ${job.brand_name} ${job.daypart}: ${sightingsRecorded} sightings`);
+    return { ok: true, items_seen: itemsSeen, sightings_recorded: sightingsRecorded, next_run_at_utc: nextRunUtc };
+  } catch (err) {
+    console.log(`[daypart-job] Error processing job ${job.id}:`, err?.message);
+    const nextRunUtc = calculateNextRunUtc(job.tzid, job.local_time_min);
+    await env.D1_DB.prepare(`
+      UPDATE franchise_daypart_jobs SET last_error = ?, consecutive_failures = consecutive_failures + 1, next_run_at_utc = ?, updated_at = ? WHERE id = ?
+    `).bind(err?.message, nextRunUtc, new Date().toISOString(), job.id).run();
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Record a sighting with daypart (append-only)
+ */
+async function recordSightingWithDaypart(env, data) {
+  if (!env?.D1_DB) return null;
+  const { menu_item_id, store_id, source_type, observed_name, observed_description, observed_price_cents, observed_calories, observed_section, observed_image_url, confidence, match_method, daypart } = data;
+  try {
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO menu_item_sightings (menu_item_id, store_id, source_type, observed_name, observed_description, observed_price_cents, observed_calories, observed_section, observed_image_url, confidence, match_method, daypart, observed_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).bind(menu_item_id, store_id, source_type, observed_name, observed_description, observed_price_cents, observed_calories, observed_section, observed_image_url, confidence, match_method, daypart || 'UNKNOWN').run();
+    return result.meta?.last_row_id;
+  } catch (err) {
+    console.log("[daypart-seed] Record sighting error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Upsert a scope with daypart
+ */
+async function upsertScopeWithDaypart(env, data) {
+  if (!env?.D1_DB) return null;
+  const { menu_item_id, scope_type, scope_key, status, confidence, price_cents, daypart } = data;
+  const now = new Date().toISOString();
+  try {
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM menu_item_scopes WHERE menu_item_id = ? AND scope_type = ? AND scope_key = ? AND daypart = ?
+    `).bind(menu_item_id, scope_type, scope_key || '', daypart || 'UNKNOWN').first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE menu_item_scopes SET status = ?, confidence = MAX(confidence, ?), last_seen_at = ?, price_cents = COALESCE(?, price_cents), updated_at = ? WHERE id = ?
+      `).bind(status, confidence, now, price_cents, now, existing.id).run();
+      return existing.id;
+    }
+
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO menu_item_scopes (menu_item_id, scope_type, scope_key, status, confidence, price_cents, daypart, first_seen_at, last_seen_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(menu_item_id, scope_type, scope_key || '', status, confidence, price_cents, daypart || 'UNKNOWN', now, now, now, now).run();
+    return result.meta?.last_row_id;
+  } catch (err) {
+    console.log("[daypart-seed] Upsert scope error:", err?.message);
+    return null;
+  }
+}
+
+// --- Daypart Promotion ---
+
+/**
+ * Promote items to global daypart scopes based on sighting evidence
+ */
+async function promoteDayparts(env, brandId = null) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  console.log("[daypart-promote] Starting daypart promotion...");
+
+  try {
+    let brands;
+    if (brandId) brands = [{ id: brandId }];
+    else {
+      const result = await env.D1_DB.prepare(`SELECT DISTINCT brand_id as id FROM franchise_menu_items WHERE status = 'ACTIVE'`).all();
+      brands = result.results || [];
+    }
+
+    let promoted = 0, processed = 0;
+
+    for (const brand of brands) {
+      const items = await env.D1_DB.prepare(`SELECT * FROM franchise_menu_items WHERE brand_id = ? AND status = 'ACTIVE'`).bind(brand.id).all();
+
+      for (const item of (items.results || [])) {
+        processed++;
+        const sightingCounts = await env.D1_DB.prepare(`
+          SELECT daypart, COUNT(*) as count FROM menu_item_sightings WHERE menu_item_id = ? AND observed_at >= datetime('now', '-30 days') GROUP BY daypart
+        `).bind(item.id).all();
+
+        const counts = {};
+        for (const row of (sightingCounts.results || [])) counts[row.daypart] = row.count;
+
+        const promotions = determineDaypartPromotions(counts);
+        for (const promo of promotions) {
+          await upsertScopeWithDaypart(env, {
+            menu_item_id: item.id, scope_type: "GLOBAL", scope_key: null,
+            status: "ACTIVE", confidence: promo.confidence, daypart: promo.daypart
+          });
+          promoted++;
+        }
+      }
+    }
+
+    console.log(`[daypart-promote] Processed ${processed} items, promoted ${promoted} scopes`);
+    return { ok: true, processed, promoted };
+  } catch (err) {
+    console.log("[daypart-promote] Error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Determine daypart promotions based on sighting counts
+ */
+function determineDaypartPromotions(counts) {
+  const promotions = [];
+  const threshold = 3;
+  const breakfast = counts.BREAKFAST || 0, lunch = counts.LUNCH || 0, dinner = counts.DINNER || 0, lateNight = counts.LATE_NIGHT || 0;
+
+  if (breakfast >= threshold && lunch >= threshold && dinner >= threshold) {
+    promotions.push({ daypart: "ALL_DAY", confidence: 0.85 });
+    return promotions;
+  }
+  if (breakfast >= threshold && dinner < 2) promotions.push({ daypart: "BREAKFAST", confidence: 0.80 });
+  if (lunch >= threshold && dinner >= threshold && breakfast < 2) {
+    promotions.push({ daypart: "LUNCH", confidence: 0.75 });
+    promotions.push({ daypart: "DINNER", confidence: 0.75 });
+  } else {
+    if (lunch >= threshold) promotions.push({ daypart: "LUNCH", confidence: 0.75 });
+    if (dinner >= threshold) promotions.push({ daypart: "DINNER", confidence: 0.75 });
+  }
+  if (lateNight >= 2 && breakfast < 2 && lunch < 2) promotions.push({ daypart: "LATE_NIGHT", confidence: 0.70 });
+
+  return promotions;
+}
+
+// --- Daypart-Aware Menu Rendering ---
+
+/**
+ * Get current daypart based on local time (minutes from midnight)
+ */
+function getCurrentDaypart(localMinutes) {
+  if (localMinutes >= 240 && localMinutes < 660) return "BREAKFAST";
+  if (localMinutes >= 660 && localMinutes < 960) return "LUNCH";
+  if (localMinutes >= 960 && localMinutes < 1320) return "DINNER";
+  return "LATE_NIGHT";
+}
+
+/**
+ * Get effective menu for a store with daypart filtering
+ */
+async function getEffectiveMenuWithDaypart(env, storeId, options = {}) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  const { daypart, includeAllDayparts = false, tzid } = options;
+
+  try {
+    const store = await getStore(env, { store_id: storeId });
+    if (!store || !store.brand_id) return { ok: false, error: "Store not found or not a franchise" };
+
+    let targetDaypart = daypart;
+    if (!targetDaypart && tzid) {
+      const tzOffsets = { "America/New_York": -5, "America/Chicago": -6, "America/Denver": -7, "America/Los_Angeles": -8 };
+      const offset = tzOffsets[tzid] || -5;
+      const now = new Date();
+      const localHours = (now.getUTCHours() + offset + 24) % 24;
+      const localMinutes = localHours * 60 + now.getUTCMinutes();
+      targetDaypart = getCurrentDaypart(localMinutes);
+    }
+
+    let query, params;
+    if (includeAllDayparts) {
+      query = `SELECT DISTINCT fmi.id, fmi.canonical_name, fmi.category, fmi.description, fmi.calories,
+        mis.daypart, mis.status as scope_status, mis.confidence, mis.price_cents, mis.scope_type
+        FROM franchise_menu_items fmi LEFT JOIN menu_item_scopes mis ON fmi.id = mis.menu_item_id
+        WHERE fmi.brand_id = ? AND fmi.status = 'ACTIVE' AND mis.status = 'ACTIVE'
+        AND ((mis.scope_type = 'STORE' AND mis.scope_key = ?) OR (mis.scope_type = 'REGION' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'COUNTRY' AND mis.scope_key = ?) OR (mis.scope_type = 'GLOBAL' AND (mis.scope_key IS NULL OR mis.scope_key = '')))
+        ORDER BY fmi.category, fmi.canonical_name`;
+      params = [store.brand_id, String(storeId), store.region_code, store.country_code];
+    } else {
+      query = `SELECT DISTINCT fmi.id, fmi.canonical_name, fmi.category, fmi.description, fmi.calories,
+        mis.daypart, mis.status as scope_status, mis.confidence, mis.price_cents, mis.scope_type,
+        CASE WHEN mis.daypart = ? THEN 1 WHEN mis.daypart = 'ALL_DAY' THEN 2 WHEN mis.daypart = 'UNKNOWN' THEN 3 ELSE 4 END as daypart_priority
+        FROM franchise_menu_items fmi LEFT JOIN menu_item_scopes mis ON fmi.id = mis.menu_item_id
+        WHERE fmi.brand_id = ? AND fmi.status = 'ACTIVE' AND mis.status = 'ACTIVE' AND mis.daypart IN (?, 'ALL_DAY', 'UNKNOWN')
+        AND ((mis.scope_type = 'STORE' AND mis.scope_key = ?) OR (mis.scope_type = 'REGION' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'COUNTRY' AND mis.scope_key = ?) OR (mis.scope_type = 'GLOBAL' AND (mis.scope_key IS NULL OR mis.scope_key = '')))
+        ORDER BY daypart_priority, fmi.category, fmi.canonical_name`;
+      params = [targetDaypart, store.brand_id, targetDaypart, String(storeId), store.region_code, store.country_code];
+    }
+
+    const result = await env.D1_DB.prepare(query).bind(...params).all();
+    const itemMap = new Map();
+    for (const row of (result.results || [])) {
+      if (!itemMap.has(row.id) || row.daypart_priority < itemMap.get(row.id).daypart_priority) itemMap.set(row.id, row);
+    }
+    const items = Array.from(itemMap.values());
+
+    return { ok: true, store_id: storeId, brand_id: store.brand_id, daypart: targetDaypart, items, item_count: items.length };
+  } catch (err) {
+    console.log("[daypart-menu] Error getting effective menu:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// --- Cron Tick Handlers ---
+
+/**
+ * Process one tick of seeding
+ */
+async function seedingTick(env, ctx) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  try {
+    const run = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_runs WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1`).first();
+    if (!run) return { ok: true, message: "No running seed run" };
+
+    const nextBrand = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_progress WHERE run_id = ? AND status = 'PENDING' ORDER BY id LIMIT 1`).bind(run.run_id).first();
+    if (!nextBrand) {
+      await env.D1_DB.prepare(`UPDATE franchise_seed_runs SET status = 'DONE', finished_at = ?, updated_at = ? WHERE run_id = ?`).bind(new Date().toISOString(), new Date().toISOString(), run.run_id).run();
+      return { ok: true, message: "Seed run completed", run_id: run.run_id };
+    }
+
+    console.log(`[seeding-tick] Processing ${nextBrand.brand_name}...`);
+    const result = await seedOneFranchise(env, ctx, run.run_id, nextBrand.brand_name);
+    await env.D1_DB.prepare(`UPDATE franchise_seed_runs SET current_index = current_index + 1, updated_at = ? WHERE run_id = ?`).bind(new Date().toISOString(), run.run_id).run();
+
+    return { ok: true, brand: nextBrand.brand_name, result, run_id: run.run_id };
+  } catch (err) {
+    console.log("[seeding-tick] Error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Process daypart job tick
+ */
+async function daypartJobTick(env, ctx) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  try {
+    const dueJobs = await getDueDaypartJobs(env, 3);
+    if (dueJobs.length === 0) return { ok: true, message: "No due daypart jobs" };
+
+    const results = [];
+    for (const job of dueJobs) {
+      const result = await processDaypartJob(env, ctx, job);
+      results.push({ job_id: job.id, brand: job.brand_name, daypart: job.daypart, ...result });
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    return { ok: true, processed: results.length, results };
+  } catch (err) {
+    console.log("[daypart-tick] Error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Get completed franchises list
+ */
+async function getCompletedFranchisesList(env, runId) {
+  if (!env?.D1_DB) return null;
+  try {
+    const run = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_runs WHERE run_id = ?`).bind(runId).first();
+    if (!run) return null;
+
+    const completed = await env.D1_DB.prepare(`SELECT brand_name, menu_item_count, analyzed_count, rep_stores_found, daypart_jobs_created, finished_at FROM franchise_seed_progress WHERE run_id = ? AND status = 'DONE' ORDER BY id`).bind(runId).all();
+    const failed = await env.D1_DB.prepare(`SELECT brand_name, error FROM franchise_seed_progress WHERE run_id = ? AND status = 'FAILED' ORDER BY id`).bind(runId).all();
+
+    let report = `COMPLETED_FRANCHISES (run_id=${runId})\nStarted: ${run.started_at}\nFinished: ${run.finished_at || "IN PROGRESS"}\nStatus: ${run.status}\n\n`;
+    let totalItems = 0, totalAnalyzed = 0;
+
+    const completedList = completed.results || [];
+    for (let i = 0; i < completedList.length; i++) {
+      const c = completedList[i];
+      report += `${i + 1}) ${c.brand_name} - ${c.menu_item_count} items, ${c.analyzed_count} analyzed, ${c.rep_stores_found} stores, ${c.daypart_jobs_created} jobs\n`;
+      totalItems += c.menu_item_count || 0;
+      totalAnalyzed += c.analyzed_count || 0;
+    }
+
+    const failedList = failed.results || [];
+    if (failedList.length > 0) {
+      report += `\nFAILED (${failedList.length}):\n`;
+      for (const f of failedList) report += `- ${f.brand_name}: ${f.error}\n`;
+    }
+
+    report += `\nTOTALS:\n- Completed: ${completedList.length}\n- Failed: ${failedList.length}\n- Total menu items: ${totalItems}\n- Total analyzed: ${totalAnalyzed}\n`;
+    return report;
+  } catch (err) {
+    console.log("[daypart-seed] Get completed list error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Get daypart coverage status
+ */
+async function getDaypartStatus(env) {
+  if (!env?.D1_DB) return null;
+  try {
+    const jobs = await env.D1_DB.prepare(`SELECT daypart, status, COUNT(*) as count FROM franchise_daypart_jobs GROUP BY daypart, status`).all();
+    const scopes = await env.D1_DB.prepare(`SELECT daypart, scope_type, COUNT(DISTINCT menu_item_id) as item_count FROM menu_item_scopes WHERE status = 'ACTIVE' GROUP BY daypart, scope_type`).all();
+    const analysis = await env.D1_DB.prepare(`SELECT brand_id, COUNT(*) as total, SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) as complete FROM franchise_analysis_cache GROUP BY brand_id`).all();
+    return { jobs: jobs.results || [], scopes: scopes.results || [], analysis: analysis.results || [] };
+  } catch (err) {
+    console.log("[daypart-status] Error:", err?.message);
+    return null;
+  }
 }
 
 // ==========================================================================
