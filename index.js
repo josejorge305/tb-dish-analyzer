@@ -15391,6 +15391,59 @@ const _worker_impl = {
       }, null, 2), { headers: { "content-type": "application/json" } });
     }
 
+    // --- DEBUG: View stale menu entries ---
+    if (pathname === "/debug/menu-cache/stale") {
+      const limit = Number(searchParams.get("limit") || "50");
+      const staleEntries = await getStaleMenuEntries(env, limit);
+      return new Response(JSON.stringify({
+        ok: true,
+        stale_threshold_days: Math.floor(MENU_STALE_SECONDS / 86400),
+        stale_count: staleEntries.length,
+        entries: staleEntries
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    // --- DEBUG: View cron run status ---
+    if (pathname === "/debug/menu-cache/cron-status") {
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const lastRun = await kv.get("cron/last_run", "json");
+      return new Response(JSON.stringify({
+        ok: true,
+        cron_schedule: "0 3 * * * (daily at 3 AM UTC)",
+        stale_threshold_days: Math.floor(MENU_STALE_SECONDS / 86400),
+        cache_ttl_days: Math.floor(MENU_TTL_SECONDS / 86400),
+        last_run: lastRun || null
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    // --- DEBUG: Manually trigger menu refresh for a specific entry ---
+    if (pathname === "/debug/menu-cache/refresh" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const { query, address, forceUS } = body;
+      if (!query || !address) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Missing query or address in POST body",
+          example: { query: "Chipotle", address: "123 Main St, Los Angeles, CA", forceUS: true }
+        }, null, 2), { status: 400, headers: { "content-type": "application/json" } });
+      }
+
+      const cacheKey = cacheKeyForMenu(query, address, !!forceUS);
+      const result = await refreshMenuInBackground(env, { query, address, forceUS, cacheKey });
+      return new Response(JSON.stringify({
+        ok: result.ok,
+        query,
+        address,
+        cacheKey,
+        result
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
     if (pathname === "/debug/r2-list") {
       const prefix = searchParams.get("prefix") || "";
       const limit = Number(searchParams.get("limit") || "25");
@@ -15614,14 +15667,10 @@ const _worker_impl = {
               Math.floor((Date.now() - Date.parse(cached.savedAt)) / 1000)
             );
           }
-          // [38.3] age warning for cached data (>20h considered stale-ish)
-          if (cached?.savedAt) {
-            const ageSec = Math.max(
-              0,
-              (Date.now() - Date.parse(cached.savedAt)) / 1000
-            );
-            if (ageSec > 20 * 3600)
-              setWarn("Cached data is older than ~20 hours (may be stale).");
+          // [38.3] age warning for cached data (stale after MENU_STALE_SECONDS)
+          if (cached?.isStale) {
+            const ageDays = Math.floor(cached.ageSeconds / 86400);
+            setWarn(`Cached data is ${ageDays} days old (refreshing in background).`);
           }
           // Allow inspecting the cached payload directly
           if (wantDebugCache) {
@@ -15654,9 +15703,8 @@ const _worker_impl = {
             if (cachedItems) cacheStatus = "hit";
 
             // Stale-while-revalidate: return cache immediately, refresh in background if stale
-            // Cache is considered stale after 1 hour (3600 seconds)
-            const STALE_THRESHOLD_SEC = 3600;
-            const isStale = cacheAgeSec && cacheAgeSec > STALE_THRESHOLD_SEC;
+            // Cache is considered stale after MENU_STALE_SECONDS (15 days)
+            const isStale = cached.isStale || (cacheAgeSec && cacheAgeSec > MENU_STALE_SECONDS);
 
             // Hydrate a local flattenedItems from cache so the same enqueue logic can use it
             if (cachedItems) {
@@ -15688,6 +15736,15 @@ const _worker_impl = {
               const forceUS = !!forceUSFlag;
               trace.used_path = "cache"; // [38.9]
               await bumpStatusKV(env, { cache: 1 });
+
+              // Background refresh: if stale, trigger async menu refresh (non-blocking)
+              if (isStale && ctx?.waitUntil) {
+                ctx.waitUntil(
+                  refreshMenuInBackground(env, { query, address: addressRaw, forceUS, cacheKey })
+                    .catch(err => console.log("[menu-refresh] background error:", err?.message))
+                );
+              }
+
               return respondTB(
                 withBodyAnalytics(
                   {
@@ -15703,7 +15760,7 @@ const _worker_impl = {
                       items: flattenedItems.slice(0, maxRows)
                     },
                     enqueued,
-                    hint: isStale ? "Cache is stale. Add ?fresh=1 to force refresh." : null,
+                    hint: isStale ? "Cache is stale (>15 days). Refreshing in background. Add ?fresh=1 to force immediate refresh." : null,
                     ...warnPart()
                   },
                   ctx,
@@ -18153,6 +18210,62 @@ const _worker_impl = {
         "POST /enqueue",
       { status: 200, headers: { "content-type": "text/plain" } }
     );
+  },
+
+  // ---- Scheduled handler: background menu cache refresh ----
+  scheduled: async (controller, env, ctx) => {
+    console.log("[scheduled] Menu cache refresh cron started");
+    const startTime = Date.now();
+    let refreshed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    try {
+      // Get stale menu entries (limit to 10 per run to avoid timeout)
+      const staleEntries = await getStaleMenuEntries(env, 10);
+      console.log(`[scheduled] Found ${staleEntries.length} stale menu(s) to refresh`);
+
+      for (const entry of staleEntries) {
+        try {
+          console.log(`[scheduled] Refreshing: ${entry.query} @ ${entry.address} (${entry.ageDays} days old)`);
+          const result = await refreshMenuInBackground(env, {
+            query: entry.query,
+            address: entry.address,
+            forceUS: entry.forceUS,
+            cacheKey: entry.key
+          });
+
+          if (result.ok) {
+            refreshed++;
+          } else {
+            skipped++;
+          }
+        } catch (err) {
+          console.log(`[scheduled] Failed to refresh ${entry.query}: ${err?.message}`);
+          failed++;
+        }
+
+        // Rate limit: wait 2 seconds between refreshes to avoid API throttling
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[scheduled] Menu refresh complete: ${refreshed} refreshed, ${skipped} skipped, ${failed} failed (${elapsed}ms)`);
+
+      // Log stats to KV for monitoring
+      if (env.MENUS_CACHE) {
+        await env.MENUS_CACHE.put("cron/last_run", JSON.stringify({
+          ran_at: new Date().toISOString(),
+          elapsed_ms: elapsed,
+          stale_found: staleEntries.length,
+          refreshed,
+          skipped,
+          failed
+        }), { expirationTtl: 7 * 24 * 3600 });
+      }
+    } catch (err) {
+      console.log(`[scheduled] Cron error: ${err?.message}`);
+    }
   }
 };
 
@@ -18211,7 +18324,9 @@ function canonicalizeIngredientName(name = "") {
 }
 
 // ==== Global limits & TTLs (safe defaults) ====
-const MENU_TTL_SECONDS = 18 * 3600; // 18 hours cache TTL for menu snapshots
+// Menu cache: never truly expire, but refresh stale menus in background
+const MENU_TTL_SECONDS = 365 * 24 * 3600; // 1 year - menus persist indefinitely
+const MENU_STALE_SECONDS = 15 * 24 * 3600; // 15 days - trigger background refresh after this
 const LIMITS = {
   DEFAULT_TOP: 10,
   TOP_MIN: 1,
@@ -19790,7 +19905,9 @@ function cacheKeyForMenu(query, address, forceUS = false) {
   return `menu/${encodeURIComponent(q)}|${encodeURIComponent(a)}|${u}.json`;
 }
 
-// Read a cached menu snapshot from KV. Returns { savedAt, data } or null.
+// Read a cached menu snapshot from KV.
+// Returns { savedAt, data, ageSeconds, isStale } or null.
+// isStale=true means the menu should be refreshed in the background (but still served).
 async function readMenuFromCache(env, key) {
   if (!env?.MENUS_CACHE) return null;
   try {
@@ -19799,7 +19916,13 @@ async function readMenuFromCache(env, key) {
     const js = JSON.parse(raw);
     // Expect shape: { savedAt: ISO, data: { query, address, forceUS, items: [...] } }
     if (!js || typeof js !== "object" || !js.data) return null;
-    return js;
+
+    // Calculate age and staleness
+    const savedAt = js.savedAt ? new Date(js.savedAt).getTime() : 0;
+    const ageSeconds = savedAt ? Math.floor((Date.now() - savedAt) / 1000) : 0;
+    const isStale = ageSeconds > MENU_STALE_SECONDS;
+
+    return { ...js, ageSeconds, isStale };
   } catch {
     return null;
   }
@@ -19815,6 +19938,81 @@ async function writeMenuToCache(env, key, data) {
   } catch {
     return false;
   }
+}
+
+// Background refresh: fetch fresh menu data and update cache (non-blocking).
+// Called when serving stale cache to ensure next request gets fresh data.
+async function refreshMenuInBackground(env, { query, address, forceUS, cacheKey }) {
+  console.log(`[menu-refresh] Starting background refresh for: ${query} @ ${address}`);
+  try {
+    // Use the same tiered job fetcher as live requests
+    let addr = address;
+    if (forceUS && !/usa|united states/i.test(addr)) {
+      addr = `${address}, USA`;
+    }
+
+    const job = await postJobByAddressTiered({ query, address: addr, maxRows: 50 }, env);
+
+    if (job?.immediate) {
+      const rows = job.raw?.returnvalue?.data || [];
+      const rowsUS = filterRowsUS(rows, forceUS);
+
+      // Pick best restaurant
+      const googleContext = { name: query, address };
+      const best = pickBestRestaurant({ rows: rowsUS, query, googleContext });
+      const chosen = best || (rowsUS.length ? rowsUS[0] : null);
+
+      if (chosen?.menu?.length) {
+        const items = chosen.menu.map(m => normalizeMenuItem(m, chosen));
+        const finalKey = cacheKey || cacheKeyForMenu(query, address, forceUS);
+
+        await writeMenuToCache(env, finalKey, {
+          query,
+          address,
+          forceUS,
+          items
+        });
+        console.log(`[menu-refresh] Successfully refreshed: ${query} @ ${address} (${items.length} items)`);
+        return { ok: true, items: items.length };
+      }
+    }
+    console.log(`[menu-refresh] No menu data found for: ${query} @ ${address}`);
+    return { ok: false, reason: "no_data" };
+  } catch (err) {
+    console.log(`[menu-refresh] Error refreshing ${query}: ${err?.message}`);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// Get list of stale menu cache entries (for scheduled refresh).
+async function getStaleMenuEntries(env, limit = 50) {
+  if (!env?.MENUS_CACHE) return [];
+  const staleEntries = [];
+  let cursor = undefined;
+
+  do {
+    const list = await env.MENUS_CACHE.list({ prefix: "menu/", limit: 100, cursor });
+    for (const key of list.keys) {
+      if (staleEntries.length >= limit) break;
+      try {
+        const cached = await readMenuFromCache(env, key.name);
+        if (cached?.isStale) {
+          staleEntries.push({
+            key: key.name,
+            savedAt: cached.savedAt,
+            ageSeconds: cached.ageSeconds,
+            ageDays: Math.floor(cached.ageSeconds / 86400),
+            query: cached.data?.query,
+            address: cached.data?.address,
+            forceUS: cached.data?.forceUS
+          });
+        }
+      } catch {}
+    }
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor && staleEntries.length < limit);
+
+  return staleEntries;
 }
 // ==========================================================================
 
