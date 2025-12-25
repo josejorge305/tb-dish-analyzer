@@ -9970,48 +9970,60 @@ async function resolveRecipeWithCache(
     return { candidateOut, selected };
   }
 
-  const cached = !force ? await recipeCacheRead(env, cacheKey) : null;
-  if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
-    cacheHit = true;
-    pickedSource = cached.from || cached.provider || "cache";
-    recipe = cached.recipe;
-    ingredients = [...cached.ingredients];
-    notes =
-      typeof cached.notes === "object" && cached.notes
-        ? { ...cached.notes }
-        : {};
-    out = {
-      ...cached,
-      cache: true,
-      recipe,
-      ingredients
-    };
-    selectedProvider = pickedSource;
+  // LATENCY OPTIMIZATION: Run cache read and provider fetch in parallel
+  // On cache miss, we save the cache lookup latency (~50-200ms)
+  // On cache hit, we use cached result (provider call is discarded)
+  let cached = null;
+  let providerResultPromise = null;
+
+  if (force) {
+    // Force reanalyze: skip cache entirely
+    const { candidateOut, selected } = await resolveFromProviders();
+    out = candidateOut;
+    selectedProvider = selected;
   } else {
-    const { candidateOut, selected } = await resolveFromProviders();
-    out = candidateOut;
-    selectedProvider = selected;
-  }
+    // Start both cache read and provider call in parallel
+    const cachePromise = recipeCacheRead(env, cacheKey).catch(() => null);
+    providerResultPromise = resolveFromProviders();
 
-  const cachedTitle =
-    (out && out.recipe && (out.recipe.title || out.recipe.name)) || "";
-  const dishLower = dish.toLowerCase();
-  if (
-    cacheHit &&
-    cachedTitle &&
-    isDietTitle(cachedTitle) &&
-    !isDietTitle(dishLower)
-  ) {
-    cacheHit = false;
-    out = null;
-    recipe = null;
-    ingredients = [];
-    notes = { ...(notes || {}), skipped_cached_diet: cachedTitle };
-    pickedSource = "cache_skip_diet";
+    cached = await cachePromise;
 
-    const { candidateOut, selected } = await resolveFromProviders();
-    out = candidateOut;
-    selectedProvider = selected;
+    if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
+      // Check for diet title mismatch before accepting cache
+      const cachedTitle = (cached.recipe.title || cached.recipe.name || "");
+      const dishLower = dish.toLowerCase();
+      const isDietMismatch = cachedTitle && isDietTitle(cachedTitle) && !isDietTitle(dishLower);
+
+      if (!isDietMismatch) {
+        cacheHit = true;
+        pickedSource = cached.from || cached.provider || "cache";
+        recipe = cached.recipe;
+        ingredients = [...cached.ingredients];
+        notes =
+          typeof cached.notes === "object" && cached.notes
+            ? { ...cached.notes }
+            : {};
+        out = {
+          ...cached,
+          cache: true,
+          recipe,
+          ingredients
+        };
+        selectedProvider = pickedSource;
+      } else {
+        // Diet title mismatch - use provider result
+        notes = { ...(notes || {}), skipped_cached_diet: cachedTitle };
+        pickedSource = "cache_skip_diet";
+        const { candidateOut, selected } = await providerResultPromise;
+        out = candidateOut;
+        selectedProvider = selected;
+      }
+    } else {
+      // Cache miss - use provider result (already running in parallel)
+      const { candidateOut, selected } = await providerResultPromise;
+      out = candidateOut;
+      selectedProvider = selected;
+    }
   }
 
   if (!cacheHit) {
