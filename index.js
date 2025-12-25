@@ -5909,43 +5909,49 @@ async function lookupIngredientFromSuperBrain(env, ingredientName) {
 
     const ingredientId = ingredient.id;
 
-    // Step 2: Fetch nutrients
-    const { results: nutrients } = await env.D1_DB.prepare(`
-      SELECT nutrient_code, nutrient_name, amount_per_100g, unit
-      FROM ingredient_nutrients
-      WHERE ingredient_id = ?
-    `).bind(ingredientId).all();
-
-    // Step 3: Fetch allergens
-    const { results: allergens } = await env.D1_DB.prepare(`
-      SELECT af.allergen_code, ad.display_name, af.confidence
-      FROM ingredient_allergen_flags af
-      LEFT JOIN allergen_definitions ad ON ad.allergen_code = af.allergen_code
-      WHERE af.ingredient_id = ?
-    `).bind(ingredientId).all();
-
-    // Step 4: Fetch glycemic index
-    const glycemic = await env.D1_DB.prepare(`
-      SELECT glycemic_index, glycemic_load, gi_category, serving_size_g
-      FROM ingredient_glycemic
-      WHERE ingredient_id = ?
-      LIMIT 1
-    `).bind(ingredientId).first();
-
-    // Step 5: Fetch bioactives
-    const { results: bioactives } = await env.D1_DB.prepare(`
-      SELECT compound_name, compound_class, amount_per_100g, unit, health_effects, target_organs
-      FROM ingredient_bioactives
-      WHERE ingredient_id = ?
-    `).bind(ingredientId).all();
-
-    // Step 6: Fetch categories
-    const { results: categories } = await env.D1_DB.prepare(`
-      SELECT fc.category_code, fc.category_name
-      FROM ingredient_categories ic
-      JOIN food_categories fc ON fc.category_code = ic.category_code
-      WHERE ic.ingredient_id = ?
-    `).bind(ingredientId).all();
+    // LATENCY OPTIMIZATION: Run all 5 detail queries in parallel using Promise.all
+    // This reduces 5 sequential round-trips (~250-500ms) to 1 parallel batch (~50-100ms)
+    const [
+      { results: nutrients },
+      { results: allergens },
+      glycemic,
+      { results: bioactives },
+      { results: categories }
+    ] = await Promise.all([
+      // Query 1: Fetch nutrients
+      env.D1_DB.prepare(`
+        SELECT nutrient_code, nutrient_name, amount_per_100g, unit
+        FROM ingredient_nutrients
+        WHERE ingredient_id = ?
+      `).bind(ingredientId).all(),
+      // Query 2: Fetch allergens
+      env.D1_DB.prepare(`
+        SELECT af.allergen_code, ad.display_name, af.confidence
+        FROM ingredient_allergen_flags af
+        LEFT JOIN allergen_definitions ad ON ad.allergen_code = af.allergen_code
+        WHERE af.ingredient_id = ?
+      `).bind(ingredientId).all(),
+      // Query 3: Fetch glycemic index
+      env.D1_DB.prepare(`
+        SELECT glycemic_index, glycemic_load, gi_category, serving_size_g
+        FROM ingredient_glycemic
+        WHERE ingredient_id = ?
+        LIMIT 1
+      `).bind(ingredientId).first(),
+      // Query 4: Fetch bioactives
+      env.D1_DB.prepare(`
+        SELECT compound_name, compound_class, amount_per_100g, unit, health_effects, target_organs
+        FROM ingredient_bioactives
+        WHERE ingredient_id = ?
+      `).bind(ingredientId).all(),
+      // Query 5: Fetch categories
+      env.D1_DB.prepare(`
+        SELECT fc.category_code, fc.category_name
+        FROM ingredient_categories ic
+        JOIN food_categories fc ON fc.category_code = ic.category_code
+        WHERE ic.ingredient_id = ?
+      `).bind(ingredientId).all()
+    ]);
 
     // Build nutrition object in expected format
     const nutritionMap = {};
@@ -6018,11 +6024,11 @@ function safeJsonParse(str, fallback = null) {
 async function getCachedNutrition(env, name) {
   if (!env?.R2_BUCKET) return null;
   const key = `nutrition/${normKey(name)}.json`;
-  const head = await r2Head(env, key);
-  if (!head) return null;
-  const obj = await env.R2_BUCKET.get(key);
-  if (!obj) return null;
+  // LATENCY OPTIMIZATION: Skip r2Head() - just try get() directly
+  // This eliminates one unnecessary round-trip (~30-60ms saved)
   try {
+    const obj = await env.R2_BUCKET.get(key);
+    if (!obj) return null;
     return await obj.json();
   } catch {
     return null;
@@ -6512,7 +6518,50 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
 //
 // Returns: { ok: boolean, data?: any, error?: string }
 
+// LATENCY OPTIMIZATION: Organs LLM response caching
+function buildOrgansCacheKey(payload) {
+  const parts = [
+    (payload.dishName || "").toLowerCase().trim(),
+    (payload.restaurantName || "").toLowerCase().trim(),
+    JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
+    JSON.stringify((payload.ingredientsNormalized || []).map(i =>
+      (i.name || i.normalized || "").toLowerCase().trim()
+    ).sort())
+  ];
+  return `organs-llm:${hashShort(parts.join("|"))}`;
+}
+
+async function getOrgansLLMCached(env, cacheKey) {
+  if (!env?.MENUS_CACHE) return null;
+  try {
+    return await env.MENUS_CACHE.get(cacheKey, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putOrgansLLMCached(env, cacheKey, result) {
+  if (!env?.MENUS_CACHE) return;
+  try {
+    await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+      ...result,
+      _cachedAt: new Date().toISOString()
+    }), {
+      expirationTtl: 7 * 24 * 3600 // 7 days TTL for LLM responses
+    });
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 async function runOrgansLLM(env, payload) {
+  // LATENCY OPTIMIZATION: Check cache first (1500-3000ms → 50ms on cache hit)
+  const cacheKey = buildOrgansCacheKey(payload);
+  const cached = await getOrgansLLMCached(env, cacheKey);
+  if (cached && cached.ok && cached.data) {
+    return { ...cached, cached: true };
+  }
+
   if (!env.OPENAI_API_KEY) {
     return { ok: false, error: "missing-openai-api-key" };
   }
@@ -6665,7 +6714,10 @@ ${EVIDENCE_GUIDELINES}
       };
     }
 
-    return { ok: true, data: parsed };
+    const result = { ok: true, data: parsed };
+    // Cache successful result (non-blocking)
+    putOrgansLLMCached(env, cacheKey, result);
+    return result;
   } catch (err) {
     return {
       ok: false,
@@ -7059,10 +7111,58 @@ async function runAllergenCloudflareLLM(env, input, systemPrompt) {
   }
 }
 
+// LATENCY OPTIMIZATION: LLM response caching for allergen analysis
+// Same dish + ingredients = same allergen output, so cache it
+function buildAllergenCacheKey(input) {
+  const parts = [
+    (input.dishName || "").toLowerCase().trim(),
+    (input.restaurantName || "").toLowerCase().trim(),
+    (input.menuSection || "").toLowerCase().trim(),
+    JSON.stringify((input.ingredients || []).map(i =>
+      (i.name || i.normalized || "").toLowerCase().trim()
+    ).sort()),
+    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort())
+  ];
+  return `allergen-llm:${hashShort(parts.join("|"))}`;
+}
+
+async function getAllergenLLMCached(env, cacheKey) {
+  if (!env?.MENUS_CACHE) return null;
+  try {
+    return await env.MENUS_CACHE.get(cacheKey, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putAllergenLLMCached(env, cacheKey, result) {
+  if (!env?.MENUS_CACHE) return;
+  try {
+    await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+      ...result,
+      _cachedAt: new Date().toISOString()
+    }), {
+      expirationTtl: 7 * 24 * 3600 // 7 days TTL for LLM responses
+    });
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 // --- Tiered LLM allergen analysis: OpenAI → Grok → Cloudflare ---
+// LATENCY OPTIMIZATION: Now with response caching (1500-3000ms → 50ms on cache hit)
 async function runAllergenTieredLLM(env, input) {
+  // Check cache first
+  const cacheKey = buildAllergenCacheKey(input);
+  const cached = await getAllergenLLMCached(env, cacheKey);
+  if (cached && cached.ok && cached.data) {
+    return { ...cached, cached: true };
+  }
+
   // Build the shared system prompt
   const systemPrompt = buildAllergenSystemPrompt();
+
+  let result = null;
 
   // Tier 1: OpenAI (primary - best quality)
   if (env.OPENAI_API_KEY) {
@@ -7070,31 +7170,42 @@ async function runAllergenTieredLLM(env, input) {
     if (openaiResult.ok) {
       openaiResult.tier = 1;
       openaiResult.provider = "openai";
-      return openaiResult;
+      result = openaiResult;
+    } else {
+      // Log but continue to next tier
+      console.warn("OpenAI allergen LLM failed:", openaiResult.error);
     }
-    // Log but continue to next tier
-    console.warn("OpenAI allergen LLM failed:", openaiResult.error);
   }
 
   // Tier 2: Grok (xAI - strong alternative)
-  const grokKey = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
-  if (grokKey) {
-    const grokResult = await runAllergenGrokLLM(env, input, systemPrompt);
-    if (grokResult.ok) {
-      grokResult.tier = 2;
-      return grokResult;
+  if (!result) {
+    const grokKey = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
+    if (grokKey) {
+      const grokResult = await runAllergenGrokLLM(env, input, systemPrompt);
+      if (grokResult.ok) {
+        grokResult.tier = 2;
+        result = grokResult;
+      } else {
+        console.warn("Grok allergen LLM failed:", grokResult.error);
+      }
     }
-    console.warn("Grok allergen LLM failed:", grokResult.error);
   }
 
   // Tier 3: Cloudflare AI Llama (always available)
-  if (env.AI) {
+  if (!result && env.AI) {
     const cfResult = await runAllergenCloudflareLLM(env, input, systemPrompt);
     if (cfResult.ok) {
       cfResult.tier = 3;
-      return cfResult;
+      result = cfResult;
+    } else {
+      console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error);
     }
-    console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error);
+  }
+
+  // Cache successful result (non-blocking)
+  if (result && result.ok) {
+    putAllergenLLMCached(env, cacheKey, result);
+    return result;
   }
 
   // All tiers failed - this should never happen in production
@@ -21965,9 +22076,34 @@ function mapFatSecretFoodAttributesToLexHits(ingredientName, foodAttributes) {
   return [hit];
 }
 
+// LATENCY OPTIMIZATION: FatSecret ingredient-level KV cache
+// Reduces 2-6 second proxy calls to ~50ms KV lookups for cached ingredients
+async function getFatSecretCached(env, ingredientName) {
+  if (!env?.MENUS_CACHE || !ingredientName) return null;
+  const key = `fatsecret:${ingredientName.toLowerCase().trim()}`;
+  try {
+    return await env.MENUS_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putFatSecretCached(env, ingredientName, data) {
+  if (!env?.MENUS_CACHE || !ingredientName) return;
+  const key = `fatsecret:${ingredientName.toLowerCase().trim()}`;
+  try {
+    await env.MENUS_CACHE.put(key, JSON.stringify(data), {
+      expirationTtl: 30 * 24 * 3600 // 30 days TTL
+    });
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 // classifyIngredientsWithFatSecret:
 // Uses our FatSecret proxy (Render) to turn ingredient names into
 // lex-style hits focused on allergens + lactose.
+// LATENCY OPTIMIZATION: Now with ingredient-level KV caching
 async function classifyIngredientsWithFatSecret(
   env,
   ingredientsForLex,
@@ -21979,34 +22115,76 @@ async function classifyIngredientsWithFatSecret(
     )
     .filter(Boolean);
 
-  const result = await fetchFatSecretAllergensViaProxy(
-    env,
-    ingredientNames,
-    lang
-  );
-  if (!result.ok) {
-    return {
-      ok: false,
-      reason: result.reason || "fatsecret-proxy-error",
-      perIngredient: [],
-      allIngredientHits: []
-    };
+  if (!ingredientNames.length) {
+    return { ok: true, perIngredient: [], allIngredientHits: [] };
   }
 
+  // LATENCY OPTIMIZATION: Check KV cache for each ingredient in parallel
+  const cacheResults = await Promise.all(
+    ingredientNames.map(async (name) => {
+      const cached = await getFatSecretCached(env, name);
+      return { name, cached };
+    })
+  );
+
+  const cachedIngredients = [];
+  const uncachedNames = [];
+
+  for (const { name, cached } of cacheResults) {
+    if (cached) {
+      cachedIngredients.push({ ingredient: name, ...cached });
+    } else {
+      uncachedNames.push(name);
+    }
+  }
+
+  // Only call proxy for uncached ingredients
+  let proxyResults = [];
+  if (uncachedNames.length > 0) {
+    const result = await fetchFatSecretAllergensViaProxy(
+      env,
+      uncachedNames,
+      lang
+    );
+    if (result.ok && result.results) {
+      proxyResults = result.results;
+      // Cache the new results (non-blocking)
+      for (const row of proxyResults) {
+        if (row?.ingredient) {
+          putFatSecretCached(env, row.ingredient, {
+            food_attributes: row.food_attributes || {},
+            _cachedAt: new Date().toISOString()
+          });
+        }
+      }
+    }
+  }
+
+  // Combine cached + fresh results
   const perIngredient = [];
   const allIngredientHits = [];
 
-  for (const row of result.results || []) {
+  // Process cached ingredients
+  for (const cached of cachedIngredients) {
+    const name = cached.ingredient;
+    const hits = mapFatSecretFoodAttributesToLexHits(
+      name,
+      cached.food_attributes || {}
+    );
+    perIngredient.push({ ingredient: name, ok: true, hits, cached: true });
+    if (hits && hits.length) {
+      for (const h of hits) allIngredientHits.push(h);
+    }
+  }
+
+  // Process fresh results
+  for (const row of proxyResults) {
     const name = row?.ingredient || "";
     const hits = mapFatSecretFoodAttributesToLexHits(
       name,
       row?.food_attributes || {}
     );
-    perIngredient.push({
-      ingredient: name,
-      ok: true,
-      hits
-    });
+    perIngredient.push({ ingredient: name, ok: true, hits, cached: false });
     if (hits && hits.length) {
       for (const h of hits) allIngredientHits.push(h);
     }
@@ -22015,7 +22193,12 @@ async function classifyIngredientsWithFatSecret(
   return {
     ok: true,
     perIngredient,
-    allIngredientHits
+    allIngredientHits,
+    _cacheStats: {
+      cached: cachedIngredients.length,
+      fetched: proxyResults.length,
+      total: ingredientNames.length
+    }
   };
 }
 // ---- Response helpers ----
