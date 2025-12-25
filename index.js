@@ -6519,8 +6519,10 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
 // Returns: { ok: boolean, data?: any, error?: string }
 
 // LATENCY OPTIMIZATION: Organs LLM response caching
+// PIPELINE_VERSION in key auto-invalidates when prompts/scoring logic changes
 function buildOrgansCacheKey(payload) {
   const parts = [
+    PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
     (payload.dishName || "").toLowerCase().trim(),
     (payload.restaurantName || "").toLowerCase().trim(),
     JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
@@ -6543,12 +6545,12 @@ async function getOrgansLLMCached(env, cacheKey) {
 async function putOrgansLLMCached(env, cacheKey, result) {
   if (!env?.MENUS_CACHE) return;
   try {
+    // NO TTL - LLM output for same inputs is deterministic
+    // PIPELINE_VERSION in cache key handles invalidation when prompts change
     await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
       ...result,
       _cachedAt: new Date().toISOString()
-    }), {
-      expirationTtl: 7 * 24 * 3600 // 7 days TTL for LLM responses
-    });
+    }));
   } catch {
     // Cache write failure is non-fatal
   }
@@ -7112,9 +7114,11 @@ async function runAllergenCloudflareLLM(env, input, systemPrompt) {
 }
 
 // LATENCY OPTIMIZATION: LLM response caching for allergen analysis
-// Same dish + ingredients = same allergen output, so cache it
+// Same dish + ingredients + pipeline version = same allergen output
+// PIPELINE_VERSION in key auto-invalidates cache when prompts/logic change
 function buildAllergenCacheKey(input) {
   const parts = [
+    PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
     (input.dishName || "").toLowerCase().trim(),
     (input.restaurantName || "").toLowerCase().trim(),
     (input.menuSection || "").toLowerCase().trim(),
@@ -7138,12 +7142,12 @@ async function getAllergenLLMCached(env, cacheKey) {
 async function putAllergenLLMCached(env, cacheKey, result) {
   if (!env?.MENUS_CACHE) return;
   try {
+    // NO TTL - LLM output for same inputs is deterministic
+    // PIPELINE_VERSION in cache key handles invalidation when prompts change
     await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
       ...result,
       _cachedAt: new Date().toISOString()
-    }), {
-      expirationTtl: 7 * 24 * 3600 // 7 days TTL for LLM responses
-    });
+    }));
   } catch {
     // Cache write failure is non-fatal
   }
@@ -22077,10 +22081,13 @@ function mapFatSecretFoodAttributesToLexHits(ingredientName, foodAttributes) {
 }
 
 // LATENCY OPTIMIZATION: FatSecret ingredient-level KV cache
-// Reduces 2-6 second proxy calls to ~50ms KV lookups for cached ingredients
+// Ingredient allergen data is PERMANENT - milk will always contain lactose
+// Version prefix allows bulk invalidation if FatSecret schema changes
+const FATSECRET_CACHE_VERSION = "v1";
+
 async function getFatSecretCached(env, ingredientName) {
   if (!env?.MENUS_CACHE || !ingredientName) return null;
-  const key = `fatsecret:${ingredientName.toLowerCase().trim()}`;
+  const key = `fatsecret:${FATSECRET_CACHE_VERSION}:${ingredientName.toLowerCase().trim()}`;
   try {
     return await env.MENUS_CACHE.get(key, "json");
   } catch {
@@ -22090,11 +22097,11 @@ async function getFatSecretCached(env, ingredientName) {
 
 async function putFatSecretCached(env, ingredientName, data) {
   if (!env?.MENUS_CACHE || !ingredientName) return;
-  const key = `fatsecret:${ingredientName.toLowerCase().trim()}`;
+  const key = `fatsecret:${FATSECRET_CACHE_VERSION}:${ingredientName.toLowerCase().trim()}`;
   try {
-    await env.MENUS_CACHE.put(key, JSON.stringify(data), {
-      expirationTtl: 30 * 24 * 3600 // 30 days TTL
-    });
+    // NO TTL - ingredient allergen data is permanent knowledge
+    // "Milk contains lactose" doesn't expire
+    await env.MENUS_CACHE.put(key, JSON.stringify(data));
   } catch {
     // Cache write failure is non-fatal
   }
