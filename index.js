@@ -8629,8 +8629,37 @@ async function fetchFromOpenAI(env, dish, cuisine = "", lang = "en") {
   }
 }
 
+// LATENCY OPTIMIZATION: Cache Zestful parsing results
+// Ingredient parsing is deterministic - same inputs always give same outputs
+function buildZestfulCacheKey(lines) {
+  const sorted = [...lines].map(l => (l || "").toLowerCase().trim()).sort();
+  return `zestful:${PIPELINE_VERSION}:${hashShort(sorted.join("|"))}`;
+}
+
+async function getZestfulCached(env, cacheKey) {
+  if (!env?.MENUS_CACHE) return null;
+  try {
+    return await env.MENUS_CACHE.get(cacheKey, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putZestfulCached(env, cacheKey, data) {
+  if (!env?.MENUS_CACHE || !data) return;
+  try {
+    // No TTL - parsing results are permanent knowledge
+    await env.MENUS_CACHE.put(cacheKey, JSON.stringify(data));
+  } catch {}
+}
+
 async function callZestful(env, lines = []) {
   if (!lines?.length) return null;
+
+  // Check cache first
+  const cacheKey = buildZestfulCacheKey(lines);
+  const cached = await getZestfulCached(env, cacheKey);
+  if (cached) return cached;
 
   const host = (env.ZESTFUL_RAPID_HOST || "zestful.p.rapidapi.com").trim();
   const url = `https://${host}/parseIngredients`;
@@ -8676,7 +8705,12 @@ async function callZestful(env, lines = []) {
       _conf: r.confidence ?? null
     }));
 
-    return parsed.length ? parsed : null;
+    if (parsed.length) {
+      // Cache successful result (non-blocking)
+      putZestfulCached(env, cacheKey, parsed);
+      return parsed;
+    }
+    return null;
   } catch (err) {
     console.log("Zestful fail:", err?.message || String(err));
     return null;
@@ -8684,7 +8718,30 @@ async function callZestful(env, lines = []) {
 }
 
 // --- Open Food Facts fallback ---
+// LATENCY OPTIMIZATION: Cache OFF results - nutrition data is permanent knowledge
+async function getOFFCached(env, name) {
+  if (!env?.MENUS_CACHE || !name) return null;
+  const key = `off:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    return await env.MENUS_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putOFFCached(env, name, data) {
+  if (!env?.MENUS_CACHE || !name) return;
+  const key = `off:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    await env.MENUS_CACHE.put(key, JSON.stringify(data));
+  } catch {}
+}
+
 async function callOFF(env, name) {
+  // Check cache first
+  const cached = await getOFFCached(env, name);
+  if (cached) return cached;
+
   const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(name)}&search_simple=1&action=process&json=1&page_size=1`;
   try {
     const res = await fetch(url, {
@@ -8695,7 +8752,7 @@ async function callOFF(env, name) {
     const p = data?.products?.[0];
     if (!p) return null;
 
-    return {
+    const result = {
       description: p.product_name || p.generic_name || name,
       brand: p.brands || null,
       source: "OPEN_FOOD_FACTS",
@@ -8712,6 +8769,10 @@ async function callOFF(env, name) {
             : null
       }
     };
+
+    // Cache result (non-blocking)
+    putOFFCached(env, name, result);
+    return result;
   } catch (err) {
     return null;
   }
