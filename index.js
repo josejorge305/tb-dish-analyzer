@@ -2628,7 +2628,28 @@ async function lookupComboFromDB(env, dishName, restaurantName) {
  * @param {string} restaurantName
  * @returns {Promise<{components: array, source: string}>}
  */
+// LATENCY OPTIMIZATION: Cache combo decomposition results
+// Same combo meal = same components (permanent knowledge)
+function buildComboCacheKey(dishName, restaurantName) {
+  const normalized = [
+    (dishName || "").toLowerCase().trim(),
+    (restaurantName || "").toLowerCase().trim()
+  ].join("|");
+  return `combo-llm:${hashShort(normalized)}`;
+}
+
 async function decomposeComboWithLLM(env, dishName, restaurantName) {
+  // Check cache first
+  const cacheKey = buildComboCacheKey(dishName, restaurantName);
+  if (env?.MENUS_CACHE) {
+    try {
+      const cached = await env.MENUS_CACHE.get(cacheKey, "json");
+      if (cached && Array.isArray(cached.components)) {
+        return { ...cached, cached: true };
+      }
+    } catch {}
+  }
+
   const prompt = `You are a food expert. The dish "${dishName}"${restaurantName ? ` from "${restaurantName}"` : ""} is a combo/platter meal.
 
 List the individual food items that come with this meal. Return ONLY a JSON array of objects with this format:
@@ -2644,6 +2665,8 @@ Rules:
 - Return valid JSON only, no explanation`;
 
   try {
+    let result = null;
+
     // Try OpenAI first
     if (env.OPENAI_API_KEY) {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -2666,13 +2689,13 @@ Rules:
         const jsonMatch = content.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           const components = JSON.parse(jsonMatch[0]);
-          return { components, source: "openai" };
+          result = { components, source: "openai" };
         }
       }
     }
 
     // Fallback to Cloudflare AI
-    if (env.AI) {
+    if (!result && env.AI) {
       const aiResult = await env.AI.run("@cf/meta/llama-3-8b-instruct", {
         messages: [{ role: "user", content: prompt }]
       });
@@ -2680,15 +2703,80 @@ Rules:
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const components = JSON.parse(jsonMatch[0]);
-        return { components, source: "cloudflare" };
+        result = { components, source: "cloudflare" };
       }
     }
 
-    return { components: [], source: "none" };
+    if (!result) {
+      result = { components: [], source: "none" };
+    }
+
+    // Cache successful result (permanent - combo compositions don't change)
+    if (result.components.length > 0 && env?.MENUS_CACHE) {
+      try {
+        await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+          ...result,
+          _cachedAt: new Date().toISOString()
+        }));
+      } catch {}
+    }
+
+    return result;
   } catch (e) {
     console.error("decomposeComboWithLLM error:", e);
     return { components: [], source: "error", error: String(e) };
   }
+}
+
+/**
+ * LATENCY OPTIMIZATION: Cache FatSecret access token
+ * Tokens last 3600s, so we cache for 3000s to be safe
+ * Eliminates redundant OAuth calls (500ms each)
+ */
+async function getFatSecretTokenCached(env) {
+  if (!env.FATSECRET_CLIENT_ID || !env.FATSECRET_CLIENT_SECRET) {
+    return null;
+  }
+
+  // Try KV cache first
+  const cacheKey = "fatsecret:access_token";
+  if (env?.MENUS_CACHE) {
+    try {
+      const cached = await env.MENUS_CACHE.get(cacheKey, "json");
+      if (cached?.token && cached.expiresAt > Date.now()) {
+        return cached.token;
+      }
+    } catch {}
+  }
+
+  // Fetch new token
+  const tokenResponse = await fetch("https://oauth.fatsecret.com/connect/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${env.FATSECRET_CLIENT_ID}:${env.FATSECRET_CLIENT_SECRET}`)}`
+    },
+    body: "grant_type=client_credentials&scope=basic"
+  });
+
+  if (!tokenResponse.ok) return null;
+  const tokenData = await tokenResponse.json();
+  const accessToken = tokenData.access_token;
+  const expiresIn = tokenData.expires_in || 3600;
+
+  // Cache token (with buffer before expiry)
+  if (accessToken && env?.MENUS_CACHE) {
+    try {
+      await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+        token: accessToken,
+        expiresAt: Date.now() + (expiresIn - 300) * 1000 // 5min buffer
+      }), {
+        expirationTtl: expiresIn - 300 // Let KV expire it too
+      });
+    } catch {}
+  }
+
+  return accessToken;
 }
 
 /**
@@ -2705,19 +2793,9 @@ async function fetchComponentNutrition(env, componentName, quantity = 1) {
   }
 
   try {
-    // Get FatSecret OAuth token (reuse existing helper if available)
-    const tokenResponse = await fetch("https://oauth.fatsecret.com/connect/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${btoa(`${env.FATSECRET_CLIENT_ID}:${env.FATSECRET_CLIENT_SECRET}`)}`
-      },
-      body: "grant_type=client_credentials&scope=basic"
-    });
-
-    if (!tokenResponse.ok) return null;
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
+    // LATENCY OPTIMIZATION: Use cached token instead of fetching every time
+    const accessToken = await getFatSecretTokenCached(env);
+    if (!accessToken) return null;
 
     // Search for the food
     const searchUrl = `https://platform.fatsecret.com/rest/server.api?method=foods.search&search_expression=${encodeURIComponent(componentName)}&format=json&max_results=1`;
@@ -6550,6 +6628,7 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
 
 // LATENCY OPTIMIZATION: Organs LLM response caching
 // PIPELINE_VERSION in key auto-invalidates when prompts/scoring logic changes
+// IMPORTANT: Include vision_insights to prevent stale cache when image data differs
 function buildOrgansCacheKey(payload) {
   const parts = [
     PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
@@ -6558,7 +6637,10 @@ function buildOrgansCacheKey(payload) {
     JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
     JSON.stringify((payload.ingredientsNormalized || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
-    ).sort())
+    ).sort()),
+    // Include vision data in cache key for correctness
+    payload.vision_insights ? hashShort(JSON.stringify(payload.vision_insights)) : "no-vision",
+    payload.plate_components?.length ? hashShort(JSON.stringify(payload.plate_components)) : "no-components"
   ];
   return `organs-llm:${hashShort(parts.join("|"))}`;
 }
@@ -7144,8 +7226,9 @@ async function runAllergenCloudflareLLM(env, input, systemPrompt) {
 }
 
 // LATENCY OPTIMIZATION: LLM response caching for allergen analysis
-// Same dish + ingredients + pipeline version = same allergen output
+// Same dish + ingredients + vision data + pipeline version = same allergen output
 // PIPELINE_VERSION in key auto-invalidates cache when prompts/logic change
+// IMPORTANT: Include vision_insights to prevent stale cache when image data differs
 function buildAllergenCacheKey(input) {
   const parts = [
     PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
@@ -7155,7 +7238,10 @@ function buildAllergenCacheKey(input) {
     JSON.stringify((input.ingredients || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
-    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort())
+    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort()),
+    // Include vision data in cache key for correctness
+    input.vision_insights ? hashShort(JSON.stringify(input.vision_insights)) : "no-vision",
+    input.plate_components?.length ? hashShort(JSON.stringify(input.plate_components)) : "no-components"
   ];
   return `allergen-llm:${hashShort(parts.join("|"))}`;
 }
@@ -7533,6 +7619,12 @@ Return exactly ONE JSON object with this shape:
   }
 }
 
+// LATENCY OPTIMIZATION: Cache portion vision results
+// Same image = same visual analysis (permanent knowledge)
+function buildPortionVisionCacheKey(imageUrl) {
+  return `portion-vision:${hashShort(imageUrl)}`;
+}
+
 async function runPortionVisionLLM(env, input) {
   const imageUrl = input && input.imageUrl ? String(input.imageUrl) : null;
 
@@ -7554,6 +7646,17 @@ async function runPortionVisionLLM(env, input) {
       },
       insights: null
     };
+  }
+
+  // Check cache first (same image = same visual analysis)
+  const cacheKey = buildPortionVisionCacheKey(imageUrl);
+  if (env?.MENUS_CACHE) {
+    try {
+      const cached = await env.MENUS_CACHE.get(cacheKey, "json");
+      if (cached && cached.ok && cached.insights) {
+        return { ...cached, cached: true };
+      }
+    } catch {}
   }
 
   if (!env.OPENAI_API_KEY) {
@@ -7945,7 +8048,7 @@ No extra keys, no commentary outside JSON.
       plate_components
     };
 
-    return {
+    const result = {
       ok: true,
       source: "portion_vision_openai",
       portionFactor: pf,
@@ -7962,6 +8065,18 @@ No extra keys, no commentary outside JSON.
       },
       insights
     };
+
+    // Cache successful result (permanent - same image = same visual analysis)
+    if (env?.MENUS_CACHE) {
+      try {
+        await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+          ...result,
+          _cachedAt: new Date().toISOString()
+        }));
+      } catch {}
+    }
+
+    return result;
   } catch (err) {
     return {
       ok: false,
