@@ -9008,10 +9008,33 @@ function nutritionSummaryFromEdamamTotalNutrients(totalNutrients) {
 }
 
 // --- USDA FoodData Central: search + prefer SR/Foundation + detail fetch ---
+// LATENCY OPTIMIZATION: Cache USDA FDC results - nutrition data is permanent knowledge
+async function getUSDAFDCCached(env, name) {
+  if (!env?.MENUS_CACHE || !name) return null;
+  const key = `usda-fdc:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    return await env.MENUS_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putUSDAFDCCached(env, name, data) {
+  if (!env?.MENUS_CACHE || !name) return;
+  const key = `usda-fdc:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    await env.MENUS_CACHE.put(key, JSON.stringify(data));
+  } catch {}
+}
+
 async function callUSDAFDC(env, name) {
   const host = env.USDA_FDC_HOST || "api.nal.usda.gov";
   const key = env.USDA_FDC_API_KEY;
   if (!key || !name) return null;
+
+  // Check cache first
+  const cached = await getUSDAFDCCached(env, name);
+  if (cached) return cached;
 
   const searchUrl = `https://${host}/fdc/v1/foods/search?query=${encodeURIComponent(name)}&pageSize=5&dataType=SR%20Legacy,Survey%20(FNDDS),Foundation,Branded&api_key=${key}`;
   const sres = await fetch(searchUrl, {
@@ -9168,27 +9191,41 @@ async function callUSDAFDC(env, name) {
       bestMatchEvenIfProcessed = payload;
 
     if (hasMacros && matches && !processed) {
+      // Cache and return
+      putUSDAFDCCached(env, name, payload);
       return payload;
     }
   }
 
-  if (bestMatchEvenIfProcessed) return bestMatchEvenIfProcessed;
-  if (bestWithMacros) return bestWithMacros;
-  if (firstPayload) return firstPayload;
+  let result = null;
+  if (bestMatchEvenIfProcessed) {
+    result = bestMatchEvenIfProcessed;
+  } else if (bestWithMacros) {
+    result = bestWithMacros;
+  } else if (firstPayload) {
+    result = firstPayload;
+  } else {
+    const best = foods[0];
+    if (best) {
+      result = {
+        fdcId: best.fdcId,
+        description: best.description,
+        brand: best.brandOwner || null,
+        dataType: best.dataType || null,
+        nutrients: makeEmpty(),
+        nutrients_per_serving: null,
+        nutrients_per_100g: null,
+        serving: null,
+        source: "USDA_FDC"
+      };
+    }
+  }
 
-  const best = foods[0];
-  if (!best) return null;
-  return {
-    fdcId: best.fdcId,
-    description: best.description,
-    brand: best.brandOwner || null,
-    dataType: best.dataType || null,
-    nutrients: makeEmpty(),
-    nutrients_per_serving: null,
-    nutrients_per_100g: null,
-    serving: null,
-    source: "USDA_FDC"
-  };
+  // Cache successful result (non-blocking)
+  if (result) {
+    putUSDAFDCCached(env, name, result);
+  }
+  return result;
 }
 
 async function resolveNutritionFromUSDA(env, dishName, description) {
