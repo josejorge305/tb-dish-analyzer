@@ -19925,8 +19925,8 @@ async function runDishAnalysis(env, body, ctx) {
   let fatsecretNutritionBreakdown = null;
   let fsComponentAllergens = null;
 
-  // ========== LATENCY OPTIMIZATION: Run recipe + combo in parallel ==========
-  // Combo detection only needs dishName/restaurantName, not recipe result
+  // ========== LATENCY OPTIMIZATION: Run recipe + combo + image ops in parallel ==========
+  // All three operations are independent and can start immediately
   const tParallelStart = Date.now();
 
   const recipePromise = (async () => {
@@ -19963,9 +19963,42 @@ async function runDishAnalysis(env, body, ctx) {
     }
   })();
 
-  // Wait for both in parallel
-  const [recipeResult, comboSettled] = await Promise.all([recipePromise, comboPromise]);
+  // LATENCY OPTIMIZATION: Start image operations in parallel with recipe + combo
+  // Saves 500-1500ms by not waiting for recipe/combo to complete first
+  const imageOpsPromise = dishImageUrl ? (async () => {
+    const t0 = Date.now();
+    try {
+      const [fsImageSettled, portionVisionSettled] = await Promise.allSettled([
+        callFatSecretImageRecognition(env, dishImageUrl),
+        runPortionVisionLLM(env, {
+          dishName,
+          restaurantName,
+          menuDescription,
+          menuSection,
+          imageUrl: dishImageUrl
+        })
+      ]);
+      return {
+        ok: true,
+        fsImageSettled,
+        portionVisionSettled,
+        ms: Date.now() - t0
+      };
+    } catch (e) {
+      return { ok: false, error: String(e), ms: Date.now() - t0 };
+    }
+  })() : Promise.resolve(null);
+
+  // Wait for all three in parallel
+  const [recipeResult, comboSettled, imageOpsResult] = await Promise.all([
+    recipePromise,
+    comboPromise,
+    imageOpsPromise
+  ]);
   debug.t_parallel_recipe_combo_ms = Date.now() - tParallelStart;
+  if (imageOpsResult?.ms) {
+    debug.t_image_ops_early_ms = imageOpsResult.ms;
+  }
 
   // Process combo result
   let comboResult = null;
@@ -21209,32 +21242,15 @@ async function runDishAnalysis(env, body, ctx) {
     dish_image_url: dishImageUrl
   };
 
-  // LATENCY OPTIMIZATION: Run image operations in parallel instead of sequential
-  // Combines: FatSecret image recognition + Portion Vision LLM
-  // Savings: 300-600ms by parallelizing + 500-1500ms by eliminating duplicate FatSecret call
+  // Process image operations results (already started in parallel with recipe + combo)
   let portionVisionDebug = null;
 
-  if (dishImageUrl) {
-    const tImageOpsStart = Date.now();
-
-    // Start both operations in parallel
-    const [fsImageSettled, portionVisionSettled] = await Promise.allSettled([
-      // FatSecret image recognition (SINGLE call, shared for dev + production)
-      callFatSecretImageRecognition(env, dishImageUrl),
-      // Portion vision LLM (runs in parallel with FatSecret)
-      runPortionVisionLLM(env, {
-        dishName,
-        restaurantName,
-        menuDescription,
-        menuSection,
-        imageUrl: dishImageUrl
-      })
-    ]);
-
-    debug.t_image_ops_parallel_ms = Date.now() - tImageOpsStart;
+  if (dishImageUrl && imageOpsResult && imageOpsResult.ok) {
+    // Use results from early parallel execution
+    const { fsImageSettled, portionVisionSettled } = imageOpsResult;
 
     // Process FatSecret result (shared for debug + production)
-    if (fsImageSettled.status === "fulfilled") {
+    if (fsImageSettled && fsImageSettled.status === "fulfilled") {
       const fsImageResult = fsImageSettled.value;
       fatsecretImageResult = fsImageResult;
       debug.fatsecret_image_result = fsImageResult;
@@ -21289,14 +21305,14 @@ async function runDishAnalysis(env, body, ctx) {
       } else if (fsImageResult && !fsImageResult.ok) {
         debug.fatsecret_image_error = fsImageResult.error || "unknown_error";
       }
-    } else {
+    } else if (fsImageSettled) {
       debug.fatsecret_image_error = "exception:" + String(fsImageSettled.reason);
     }
 
     // Process portion vision result
-    if (portionVisionSettled.status === "fulfilled") {
+    if (portionVisionSettled && portionVisionSettled.status === "fulfilled") {
       portionVisionDebug = portionVisionSettled.value;
-    } else {
+    } else if (portionVisionSettled) {
       portionVisionDebug = {
         ok: false,
         source: "portion_vision_stub",
