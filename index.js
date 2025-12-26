@@ -9399,6 +9399,139 @@ async function enqueueDishDirect(env, payload) {
 }
 
 // ---- Step 41.12: enqueue top items + write lean placeholders ----
+// ---- Parallel Batch Analysis System ----
+// In-memory priority tracking for the current request lifecycle
+const priorityJobIds = new Set();
+
+// Generate unique batch ID for tracking
+function generateBatchId() {
+  return `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Generate unique job ID for each dish
+function generateJobId() {
+  return (globalThis.crypto?.randomUUID && crypto.randomUUID()) ||
+    `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// Process a single dish analysis in background and cache the result
+async function processAndCacheDish(env, jobId, dishPayload) {
+  const startTime = Date.now();
+
+  try {
+    // Update status to processing
+    await r2WriteJSON(env, `jobs/${jobId}.json`, {
+      id: jobId,
+      status: "processing",
+      started_at: new Date().toISOString(),
+      dish_name: dishPayload.dishName,
+      restaurant_name: dishPayload.restaurantName
+    });
+
+    // Run the actual dish analysis
+    const { status, result } = await runDishAnalysis(env, {
+      ...dishPayload,
+      // Skip organs for faster initial processing - frontend can lazy-load
+      skip_organs: dishPayload.skip_organs !== false
+    }, null);
+
+    const processingMs = Date.now() - startTime;
+
+    if (status === 200 && result?.ok) {
+      // Write completed result to R2
+      await r2WriteJSON(env, `jobs/${jobId}.json`, {
+        id: jobId,
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        processing_ms: processingMs,
+        dish_name: dishPayload.dishName,
+        restaurant_name: dishPayload.restaurantName,
+        result: result
+      });
+
+      // Also cache in KV for fast access
+      const cacheKey = buildDishCacheKey(dishPayload);
+      if (env?.DISH_ANALYSIS_CACHE) {
+        await env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(result), {
+          expirationTtl: 86400 * 30 // 30 days
+        });
+      }
+
+      return { ok: true, jobId, status: "completed", processing_ms: processingMs };
+    } else {
+      // Analysis failed
+      await r2WriteJSON(env, `jobs/${jobId}.json`, {
+        id: jobId,
+        status: "failed",
+        failed_at: new Date().toISOString(),
+        processing_ms: processingMs,
+        dish_name: dishPayload.dishName,
+        error: result?.error || "analysis_failed"
+      });
+      return { ok: false, jobId, status: "failed", error: result?.error };
+    }
+  } catch (err) {
+    const processingMs = Date.now() - startTime;
+    // Write error status
+    await r2WriteJSON(env, `jobs/${jobId}.json`, {
+      id: jobId,
+      status: "error",
+      error_at: new Date().toISOString(),
+      processing_ms: processingMs,
+      dish_name: dishPayload.dishName,
+      error: String(err?.message || err)
+    });
+    return { ok: false, jobId, status: "error", error: String(err?.message || err) };
+  }
+}
+
+// Process multiple dishes in parallel with concurrency control
+async function processBatchInBackground(env, batchId, jobs, options = {}) {
+  const { concurrency = 5 } = options;
+  const results = [];
+
+  // Sort by priority - prioritized jobs first
+  const sortedJobs = [...jobs].sort((a, b) => {
+    const aPriority = priorityJobIds.has(a.jobId) ? 0 : 1;
+    const bPriority = priorityJobIds.has(b.jobId) ? 0 : 1;
+    return aPriority - bPriority;
+  });
+
+  // Process in batches with concurrency limit
+  for (let i = 0; i < sortedJobs.length; i += concurrency) {
+    const batch = sortedJobs.slice(i, i + concurrency);
+    const batchResults = await Promise.allSettled(
+      batch.map(job => processAndCacheDish(env, job.jobId, job.payload))
+    );
+
+    results.push(...batchResults.map((r, idx) => ({
+      jobId: batch[idx].jobId,
+      status: r.status,
+      value: r.status === "fulfilled" ? r.value : null,
+      error: r.status === "rejected" ? String(r.reason) : null
+    })));
+  }
+
+  // Update batch status
+  const completed = results.filter(r => r.value?.status === "completed").length;
+  const failed = results.filter(r => r.value?.status === "failed" || r.error).length;
+
+  await r2WriteJSON(env, `batches/${batchId}.json`, {
+    id: batchId,
+    status: "completed",
+    completed_at: new Date().toISOString(),
+    total: jobs.length,
+    completed: completed,
+    failed: failed,
+    jobs: results.map(r => ({
+      jobId: r.jobId,
+      status: r.value?.status || "error"
+    }))
+  });
+
+  return { batchId, total: jobs.length, completed, failed };
+}
+
 async function enqueueTopItems(
   env,
   topItems,
@@ -13669,6 +13802,326 @@ const _worker_impl = {
         );
       }
     }
+
+    // ============ PARALLEL BATCH ANALYSIS ENDPOINTS ============
+
+    // OPTIONS preflight for batch endpoints (CORS)
+    if (pathname.startsWith("/api/analyze/batch") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // POST /api/analyze/batch - Start parallel analysis for multiple dishes
+    // When restaurant page loads, frontend calls this with all menu items
+    // Returns immediately with job IDs while processing continues in background
+    if (pathname === "/api/analyze/batch" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const dishes = body.dishes || body.items || [];
+        const restaurantName = body.restaurantName || body.restaurant || "";
+        const concurrency = Math.min(body.concurrency || 5, 10); // Max 10 parallel
+
+        if (!Array.isArray(dishes) || dishes.length === 0) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_dishes",
+              hint: "Provide dishes array in request body."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Limit batch size to prevent abuse
+        if (dishes.length > 100) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "batch_too_large",
+              hint: "Maximum 100 dishes per batch."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        const batchId = generateBatchId();
+        const jobs = [];
+
+        // Check cache and create jobs for uncached dishes
+        for (const dish of dishes) {
+          const dishName = dish.dishName || dish.name || dish.title || "";
+          if (!dishName) continue;
+
+          const payload = {
+            dishName,
+            restaurantName: dish.restaurantName || restaurantName,
+            menuDescription: dish.description || dish.menuDescription || "",
+            menuSection: dish.section || dish.menuSection || "",
+            canonicalCategory: dish.category || dish.canonicalCategory || "",
+            imageUrl: dish.imageUrl || dish.image_url || null,
+            cuisine: dish.cuisine || body.cuisine || "",
+            placeId: dish.placeId || body.placeId || "",
+            user_id: body.user_id || body.userId || "",
+            skip_organs: true // Faster initial load, lazy-load organs later
+          };
+
+          // Check if already cached
+          const cacheKey = buildDishCacheKey(payload);
+          let cached = null;
+          if (env?.DISH_ANALYSIS_CACHE) {
+            try {
+              cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+            } catch (e) { /* ignore cache errors */ }
+          }
+
+          const jobId = generateJobId();
+          jobs.push({
+            jobId,
+            dishName,
+            payload,
+            cached: cached?.ok ? true : false,
+            cachedResult: cached?.ok ? cached : null
+          });
+        }
+
+        // Separate cached and uncached dishes
+        const cachedJobs = jobs.filter(j => j.cached);
+        const uncachedJobs = jobs.filter(j => !j.cached);
+
+        // Write initial batch status to R2
+        await r2WriteJSON(env, `batches/${batchId}.json`, {
+          id: batchId,
+          status: "processing",
+          created_at: new Date().toISOString(),
+          total: jobs.length,
+          cached: cachedJobs.length,
+          pending: uncachedJobs.length,
+          jobs: jobs.map(j => ({
+            jobId: j.jobId,
+            dishName: j.dishName,
+            status: j.cached ? "cached" : "pending"
+          }))
+        });
+
+        // Write initial status for each uncached job
+        await Promise.all(uncachedJobs.map(j =>
+          r2WriteJSON(env, `jobs/${j.jobId}.json`, {
+            id: j.jobId,
+            status: "pending",
+            created_at: new Date().toISOString(),
+            dish_name: j.dishName
+          })
+        ));
+
+        // Start background processing with ctx.waitUntil
+        // This ensures processing continues even if client disconnects
+        if (ctx && uncachedJobs.length > 0) {
+          ctx.waitUntil(
+            processBatchInBackground(env, batchId, uncachedJobs, { concurrency })
+              .catch(err => console.error("Batch processing error:", err))
+          );
+        }
+
+        // Return immediately with job IDs
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            batchId,
+            total: jobs.length,
+            cached: cachedJobs.length,
+            processing: uncachedJobs.length,
+            jobs: jobs.map(j => ({
+              jobId: j.jobId,
+              dishName: j.dishName,
+              status: j.cached ? "cached" : "pending",
+              result: j.cachedResult || null
+            }))
+          }),
+          { status: 202, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "batch_analysis_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
+    // GET /api/analyze/batch/status - Check status of a batch or individual job
+    // Poll this endpoint to get analysis results as they complete
+    if (pathname === "/api/analyze/batch/status" && request.method === "GET") {
+      try {
+        const batchId = url.searchParams.get("batchId") || url.searchParams.get("batch_id");
+        const jobId = url.searchParams.get("jobId") || url.searchParams.get("job_id");
+
+        if (!batchId && !jobId) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_id",
+              hint: "Provide batchId or jobId query parameter."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Single job status
+        if (jobId) {
+          const jobData = await r2ReadJSON(env, `jobs/${jobId}.json`);
+          if (!jobData) {
+            return new Response(
+              JSON.stringify({ ok: false, error: "job_not_found" }),
+              { status: 404, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+            );
+          }
+          return new Response(
+            JSON.stringify({ ok: true, job: jobData }),
+            { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Batch status
+        const batchData = await r2ReadJSON(env, `batches/${batchId}.json`);
+        if (!batchData) {
+          return new Response(
+            JSON.stringify({ ok: false, error: "batch_not_found" }),
+            { status: 404, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Optionally include full job results
+        const includeResults = url.searchParams.get("results") === "1";
+        if (includeResults && batchData.jobs) {
+          const jobResults = await Promise.all(
+            batchData.jobs.map(async (j) => {
+              const jobData = await r2ReadJSON(env, `jobs/${j.jobId}.json`);
+              return { ...j, data: jobData };
+            })
+          );
+          batchData.jobs = jobResults;
+        }
+
+        return new Response(
+          JSON.stringify({ ok: true, batch: batchData }),
+          { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "status_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
+    // POST /api/analyze/batch/priority - Elevate priority for a specific dish
+    // When user clicks "show analysis", call this to process that dish immediately
+    if (pathname === "/api/analyze/batch/priority" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const jobId = body.jobId || body.job_id;
+        const dishPayload = body.dish || body.payload;
+
+        if (!jobId) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_job_id",
+              hint: "Provide jobId in request body."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Check current job status
+        const jobData = await r2ReadJSON(env, `jobs/${jobId}.json`);
+
+        // If already completed, return the result immediately
+        if (jobData?.status === "completed" && jobData?.result) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              status: "completed",
+              result: jobData.result
+            }),
+            { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // If pending, process immediately instead of waiting
+        if (jobData?.status === "pending" || dishPayload) {
+          // Mark as priority in memory (for batch processor to check)
+          priorityJobIds.add(jobId);
+
+          // Process immediately if we have the payload
+          const payload = dishPayload || {
+            dishName: jobData?.dish_name,
+            restaurantName: jobData?.restaurant_name,
+            menuDescription: jobData?.menu_description || "",
+            skip_organs: false // Include organs for priority requests
+          };
+
+          if (!payload.dishName) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: "missing_dish_payload",
+                hint: "Provide dish payload for pending jobs."
+              }),
+              { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+            );
+          }
+
+          // Process synchronously for priority request
+          const result = await processAndCacheDish(env, jobId, payload);
+
+          return new Response(
+            JSON.stringify({
+              ok: result.ok,
+              status: result.status,
+              result: result.ok ? (await r2ReadJSON(env, `jobs/${jobId}.json`))?.result : null,
+              error: result.error
+            }),
+            { status: result.ok ? 200 : 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // If processing, return current status
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            status: jobData?.status || "unknown",
+            message: "Job is currently being processed"
+          }),
+          { status: 202, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "priority_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
+    // ============ END PARALLEL BATCH ANALYSIS ENDPOINTS ============
 
     if (pathname === "/analyze/allergens-mini" && request.method === "POST") {
       return handleAllergenMini(request, env, ctx);
