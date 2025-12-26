@@ -6676,10 +6676,6 @@ async function runOrgansLLM(env, payload) {
     return { ...cached, cached: true };
   }
 
-  if (!env.OPENAI_API_KEY) {
-    return { ok: false, error: "missing-openai-api-key" };
-  }
-
   const model = "gpt-4o-mini";
 
   const systemPrompt = `
@@ -6780,63 +6776,78 @@ You MUST return JSON with this shape:
 ${EVIDENCE_GUIDELINES}
 `;
 
-  const body = {
-    model,
-    response_format: { type: "json_object" },
-    max_completion_tokens: 1200,
-    messages: [
-      { role: "system", content: systemPrompt.trim() },
-      {
-        role: "user",
-        // send minified JSON to reduce tokens
-        content: JSON.stringify(payload)
-      }
-    ]
-  };
+  const messages = [
+    { role: "system", content: systemPrompt.trim() },
+    { role: "user", content: JSON.stringify(payload) }
+  ];
+
+  // LATENCY OPTIMIZATION: Race OpenAI and Cloudflare AI in parallel
+  const racingProviders = [];
+
+  // OpenAI provider
+  if (env.OPENAI_API_KEY) {
+    racingProviders.push(
+      (async () => {
+        const body = {
+          model,
+          response_format: { type: "json_object" },
+          max_completion_tokens: 1200,
+          messages
+        };
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`
+          },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`openai-organ-error-${res.status}`);
+        const json = await res.json();
+        const content = json?.choices?.[0]?.message?.content || "";
+        const parsed = JSON.parse(content);
+        return { ok: true, data: parsed, provider: "openai" };
+      })()
+    );
+  }
+
+  // Cloudflare AI provider
+  if (env.AI) {
+    racingProviders.push(
+      (async () => {
+        const cfMessages = messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }));
+        const aiResult = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+          messages: cfMessages,
+          max_tokens: 1200
+        });
+        if (!aiResult?.response) throw new Error("cloudflare-organ-empty");
+        // Extract JSON from response (may have markdown wrapping)
+        let content = aiResult.response;
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) content = jsonMatch[0];
+        const parsed = JSON.parse(content);
+        return { ok: true, data: parsed, provider: "cloudflare" };
+      })()
+    );
+  }
+
+  if (racingProviders.length === 0) {
+    return { ok: false, error: "no-llm-providers-available" };
+  }
 
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      return {
-        ok: false,
-        error: `openai-organ-error-${res.status}`,
-        details: text
-      };
-    }
-
-    const json = await res.json();
-    const content = json?.choices?.[0]?.message?.content || "";
-
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch (e) {
-      return {
-        ok: false,
-        error: "openai-organ-json-parse-error",
-        details: String(e),
-        raw: content
-      };
-    }
-
-    const result = { ok: true, data: parsed };
+    const result = await Promise.any(racingProviders);
     // Cache successful result (non-blocking)
     putOrgansLLMCached(env, cacheKey, result);
     return result;
-  } catch (err) {
+  } catch (aggregateError) {
     return {
       ok: false,
-      error: "openai-organ-exception",
-      details: String(err)
+      error: "all-organ-llms-failed",
+      details: aggregateError.errors?.map(e => e.message).join("; ")
     };
   }
 }
@@ -7270,7 +7281,7 @@ async function putAllergenLLMCached(env, cacheKey, result) {
 }
 
 // --- Tiered LLM allergen analysis: OpenAI → Grok → Cloudflare ---
-// LATENCY OPTIMIZATION: Now with response caching (1500-3000ms → 50ms on cache hit)
+// LATENCY OPTIMIZATION: Race OpenAI + Cloudflare in parallel, use first success
 async function runAllergenTieredLLM(env, input) {
   // Check cache first
   const cacheKey = buildAllergenCacheKey(input);
@@ -7282,22 +7293,51 @@ async function runAllergenTieredLLM(env, input) {
   // Build the shared system prompt
   const systemPrompt = buildAllergenSystemPrompt();
 
+  // LATENCY OPTIMIZATION: Race OpenAI and Cloudflare AI in parallel
+  // Use whichever responds successfully first
+  const racingProviders = [];
+
+  if (env.OPENAI_API_KEY) {
+    racingProviders.push(
+      (async () => {
+        const result = await runAllergenMiniLLM(env, input);
+        if (result.ok) {
+          result.tier = 1;
+          result.provider = "openai";
+          return result;
+        }
+        throw new Error(result.error || "openai_failed");
+      })()
+    );
+  }
+
+  if (env.AI) {
+    racingProviders.push(
+      (async () => {
+        const result = await runAllergenCloudflareLLM(env, input, systemPrompt);
+        if (result.ok) {
+          result.tier = 3;
+          result.provider = "cloudflare";
+          return result;
+        }
+        throw new Error(result.error || "cloudflare_failed");
+      })()
+    );
+  }
+
   let result = null;
 
-  // Tier 1: OpenAI (primary - best quality)
-  if (env.OPENAI_API_KEY) {
-    const openaiResult = await runAllergenMiniLLM(env, input);
-    if (openaiResult.ok) {
-      openaiResult.tier = 1;
-      openaiResult.provider = "openai";
-      result = openaiResult;
-    } else {
-      // Log but continue to next tier
-      console.warn("OpenAI allergen LLM failed:", openaiResult.error);
+  if (racingProviders.length > 0) {
+    try {
+      // Promise.any returns the first successful result
+      result = await Promise.any(racingProviders);
+    } catch (aggregateError) {
+      // All racing providers failed, log but continue to Grok fallback
+      console.warn("All racing allergen LLMs failed:", aggregateError.errors?.map(e => e.message));
     }
   }
 
-  // Tier 2: Grok (xAI - strong alternative)
+  // Fallback to Grok if racing failed
   if (!result) {
     const grokKey = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
     if (grokKey) {
@@ -7311,17 +7351,6 @@ async function runAllergenTieredLLM(env, input) {
     }
   }
 
-  // Tier 3: Cloudflare AI Llama (always available)
-  if (!result && env.AI) {
-    const cfResult = await runAllergenCloudflareLLM(env, input, systemPrompt);
-    if (cfResult.ok) {
-      cfResult.tier = 3;
-      result = cfResult;
-    } else {
-      console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error);
-    }
-  }
-
   // Cache successful result (non-blocking)
   if (result && result.ok) {
     putAllergenLLMCached(env, cacheKey, result);
@@ -7332,7 +7361,7 @@ async function runAllergenTieredLLM(env, input) {
   return {
     ok: false,
     error: "all-allergen-llm-tiers-failed",
-    details: "OpenAI, Grok, and Cloudflare AI all failed to analyze allergens"
+    details: "OpenAI, Cloudflare AI, and Grok all failed to analyze allergens"
   };
 }
 
