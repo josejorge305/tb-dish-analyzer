@@ -9429,10 +9429,12 @@ async function processAndCacheDish(env, jobId, dishPayload) {
     });
 
     // Run the actual dish analysis
+    // In background batch mode, we run FULL analysis (including organs)
+    // since user isn't waiting - no need to skip organs and lazy-load
     const { status, result } = await runDishAnalysis(env, {
       ...dishPayload,
-      // Skip organs for faster initial processing - frontend can lazy-load
-      skip_organs: dishPayload.skip_organs !== false
+      // Include organs in background processing - we have time
+      skip_organs: false
     }, null);
 
     const processingMs = Date.now() - startTime;
@@ -14122,6 +14124,140 @@ const _worker_impl = {
     }
 
     // ============ END PARALLEL BATCH ANALYSIS ENDPOINTS ============
+
+    // POST /api/analyze/organs - Trigger organs-only analysis for a dish
+    // Used when frontend has cached analysis with organs_pending=true
+    // and user clicks the organs section
+    if (pathname === "/api/analyze/organs" && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    if (pathname === "/api/analyze/organs" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const dishName = (body.dishName || body.dish || "").trim();
+        const restaurantName = (body.restaurantName || body.restaurant || "").trim();
+        const pollKey = body.pollKey || body.poll_key || body.organs_poll_key || "";
+
+        if (!dishName) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_dish_name",
+              hint: "Provide dishName in request body."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Check if organs already cached (from background processing)
+        const organsCacheKey = pollKey || `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+        if (env?.MENUS_CACHE) {
+          const cached = await env.MENUS_CACHE.get(organsCacheKey, "json");
+          if (cached?.ok && cached?.data) {
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                cached: true,
+                organs: cached.data,
+                timestamp: cached.timestamp
+              }),
+              { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+            );
+          }
+        }
+
+        // Build minimal payload for organs LLM
+        // Use provided data or fetch from cached analysis
+        let llmPayload = {
+          dishName,
+          restaurantName,
+          ingredientLines: body.ingredientLines || body.ingredients || [],
+          ingredientsNormalized: body.ingredientsNormalized || [],
+          existingFlags: body.existingFlags || {},
+          userFlags: body.userFlags || body.user_flags || [],
+          locale: body.lang || body.locale || "en",
+          vision_insights: body.vision_insights || null,
+          plate_components: body.plate_components || []
+        };
+
+        // If we don't have ingredients, try to get from cached analysis
+        if (llmPayload.ingredientLines.length === 0 && llmPayload.ingredientsNormalized.length === 0) {
+          const dishCacheKey = buildDishCacheKey({
+            dishName,
+            restaurantName,
+            menuDescription: body.menuDescription || "",
+            menuSection: body.menuSection || "",
+            canonicalCategory: body.canonicalCategory || ""
+          });
+
+          if (env?.DISH_ANALYSIS_CACHE) {
+            try {
+              const cachedAnalysis = await env.DISH_ANALYSIS_CACHE.get(dishCacheKey, "json");
+              if (cachedAnalysis?.normalized) {
+                llmPayload.ingredientLines = cachedAnalysis.normalized.ingredients_lines || cachedAnalysis.normalized.lines || [];
+                llmPayload.ingredientsNormalized = cachedAnalysis.normalized.items || [];
+              }
+              if (cachedAnalysis?.plate_components) {
+                llmPayload.plate_components = cachedAnalysis.plate_components;
+              }
+            } catch (e) { /* ignore cache errors */ }
+          }
+        }
+
+        // Run organs LLM
+        const t0 = Date.now();
+        const organsResult = await runOrgansLLM(env, llmPayload);
+        const processingMs = Date.now() - t0;
+
+        if (organsResult?.ok && organsResult?.data) {
+          // Cache the result for future polling
+          if (env?.MENUS_CACHE) {
+            await env.MENUS_CACHE.put(organsCacheKey, JSON.stringify({
+              ok: true,
+              data: organsResult.data,
+              timestamp: Date.now()
+            }));
+          }
+
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              cached: false,
+              organs: organsResult.data,
+              processing_ms: processingMs
+            }),
+            { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        } else {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: organsResult?.error || "organs_analysis_failed",
+              processing_ms: processingMs
+            }),
+            { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "organs_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
 
     if (pathname === "/analyze/allergens-mini" && request.method === "POST") {
       return handleAllergenMini(request, env, ctx);
