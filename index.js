@@ -917,6 +917,7 @@ async function handleOrgansFromDish(url, env, request) {
   const normalizedIngredients = ingredients.slice();
 
   function snapToKnownIngredient(name) {
+    if (!name || typeof name !== 'string') return name || '';
     const s = name.toLowerCase();
     if (s.includes("olive oil")) return "olive oil";
     if (s.includes("butter")) return "butter";
@@ -3556,7 +3557,7 @@ function parseOCRToCandidates(fullText) {
   const seen = new Set();
   const out = [];
   for (const it of items) {
-    const k = `${(it.section || "").toLowerCase()}|${it.title.toLowerCase()}|${it.price_text}`;
+    const k = `${(it.section || "").toLowerCase()}|${(it.title || "").toLowerCase()}|${it.price_text}`;
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(it);
@@ -5525,7 +5526,7 @@ function arrangeCookbookIngredients(rawList = []) {
   for (const it of rawList) {
     const entry = sanitizeIngredientForCookbook(it);
     if (!entry) continue;
-    const key = entry.name.toLowerCase();
+    const key = (entry.name || "").toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     cleaned.push(entry);
@@ -10213,7 +10214,8 @@ async function resolveRecipeWithCache(
     if (kv) {
       // Parallel KV reads instead of sequential loop
       const kvPromises = ingLines.map((line, i) => {
-        const k = `zestful:${line.toLowerCase()}`;
+        const lineStr = typeof line === 'string' ? line : (line?.name || line?.text || line?.original || '');
+        const k = `zestful:${lineStr.toLowerCase()}`;
         return kv.get(k, "json").then(row => ({ i, row })).catch(() => ({ i, row: null }));
       });
       const kvResults = await Promise.all(kvPromises);
@@ -10247,7 +10249,8 @@ async function resolveRecipeWithCache(
           // Parallel KV writes instead of sequential loop
           const putPromises = linesToParse.map((line, i) => {
             if (!zest[i]) return Promise.resolve();
-            const k = `zestful:${line.toLowerCase()}`;
+            const lineStr = typeof line === 'string' ? line : (line?.name || line?.text || line?.original || '');
+            const k = `zestful:${lineStr.toLowerCase()}`;
             return kv.put(k, JSON.stringify(zest[i]), { expirationTtl: 60 * 60 * 24 * 30 });
           });
           await Promise.all(putPromises);
@@ -10278,7 +10281,9 @@ async function resolveRecipeWithCache(
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
-            const k = `zestful:${ingLines[i].toLowerCase()}`;
+            const ingLine = ingLines[i];
+            const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
+            const k = `zestful:${ingLineStr.toLowerCase()}`;
             putPromises.push(kv.put(k, JSON.stringify(zest[j]), { expirationTtl: 60 * 60 * 24 * 30 }));
           }
         }
@@ -10947,7 +10952,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
     const missingIdx = [];
     if (kv) {
       for (let i = 0; i < ingLines.length; i++) {
-        const k = `zestful:${ingLines[i].toLowerCase()}`;
+        const ingLine = ingLines[i];
+        const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
+        const k = `zestful:${ingLineStr.toLowerCase()}`;
         let row = null;
         try {
           row = await kv.get(k, "json");
@@ -10989,7 +10996,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
         filled = zest;
         if (kv) {
           for (let i = 0; i < linesToParse.length; i++) {
-            const k = `zestful:${linesToParse[i].toLowerCase()}`;
+            const lineItem = linesToParse[i];
+            const lineStr = typeof lineItem === 'string' ? lineItem : (lineItem?.name || lineItem?.text || lineItem?.original || '');
+            const k = `zestful:${lineStr.toLowerCase()}`;
             if (zest[i]) {
               await kv.put(k, JSON.stringify(zest[i]), {
                 expirationTtl: 60 * 60 * 24 * 30
@@ -11031,7 +11040,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
-            const k = `zestful:${ingLines[i].toLowerCase()}`;
+            const ingLine = ingLines[i];
+            const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
+            const k = `zestful:${ingLineStr.toLowerCase()}`;
             await kv.put(k, JSON.stringify(zest[j]), {
               expirationTtl: 60 * 60 * 24 * 30
             });
