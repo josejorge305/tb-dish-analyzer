@@ -13653,6 +13653,43 @@ const _worker_impl = {
         );
       }
     }
+
+    // Lightweight endpoint for polling organs status (used with skip_organs flow)
+    if (pathname === "/pipeline/organs-status" && request.method === "GET") {
+      try {
+        const pollKey = url.searchParams.get("key");
+        if (!pollKey) {
+          return okJson({ ok: false, error: "missing_key_param" }, 400);
+        }
+
+        if (!env?.MENUS_CACHE) {
+          return okJson({ ok: false, error: "cache_unavailable" }, 500);
+        }
+
+        const cached = await env.MENUS_CACHE.get(pollKey, "json");
+        if (cached && cached.ok && cached.data) {
+          return okJson({
+            ok: true,
+            ready: true,
+            organs: cached.data,
+            timestamp: cached.timestamp
+          });
+        }
+
+        // Not ready yet
+        return okJson({
+          ok: true,
+          ready: false,
+          message: "Organs analysis still processing"
+        });
+      } catch (err) {
+        return okJson({
+          ok: false,
+          error: "organs_status_exception",
+          details: String(err?.message || err)
+        }, 500);
+      }
+    }
     if (
       pathname === "/pipeline/analyze-dish/card" &&
       request.method === "POST"
@@ -20643,15 +20680,42 @@ async function runDishAnalysis(env, body, ctx) {
     })();
 
     // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
-    // This reduces response time by 10-20s on first request
-    const organsPromise = skipOrgans
-      ? Promise.resolve({ ok: true, skipped: true, data: null })
-      : (async () => {
-          const t0 = Date.now();
-          const res = await runOrgansLLM(env, llmPayload);
-          debug.t_llm_organs_ms = Date.now() - t0;
-          return res;
-        })();
+    // Organs will run in background via waitUntil and be cached separately
+    let organsPromise;
+    let organsCacheKey = null;
+
+    if (skipOrgans) {
+      // Build cache key for organs-only storage
+      organsCacheKey = `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+
+      // Start organs in BACKGROUND via waitUntil - doesn't block response
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const res = await runOrgansLLM(env, llmPayload);
+            if (res.ok && env?.MENUS_CACHE) {
+              // Cache organs result separately for polling
+              await env.MENUS_CACHE.put(organsCacheKey, JSON.stringify({
+                ok: true,
+                data: res.data,
+                timestamp: Date.now()
+              }));
+            }
+          } catch (e) {
+            console.error("Background organs LLM failed:", e);
+          }
+        })());
+      }
+
+      organsPromise = Promise.resolve({ ok: true, skipped: true, data: null });
+    } else {
+      organsPromise = (async () => {
+        const t0 = Date.now();
+        const res = await runOrgansLLM(env, llmPayload);
+        debug.t_llm_organs_ms = Date.now() - t0;
+        return res;
+      })();
+    }
 
     const nutritionPromise = nutritionInput
       ? (async () => {
@@ -20710,14 +20774,34 @@ async function runDishAnalysis(env, body, ctx) {
       return res;
     })();
     // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
-    organsLLMResult = skipOrgans
-      ? { ok: true, skipped: true, data: null }
-      : await (async () => {
-          const t0 = Date.now();
-          const res = await runOrgansLLM(env, llmPayload);
-          debug.t_llm_organs_ms = Date.now() - t0;
-          return res;
-        })();
+    // Run in background via waitUntil if skipping
+    if (skipOrgans) {
+      const organsCacheKey = `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const res = await runOrgansLLM(env, llmPayload);
+            if (res.ok && env?.MENUS_CACHE) {
+              await env.MENUS_CACHE.put(organsCacheKey, JSON.stringify({
+                ok: true,
+                data: res.data,
+                timestamp: Date.now()
+              }));
+            }
+          } catch (e) {
+            console.error("Background organs LLM failed:", e);
+          }
+        })());
+      }
+      organsLLMResult = { ok: true, skipped: true, data: null };
+    } else {
+      organsLLMResult = await (async () => {
+        const t0 = Date.now();
+        const res = await runOrgansLLM(env, llmPayload);
+        debug.t_llm_organs_ms = Date.now() - t0;
+        return res;
+      })();
+    }
 
     if (finalNutritionSummary) {
       const nutritionInput = {
@@ -22188,7 +22272,8 @@ async function runDishAnalysis(env, body, ctx) {
     full_recipe,
     normalized,
     organs,
-    organs_pending: skipOrgans, // Flag for frontend to lazy-load organs
+    organs_pending: skipOrgans, // Flag for frontend to poll for organs
+    organs_poll_key: skipOrgans ? `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}` : null,
     allergen_flags,
     allergen_summary,
     allergen_breakdown,
