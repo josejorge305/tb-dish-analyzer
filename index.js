@@ -21506,6 +21506,13 @@ function applyVisionCorrections(visionInsights, recipeData) {
   let correctedIngredients = [...(recipeData.ingredients || recipeData.ingredients_parsed || [])];
   let correctedDescription = recipeData.description || recipeData.menuDescription || "";
 
+  // Helper: safely extract string from ingredient (handles both strings and objects)
+  const getIngredientText = (ing) => {
+    if (typeof ing === 'string') return ing;
+    if (ing && typeof ing === 'object') return ing.name || ing.ingredient || ing.text || ing.original || '';
+    return '';
+  };
+
   // Extract visual evidence
   const visualIngredients = visionInsights.visual_ingredients || [];
   const visualCookingMethod = visionInsights.visual_cooking_method || {};
@@ -21554,11 +21561,14 @@ function applyVisionCorrections(visionInsights, recipeData) {
         reason: `Vision detected ${visualPastaType} but recipe mentions ${recipePastaType}`
       };
 
-      correctedIngredients = correctedIngredients.map(ing =>
-        ing.toLowerCase().includes(recipePastaType.toLowerCase())
-          ? ing.replace(new RegExp(recipePastaType, "gi"), visualPastaType)
-          : ing
-      );
+      correctedIngredients = correctedIngredients.map(ing => {
+        const text = getIngredientText(ing);
+        if (text.toLowerCase().includes(recipePastaType.toLowerCase())) {
+          const replaced = text.replace(new RegExp(recipePastaType, "gi"), visualPastaType);
+          return typeof ing === 'string' ? replaced : { ...ing, name: replaced };
+        }
+        return ing;
+      });
 
       correctedDescription = correctedDescription.replace(
         new RegExp(recipePastaType, "gi"),
@@ -21591,11 +21601,14 @@ function applyVisionCorrections(visionInsights, recipeData) {
         reason: `Vision detected ${visualRiceType} but recipe mentions ${recipeRiceType}`
       };
 
-      correctedIngredients = correctedIngredients.map(ing =>
-        ing.toLowerCase().includes(recipeRiceType.toLowerCase())
-          ? ing.replace(new RegExp(recipeRiceType, "gi"), visualRiceType)
-          : ing
-      );
+      correctedIngredients = correctedIngredients.map(ing => {
+        const text = getIngredientText(ing);
+        if (text.toLowerCase().includes(recipeRiceType.toLowerCase())) {
+          const replaced = text.replace(new RegExp(recipeRiceType, "gi"), visualRiceType);
+          return typeof ing === 'string' ? replaced : { ...ing, name: replaced };
+        }
+        return ing;
+      });
 
       corrections.push(correction);
     }
@@ -21655,11 +21668,14 @@ function applyVisionCorrections(visionInsights, recipeData) {
             reason: `Vision detected ${visualProtein} but recipe mentions ${recipeProtein}. ${protein.evidence || ""}`
           };
 
-          correctedIngredients = correctedIngredients.map(ing =>
-            ing.toLowerCase().includes(recipeProtein.toLowerCase())
-              ? ing.replace(new RegExp(recipeProtein, "gi"), visualProtein)
-              : ing
-          );
+          correctedIngredients = correctedIngredients.map(ing => {
+            const text = getIngredientText(ing);
+            if (text.toLowerCase().includes(recipeProtein.toLowerCase())) {
+              const replaced = text.replace(new RegExp(recipeProtein, "gi"), visualProtein);
+              return typeof ing === 'string' ? replaced : { ...ing, name: replaced };
+            }
+            return ing;
+          });
 
           corrections.push(correction);
           break; // Only apply first protein correction
@@ -21675,8 +21691,9 @@ function applyVisionCorrections(visionInsights, recipeData) {
   );
 
   for (const visual of highConfidenceVisual) {
+    const visualWord = visual.guess?.toLowerCase().split(" ")[0] || '';
     const alreadyInRecipe = correctedIngredients.some(ing =>
-      ing.toLowerCase().includes(visual.guess?.toLowerCase().split(" ")[0])
+      getIngredientText(ing).toLowerCase().includes(visualWord)
     );
 
     if (!alreadyInRecipe) {
