@@ -6650,7 +6650,7 @@ function buildOrgansCacheKey(payload) {
     PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
     (payload.dishName || "").toLowerCase().trim(),
     (payload.restaurantName || "").toLowerCase().trim(),
-    JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
+    JSON.stringify((payload.ingredientLines || []).map(l => (typeof l === 'string' ? l : l?.name || l?.text || '').toLowerCase().trim()).sort()),
     JSON.stringify((payload.ingredientsNormalized || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
@@ -7265,7 +7265,7 @@ function buildAllergenCacheKey(input) {
     JSON.stringify((input.ingredients || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
-    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort()),
+    JSON.stringify((input.tags || []).map(t => (typeof t === 'string' ? t : t?.name || '').toLowerCase().trim()).sort()),
     // Include vision data in cache key for correctness
     input.vision_insights ? hashShort(JSON.stringify(input.vision_insights)) : "no-vision",
     input.plate_components?.length ? hashShort(JSON.stringify(input.plate_components)) : "no-components"
@@ -21528,7 +21528,7 @@ function applyVisionCorrections(visionInsights, recipeData) {
 
   // Helper: check if ingredient list mentions a food type
   const ingredientMentions = (variants) => {
-    const ingredientStr = correctedIngredients.join(" ").toLowerCase();
+    const ingredientStr = correctedIngredients.map(getIngredientText).join(" ").toLowerCase();
     const descStr = correctedDescription.toLowerCase();
     const combined = ingredientStr + " " + descStr;
 
