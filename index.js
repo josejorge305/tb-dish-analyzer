@@ -19878,6 +19878,10 @@ async function runDishAnalysis(env, body, ctx) {
   // Full recipe generation flag
   const wantFullRecipe = body.fullRecipe === true || body.full_recipe === true;
 
+  // LATENCY OPTIMIZATION: Skip organs LLM for faster initial response
+  // Frontend can lazy-load organs when user expands that section
+  const skipOrgans = body.skip_organs === true || body.skipOrgans === true;
+
   // basic validation
   if (!dishName) {
     return {
@@ -20638,12 +20642,16 @@ async function runDishAnalysis(env, body, ctx) {
       return res;
     })();
 
-    const organsPromise = (async () => {
-      const t0 = Date.now();
-      const res = await runOrgansLLM(env, llmPayload);
-      debug.t_llm_organs_ms = Date.now() - t0;
-      return res;
-    })();
+    // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
+    // This reduces response time by 10-20s on first request
+    const organsPromise = skipOrgans
+      ? Promise.resolve({ ok: true, skipped: true, data: null })
+      : (async () => {
+          const t0 = Date.now();
+          const res = await runOrgansLLM(env, llmPayload);
+          debug.t_llm_organs_ms = Date.now() - t0;
+          return res;
+        })();
 
     const nutritionPromise = nutritionInput
       ? (async () => {
@@ -20701,12 +20709,15 @@ async function runDishAnalysis(env, body, ctx) {
       debug.allergen_llm_tier = res.tier || null;
       return res;
     })();
-    organsLLMResult = await (async () => {
-      const t0 = Date.now();
-      const res = await runOrgansLLM(env, llmPayload);
-      debug.t_llm_organs_ms = Date.now() - t0;
-      return res;
-    })();
+    // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
+    organsLLMResult = skipOrgans
+      ? { ok: true, skipped: true, data: null }
+      : await (async () => {
+          const t0 = Date.now();
+          const res = await runOrgansLLM(env, llmPayload);
+          debug.t_llm_organs_ms = Date.now() - t0;
+          return res;
+        })();
 
     if (finalNutritionSummary) {
       const nutritionInput = {
@@ -20749,6 +20760,7 @@ async function runDishAnalysis(env, body, ctx) {
     organsLLMResult && typeof organsLLMResult.ok === "boolean"
       ? organsLLMResult.ok
       : null;
+  debug.organs_llm_skipped = skipOrgans;
   debug.organs_llm_error =
     organsLLMResult && organsLLMResult.ok === false
       ? String(organsLLMResult.error || "")
@@ -22176,6 +22188,7 @@ async function runDishAnalysis(env, body, ctx) {
     full_recipe,
     normalized,
     organs,
+    organs_pending: skipOrgans, // Flag for frontend to lazy-load organs
     allergen_flags,
     allergen_summary,
     allergen_breakdown,
