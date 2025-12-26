@@ -23391,6 +23391,79 @@ async function runDishAnalysis(env, body, ctx) {
     return terms.some((w) => t.includes(w));
   };
 
+  // Vision-recipe allergen conflict resolution
+  // Maps allergen types to visual_ingredients categories and keywords
+  const ALLERGEN_VISUAL_MAPPING = {
+    shellfish: {
+      categories: ["shellfish"],
+      keywords: ["shrimp", "prawn", "crab", "lobster", "clam", "mussel", "oyster", "scallop", "camarón", "gambas"]
+    },
+    fish: {
+      categories: ["fish"],
+      keywords: ["fish", "salmon", "tuna", "cod", "trout", "tilapia", "anchovy"]
+    },
+    egg: {
+      categories: ["egg"],
+      keywords: ["egg", "eggs", "fried egg", "poached egg", "sunny side"]
+    },
+    milk: {
+      categories: ["dairy"],
+      keywords: ["cheese", "cream", "butter", "milk", "queso"]
+    },
+    tree_nut: {
+      categories: ["nut"],
+      keywords: ["almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut", "macadamia", "pine nut"]
+    },
+    peanut: {
+      categories: ["nut", "legume"],
+      keywords: ["peanut", "peanuts"]
+    },
+    sesame: {
+      categories: ["seed"],
+      keywords: ["sesame", "sesame seeds"]
+    }
+    // Note: gluten and soy are typically not visually detectable
+  };
+
+  /**
+   * Check if an allergen is visually confirmed by vision analysis
+   * @param {string} allergenKind - The allergen type (e.g., "shellfish", "fish")
+   * @param {Array} visualIngredients - The visual_ingredients array from vision analysis
+   * @returns {Object} { confirmed: boolean, evidence: string|null }
+   */
+  const isAllergenVisuallyConfirmed = (allergenKind, visualIngredients) => {
+    if (!visualIngredients || !Array.isArray(visualIngredients) || visualIngredients.length === 0) {
+      return { confirmed: false, evidence: null, hasVision: false };
+    }
+
+    const mapping = ALLERGEN_VISUAL_MAPPING[allergenKind];
+    if (!mapping) {
+      // Allergen type not visually detectable (e.g., gluten, soy)
+      return { confirmed: false, evidence: null, hasVision: true, notVisuallyDetectable: true };
+    }
+
+    for (const vi of visualIngredients) {
+      const guess = (vi.guess || "").toLowerCase();
+      const category = (vi.category || "").toLowerCase();
+      const confidence = vi.confidence || 0;
+
+      // Skip low confidence detections
+      if (confidence < 0.5) continue;
+
+      // Check category match
+      if (mapping.categories.some(c => category.includes(c))) {
+        return { confirmed: true, evidence: vi.guess, hasVision: true };
+      }
+
+      // Check keyword match
+      if (mapping.keywords.some(kw => guess.includes(kw))) {
+        return { confirmed: true, evidence: vi.guess, hasVision: true };
+      }
+    }
+
+    return { confirmed: false, evidence: null, hasVision: true };
+  };
+
   const allergenInput = {
     dishName,
     restaurantName,
@@ -23741,6 +23814,52 @@ async function runDishAnalysis(env, body, ctx) {
           });
         }
       }
+    }
+
+    // Vision-recipe conflict resolution: downgrade allergens not visually confirmed
+    // This helps when generic recipes (e.g., Edamam) have ingredients the restaurant version doesn't
+    const visionIngredients = debug.vision_insights?.visual_ingredients || [];
+    if (visionIngredients.length > 0) {
+      allergen_flags = allergen_flags.map(flag => {
+        // Only process "yes" flags - "maybe" is already uncertain
+        if (flag.present !== "yes") return flag;
+
+        const visionCheck = isAllergenVisuallyConfirmed(flag.kind, visionIngredients);
+
+        // If no vision data or allergen not visually detectable, keep as-is
+        if (!visionCheck.hasVision || visionCheck.notVisuallyDetectable) return flag;
+
+        // If visually confirmed, keep as "yes"
+        if (visionCheck.confirmed) {
+          return {
+            ...flag,
+            vision_confirmed: true,
+            vision_evidence: visionCheck.evidence
+          };
+        }
+
+        // Not visually confirmed - check if it came from recipe (not menu description)
+        const inMenuText = hasEvidenceForAllergen(flag.kind, menuDescription || "");
+        if (inMenuText) {
+          // Explicitly mentioned in menu - keep as "yes"
+          return flag;
+        }
+
+        // Downgrade to "maybe" - recipe says yes but vision doesn't confirm
+        return {
+          ...flag,
+          present: "maybe",
+          message: flag.message
+            ? `${flag.message} (Note: Generic recipe may contain this allergen, but not visually detected in this dish. This restaurant's version may differ.)`
+            : "Generic recipe may contain this allergen, but not visually detected in this dish. This restaurant's version may differ.",
+          source: "llm-mini-vision-conflict",
+          original_present: "yes",
+          vision_checked: true,
+          vision_confirmed: false
+        };
+      });
+
+      debug.vision_allergen_conflict_resolution = true;
     }
 
     if (a.fodmap && typeof a.fodmap === "object") {
