@@ -23343,9 +23343,10 @@ async function runDishAnalysis(env, body, ctx) {
   // Full recipe generation flag
   const wantFullRecipe = body.fullRecipe === true || body.full_recipe === true;
 
-  // LATENCY OPTIMIZATION: Skip organs LLM for faster initial response
+  // LATENCY OPTIMIZATION: Skip organs LLM by default for faster initial response
   // Frontend can lazy-load organs when user expands that section
-  const skipOrgans = body.skip_organs === true || body.skipOrgans === true;
+  // Set skip_organs=false explicitly to include organs in the response
+  const skipOrgans = body.skip_organs !== false && body.skipOrgans !== false;
 
   // basic validation
   if (!dishName) {
