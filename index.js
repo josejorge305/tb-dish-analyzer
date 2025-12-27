@@ -1,4 +1,4 @@
-/* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
+/* eslint-disable no-unused-vars, no-empty, no-useless-escape */
 
 // tb-dish-processor — Cloudflare Worker (Modules) — Uber Eats + Lexicon + Queue + Debug
 // Clean build: exact vendor body for /api/job, US bias + filter, proper Modules export.
@@ -902,15 +902,13 @@ async function handleOrgansFromDish(url, env, request) {
     return resp;
   }
 
-  const ingredientsRaw = Array.isArray(card?.ingredients)
-    ? card.ingredients
-    : [];
-  const originalLines = ingredientsRaw.map((item) =>
+  // Use rawIngredients from recipeResult (defined at line 867)
+  const originalLines = rawIngredients.map((item) =>
     typeof item === "string"
       ? item
       : item?.original || item?.name || item?.text || ""
   );
-  let ingredients = normalizeIngredientsArray(ingredientsRaw).map((entry) => ({
+  let ingredients = normalizeIngredientsArray(rawIngredients).map((entry) => ({
     name: canonicalizeIngredientName(entry.name),
     grams: entry.grams
   }));
@@ -932,6 +930,9 @@ async function handleOrgansFromDish(url, env, request) {
   // --- organ assessment (inline) ---
   let organLevels = {};
   let organDrivers = {};
+  // Note: assessOrgansFromIngredients is an optional external function
+  // that may be injected at runtime. The typeof check handles the case
+  // where it's not available.
   try {
     if (typeof assessOrgansFromIngredients === "function") {
       console.log(
@@ -939,6 +940,7 @@ async function handleOrgansFromDish(url, env, request) {
         normalizedIngredients.length,
         "ingredients"
       );
+      // eslint-disable-next-line no-undef
       const assessRes = await assessOrgansFromIngredients(
         normalizedIngredients,
         { weightKg: weight_kg }
@@ -1063,7 +1065,7 @@ async function handleOrgansFromDish(url, env, request) {
   const scoring = organ?.scoring || {};
   const filled = { organ_levels: organLevels || {} };
   const levels =
-    (typeof organ_levels !== "undefined" && organ_levels) ||
+    organLevels ||
     filled?.organ_levels ||
     scoring?.organ_levels ||
     scoring?.levels ||
@@ -11861,13 +11863,9 @@ async function fetchMenuFromUberEatsTiered(
 
   // Tier 2: Apify (fallback, slower but cleaner data)
   if (apifyEnabled) {
-    try {
-      const result = await fetchMenuFromApify(env, query, address, maxRows);
-      result._tier = "apify";
-      return result;
-    } catch (err) {
-      throw err;
-    }
+    const result = await fetchMenuFromApify(env, query, address, maxRows);
+    result._tier = "apify";
+    return result;
   }
 
   throw new Error("UberEats: No scraper tier available (missing RAPIDAPI_KEY and APIFY_TOKEN)");
@@ -18961,7 +18959,7 @@ const _worker_impl = {
           // Wait for completion if needed
           finished = job?.immediate
             ? job
-            : await waitForJob(env, job, { attempts: 6 });
+            : await waitForUberJobGateway(env, job, { attempts: 6 });
         } else if (latNum != null && lngNum != null) {
           // Location job path first
           try {
@@ -18971,7 +18969,7 @@ const _worker_impl = {
             );
             finished = job?.immediate
               ? job
-              : await waitForJob(env, job, { attempts: 6 });
+              : await waitForUberJobGateway(env, job, { attempts: 6 });
           } catch (e) {
             // Fallback to direct nearby search if job approach fails
             const nearby = await searchNearbyCandidates(
@@ -19056,6 +19054,10 @@ const _worker_impl = {
             raw: it
           }))
           .filter((x) => x.title);
+
+        const usedHost = finished?._tier === "apify"
+          ? "api.apify.com"
+          : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
 
         return jsonResponseWithTB(
           withBodyAnalytics(
@@ -21043,7 +21045,15 @@ async function refreshMenuInBackground(env, { query, address, forceUS, cacheKey 
       const chosen = best || (rowsUS.length ? rowsUS[0] : null);
 
       if (chosen?.menu?.length) {
-        const items = chosen.menu.map(m => normalizeMenuItem(m, chosen));
+        // Normalize menu items for cache storage
+        const items = chosen.menu.map(m => ({
+          name: m.name || m.title || "",
+          section: m.section || "",
+          description: m.description || m.itemDescription || "",
+          price: m.price,
+          price_display: m.priceTagline || m.price_display || "",
+          calories_display: m.calories_display || null
+        }));
         const finalKey = cacheKey || cacheKeyForMenu(query, address, forceUS);
 
         await writeMenuToCache(env, finalKey, {
@@ -23644,7 +23654,7 @@ async function runDishAnalysis(env, body, ctx) {
       const usdaSummary = await resolveNutritionFromUSDA(
         env,
         dishName,
-        menuDescription || description || ""
+        menuDescription || ""
       );
       if (usdaSummary) {
         finalNutritionSummary = usdaSummary;
