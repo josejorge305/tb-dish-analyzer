@@ -1061,6 +1061,33 @@ async function handleOrgansFromDish(url, env, request) {
   const driversText = topDriversText(driversSlim);
 
   const organ_summaries = organ?.summaries ?? {};
+
+  // Extract enriched organ data from assessOrgansLocally response
+  const organDetailsArr = organ?.organs || [];
+  const organ_details = {};
+  const organ_medical_summaries = {};
+  const organ_scores = {};
+  for (const o of organDetailsArr) {
+    const key = o.organ;
+    if (!key) continue;
+    // Use new enriched level if available
+    if (o.level && !organLevels[key]) {
+      organLevels[key] = o.level;
+    }
+    organ_scores[key] = o.score || 0;
+    organ_medical_summaries[key] = o.summary || null;
+    organ_details[key] = {
+      level: o.level,
+      score: o.score || 0,
+      summary: o.summary || null,
+      top_compounds: o.top_compounds || [],
+      compounds: o.compounds || [],
+      has_medical_detail: o.has_medical_detail || false
+    };
+  }
+
+  // Extract compound interactions
+  const compound_interactions = organ?.compound_interactions || [];
   const organ_top_drivers = { ...(organDrivers || {}) };
   const scoring = organ?.scoring || {};
   const filled = { organ_levels: organLevels || {} };
@@ -1079,7 +1106,9 @@ async function handleOrgansFromDish(url, env, request) {
     ({
       "High Benefit": 80,
       Benefit: 40,
+      "Mild Benefit": 20,
       Neutral: 0,
+      "Mild Caution": -20,
       Caution: -40,
       "High Caution": -80
     })[s] ?? 0;
@@ -1087,7 +1116,9 @@ async function handleOrgansFromDish(url, env, request) {
     ({
       "High Benefit": "#16a34a",
       Benefit: "#22c55e",
+      "Mild Benefit": "#86efac",
       Neutral: "#a1a1aa",
+      "Mild Caution": "#fcd34d",
       Caution: "#f59e0b",
       "High Caution": "#dc2626"
     })[s] ?? "#a1a1aa";
@@ -1153,6 +1184,11 @@ async function handleOrgansFromDish(url, env, request) {
     organ_bars,
     organ_colors,
     insight_lines,
+    // NEW: Enriched medical data
+    organ_scores,
+    organ_medical_summaries,
+    organ_details,
+    compound_interactions,
     recipe_debug
   };
 
@@ -6101,7 +6137,9 @@ function computeBarometerFromLevelsAll(ORGANS, lv) {
     ({
       "High Benefit": 80,
       Benefit: 40,
+      "Mild Benefit": 20,
       Neutral: 0,
+      "Mild Caution": -20,
       Caution: -40,
       "High Caution": -80
     })[s] ?? 0;
@@ -14811,7 +14849,9 @@ const _worker_impl = {
         ({
           "High Benefit": 80,
           Benefit: 40,
+          "Mild Benefit": 20,
           Neutral: 0,
+          "Mild Caution": -20,
           Caution: -40,
           "High Caution": -80
         })[s] ?? 0;
@@ -14819,7 +14859,9 @@ const _worker_impl = {
         ({
           "High Benefit": "#16a34a",
           Benefit: "#22c55e",
+          "Mild Benefit": "#86efac",
           Neutral: "#a1a1aa",
+          "Mild Caution": "#fcd34d",
           Caution: "#f59e0b",
           "High Caution": "#dc2626"
         })[s] ?? "#a1a1aa";
@@ -19470,6 +19512,211 @@ const _worker_impl = {
       });
     }
 
+    // NEW: Detailed organ analysis endpoint with full medical explanations
+    if (pathname === "/organs/detailed" && request.method === "POST") {
+      const id = _cid(request.headers);
+      const body = (await readJsonSafe(request)) || {};
+
+      const ingredients = Array.isArray(body.ingredients)
+        ? body.ingredients
+        : typeof body.dish === "string"
+          ? [{ name: body.dish }]
+          : [];
+      const user_flags = body.user_flags || body.userFlags || {};
+      const lex_hits = Array.isArray(body.lex_hits) ? body.lex_hits : [];
+
+      // Get enriched organ assessment
+      const organResult = await assessOrgansLocally(env, {
+        ingredients,
+        user_flags,
+        lex_hits
+      });
+
+      // Build detailed response with all 10 organs
+      const ALL_ORGANS = ["brain", "heart", "liver", "gut", "kidney", "immune", "eyes", "skin", "bones", "thyroid"];
+      const organDetailsArr = organResult?.organs || [];
+
+      const levelToBar = (s) => ({
+        "High Benefit": 80, Benefit: 40, "Mild Benefit": 20,
+        Neutral: 0, "Mild Caution": -20, Caution: -40, "High Caution": -80
+      })[s] ?? 0;
+
+      const levelToColor = (s) => ({
+        "High Benefit": "#16a34a", Benefit: "#22c55e", "Mild Benefit": "#86efac",
+        Neutral: "#a1a1aa", "Mild Caution": "#fcd34d", Caution: "#f59e0b", "High Caution": "#dc2626"
+      })[s] ?? "#a1a1aa";
+
+      // Build organ_levels and organ_details from assessment
+      const organ_levels = {};
+      const organ_bars = {};
+      const organ_colors = {};
+      const organ_scores = {};
+      const organ_medical_summaries = {};
+      const organ_details = {};
+
+      for (const o of organDetailsArr) {
+        const key = o.organ;
+        if (!key) continue;
+        organ_levels[key] = o.level || "Neutral";
+        organ_bars[key] = levelToBar(o.level);
+        organ_colors[key] = levelToColor(o.level);
+        organ_scores[key] = o.score || 0;
+        organ_medical_summaries[key] = o.summary || null;
+        organ_details[key] = {
+          level: o.level,
+          score: o.score || 0,
+          summary: o.summary || null,
+          top_compounds: o.top_compounds || [],
+          compounds: o.compounds || [],
+          has_medical_detail: o.has_medical_detail || false
+        };
+      }
+
+      // Fill in missing organs as Neutral
+      for (const organKey of ALL_ORGANS) {
+        if (!organ_levels[organKey]) {
+          organ_levels[organKey] = "Neutral";
+          organ_bars[organKey] = 0;
+          organ_colors[organKey] = "#a1a1aa";
+          organ_scores[organKey] = 0;
+        }
+      }
+
+      // Calculate overall barometer
+      const scores = Object.values(organ_bars);
+      const tummy_barometer = scores.length > 0
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+        : 0;
+      const barometer_color = tummy_barometer >= 40 ? "#16a34a"
+        : tummy_barometer > 0 ? "#22c55e"
+        : tummy_barometer === 0 ? "#a1a1aa"
+        : tummy_barometer <= -40 ? "#dc2626"
+        : "#f59e0b";
+
+      const response = {
+        ok: true,
+        organs_supported: ALL_ORGANS,
+        organ_count: ALL_ORGANS.length,
+        tummy_barometer,
+        barometer_color,
+        organ_levels,
+        organ_bars,
+        organ_colors,
+        organ_scores,
+        organ_medical_summaries,
+        organ_details,
+        compound_interactions: organResult?.compound_interactions || [],
+        flags: organResult?.flags || {},
+        ingredients: ingredients.map(i => i.name || i.original || i).filter(Boolean)
+      };
+
+      const headers = new Headers({
+        "content-type": "application/json; charset=utf-8",
+        "x-correlation-id": id,
+        "x-tb-route": "/organs/detailed"
+      });
+
+      return new Response(JSON.stringify(response), { status: 200, headers });
+    }
+
+    // NEW: Get compound info for a specific ingredient
+    if (pathname === "/compounds/lookup" && request.method === "GET") {
+      const ingredient = url.searchParams.get("ingredient") || "";
+      if (!ingredient) {
+        return json({ ok: false, error: "Missing ?ingredient= parameter" }, { status: 400 });
+      }
+
+      if (!env?.D1_DB) {
+        return json({ ok: false, error: "Database not available" }, { status: 500 });
+      }
+
+      try {
+        const like = `%${ingredient.toLowerCase()}%`;
+
+        // Get compounds for this ingredient
+        const mappingRes = await env.D1_DB.prepare(
+          `SELECT ic.compound_id, ic.amount_per_100g, ic.variability, ic.notes,
+                  c.name, c.common_name, c.category, c.mechanism_summary, c.cid
+           FROM ingredient_compounds ic
+           JOIN compounds c ON c.id = ic.compound_id
+           WHERE LOWER(ic.ingredient_pattern) LIKE ?
+           LIMIT 20`
+        ).bind(like).all();
+
+        const compounds = mappingRes?.results || [];
+
+        // For each compound, get organ effects
+        const enrichedCompounds = [];
+        for (const c of compounds) {
+          const effRes = await env.D1_DB.prepare(
+            `SELECT organ, effect, strength, mechanism, pathway, explanation, citations,
+                    threshold_mg, optimal_mg, dose_response
+             FROM compound_organ_effects
+             WHERE compound_id = ?`
+          ).bind(c.compound_id).all();
+
+          enrichedCompounds.push({
+            compound: c.common_name || c.name,
+            category: c.category,
+            mechanism_summary: c.mechanism_summary,
+            pubchem_cid: c.cid,
+            amount_per_100g: c.amount_per_100g,
+            variability: c.variability,
+            organ_effects: (effRes?.results || []).map(e => ({
+              organ: e.organ,
+              effect: e.effect,
+              strength: e.strength,
+              mechanism: e.mechanism,
+              explanation: e.explanation,
+              citations: e.citations,
+              threshold_mg: e.threshold_mg,
+              optimal_mg: e.optimal_mg
+            }))
+          });
+        }
+
+        return json({
+          ok: true,
+          ingredient,
+          compound_count: enrichedCompounds.length,
+          compounds: enrichedCompounds
+        });
+      } catch (err) {
+        return json({ ok: false, error: String(err?.message || err) }, { status: 500 });
+      }
+    }
+
+    // NEW: List all supported organs with descriptions
+    if (pathname === "/organs/supported" && request.method === "GET") {
+      const organs = [
+        { key: "brain", name: "Brain", icon: "🧠", system: "Nervous", description: "Cognitive function, memory, mood, neuroprotection" },
+        { key: "heart", name: "Heart", icon: "❤️", system: "Cardiovascular", description: "Cardiovascular health, blood pressure, cholesterol, circulation" },
+        { key: "liver", name: "Liver", icon: "🫀", system: "Digestive", description: "Detoxification, fat metabolism, bile production" },
+        { key: "gut", name: "Gut", icon: "🦠", system: "Digestive", description: "Microbiome, digestion, nutrient absorption, gut barrier" },
+        { key: "kidney", name: "Kidneys", icon: "🫘", system: "Urinary", description: "Filtration, electrolyte balance, blood pressure regulation" },
+        { key: "immune", name: "Immune", icon: "🛡️", system: "Immune", description: "Infection defense, inflammation regulation, immune cell function" },
+        { key: "eyes", name: "Eyes", icon: "👁️", system: "Sensory", description: "Vision, macular health, blue light protection, dry eye" },
+        { key: "skin", name: "Skin", icon: "✨", system: "Integumentary", description: "Collagen, hydration, UV protection, wound healing" },
+        { key: "bones", name: "Bones", icon: "🦴", system: "Skeletal", description: "Bone density, mineralization, fracture prevention" },
+        { key: "thyroid", name: "Thyroid", icon: "🦋", system: "Endocrine", description: "Metabolism, energy, hormone production, temperature" }
+      ];
+
+      return json({
+        ok: true,
+        organ_count: organs.length,
+        organs,
+        level_scale: [
+          { level: "High Benefit", bar: 80, color: "#16a34a", description: "Strong positive impact" },
+          { level: "Benefit", bar: 40, color: "#22c55e", description: "Positive impact" },
+          { level: "Mild Benefit", bar: 20, color: "#86efac", description: "Slight positive impact" },
+          { level: "Neutral", bar: 0, color: "#a1a1aa", description: "No significant impact" },
+          { level: "Mild Caution", bar: -20, color: "#fcd34d", description: "Slight concern" },
+          { level: "Caution", bar: -40, color: "#f59e0b", description: "Use with awareness" },
+          { level: "High Caution", bar: -80, color: "#dc2626", description: "Significant concern" }
+        ]
+      });
+    }
+
     if (pathname === "/user/prefs") {
       if (!env.USER_PREFS_KV) {
         return json(
@@ -20895,7 +21142,7 @@ async function searchDishSuggestions(env, query, options = {}) {
 }
 
 async function getOrganEffectsForIngredients(env, ingredients = []) {
-  if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {} };
+  if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {}, compoundDetails: {}, interactions: [] };
 
   const names = Array.from(
     new Set(
@@ -20919,70 +21166,127 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
 
   const organs = {};
   const compoundsByOrgan = {};
+  const compoundDetails = {}; // NEW: detailed compound info per organ
+  const foundCompoundIds = new Set(); // Track compounds for interaction lookup
 
-  // LATENCY OPTIMIZATION: Parallelize compound lookups
-  // Step 1: Run all compound lookups in parallel
-  const compoundResults = await Promise.all(
-    names.map(async (name) => {
-      try {
-        const like = `%${name}%`;
+  // Process each ingredient to find compounds and organ effects
+  for (const name of names) {
+    try {
+      // First try ingredient_compounds mapping (more accurate)
+      const like = `%${name}%`;
+      const mappingRes = await env.D1_DB.prepare(
+        `SELECT ic.compound_id, ic.amount_per_100g, ic.notes as mapping_notes,
+                c.name, c.common_name, c.category, c.mechanism_summary, c.cid
+         FROM ingredient_compounds ic
+         JOIN compounds c ON c.id = ic.compound_id
+         WHERE ic.ingredient_pattern LIKE ?
+         LIMIT 10`
+      ).bind(like).all();
+
+      let comps = mappingRes?.results || [];
+
+      // Fallback to direct compound name match if no mappings found
+      if (comps.length === 0) {
         const compRes = await env.D1_DB.prepare(
-          `SELECT id, name, common_name, cid
+          `SELECT id as compound_id, name, common_name, category, mechanism_summary, cid
            FROM compounds
            WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
            ORDER BY name LIMIT 3`
-        )
-          .bind(like, like)
-          .all();
-        return { name, comps: compRes?.results || [] };
-      } catch {
-        return { name, comps: [] };
+        ).bind(like, like).all();
+        comps = compRes?.results || [];
       }
-    })
-  );
 
-  // Step 2: Collect unique compound IDs for organ effect lookup
-  const uniqueCompounds = new Map(); // id -> { compound, ingredientName }
-  for (const { name, comps } of compoundResults) {
-    for (const c of comps) {
-      if (!uniqueCompounds.has(c.id)) {
-        uniqueCompounds.set(c.id, { compound: c, ingredientName: name });
+      for (const c of comps) {
+        const compoundId = c.compound_id || c.id;
+        foundCompoundIds.add(compoundId);
+
+        // Get enriched organ effects with medical explanations
+        const effRes = await env.D1_DB.prepare(
+          `SELECT organ, effect, strength, mechanism, pathway, explanation,
+                  citations, threshold_mg, optimal_mg, dose_response, population_notes
+           FROM compound_organ_effects
+           WHERE compound_id = ?`
+        ).bind(compoundId).all();
+
+        const effs = effRes?.results || [];
+        for (const e of effs) {
+          const organKey = (e.organ || "unknown").toLowerCase().trim();
+          if (!organKey) continue;
+
+          if (!organs[organKey]) {
+            organs[organKey] = { plus: 0, minus: 0, neutral: 0, score: 0 };
+            compoundsByOrgan[organKey] = new Set();
+            compoundDetails[organKey] = [];
+          }
+
+          const strength = parseFloat(e.strength) || 0.5;
+          const compoundName = c.common_name || c.name || name;
+
+          // Score-based assessment (not just counting)
+          if (e.effect === "benefit") {
+            organs[organKey].plus++;
+            organs[organKey].score += strength;
+          } else if (e.effect === "risk" || e.effect === "caution") {
+            organs[organKey].minus++;
+            organs[organKey].score -= strength;
+          } else {
+            organs[organKey].neutral++;
+          }
+
+          compoundsByOrgan[organKey].add(compoundName);
+
+          // Add detailed compound info with medical reasoning
+          compoundDetails[organKey].push({
+            compound: compoundName,
+            category: c.category || "unknown",
+            effect: e.effect,
+            strength: strength,
+            mechanism: e.mechanism || null,
+            pathway: e.pathway || null,
+            explanation: e.explanation || null,
+            citations: e.citations || null,
+            threshold_mg: e.threshold_mg || null,
+            optimal_mg: e.optimal_mg || null,
+            dose_response: e.dose_response || null,
+            population_notes: e.population_notes || null,
+            amount_in_food: c.amount_per_100g || null,
+            source_ingredient: name
+          });
+        }
       }
+    } catch {
+      // Skip this ingredient on error
     }
   }
 
-  // Step 3: Run all organ effect lookups in parallel
-  const effectResults = await Promise.all(
-    Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingredientName }]) => {
-      try {
-        const effRes = await env.D1_DB.prepare(
-          `SELECT organ, effect, strength
-           FROM compound_organ_effects
-           WHERE compound_id = ?`
-        )
-          .bind(compId)
-          .all();
-        return { compound, ingredientName, effects: effRes?.results || [] };
-      } catch {
-        return { compound, ingredientName, effects: [] };
-      }
-    })
-  );
-
-  // Step 4: Build results from parallel lookups
-  for (const { compound: c, ingredientName, effects } of effectResults) {
-    for (const e of effects) {
-      const organKey = (e.organ || "unknown").toLowerCase().trim();
-      if (!organKey) continue;
-      if (!organs[organKey]) {
-        organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
-        compoundsByOrgan[organKey] = new Set();
-      }
-      if (e.effect === "benefit") organs[organKey].plus++;
-      else if (e.effect === "risk") organs[organKey].minus++;
-      else organs[organKey].neutral++;
-
-      compoundsByOrgan[organKey].add(c.name || c.common_name || ingredientName);
+  // Fetch compound interactions for found compounds
+  let interactions = [];
+  if (foundCompoundIds.size > 1) {
+    try {
+      const idList = Array.from(foundCompoundIds).join(',');
+      const interRes = await env.D1_DB.prepare(
+        `SELECT ci.*,
+                ca.name as compound_a_name, ca.common_name as compound_a_common,
+                cb.name as compound_b_name, cb.common_name as compound_b_common
+         FROM compound_interactions ci
+         JOIN compounds ca ON ca.id = ci.compound_a_id
+         JOIN compounds cb ON cb.id = ci.compound_b_id
+         WHERE ci.compound_a_id IN (${idList}) AND ci.compound_b_id IN (${idList})
+         LIMIT 10`
+      ).all();
+      interactions = (interRes?.results || []).map(i => ({
+        compounds: [
+          i.compound_a_common || i.compound_a_name,
+          i.compound_b_common || i.compound_b_name
+        ],
+        type: i.interaction_type,
+        description: i.effect_description,
+        mechanism: i.mechanism,
+        strength: i.strength,
+        organs_affected: safeParseJSON(i.organs_affected, [])
+      }));
+    } catch {
+      // ignore interaction lookup failures
     }
   }
 
@@ -20991,10 +21295,32 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
     compoundsByOrganOut[org] = Array.from(set);
   }
 
-  return { organs, compoundsByOrgan: compoundsByOrganOut };
+  return { organs, compoundsByOrgan: compoundsByOrganOut, compoundDetails, interactions };
 }
 
-function organLevelFromCounts({ plus = 0, minus = 0 }) {
+// Helper for safe JSON parsing
+function safeParseJSON(str, fallback = null) {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
+function organLevelFromCounts({ plus = 0, minus = 0, score = 0 }) {
+  // Use score-based assessment when available (more nuanced)
+  if (score !== 0) {
+    if (score >= 2.5) return "High Benefit";
+    if (score >= 1.0) return "Benefit";
+    if (score >= 0.3) return "Mild Benefit";
+    if (score <= -2.5) return "High Caution";
+    if (score <= -1.0) return "Caution";
+    if (score <= -0.3) return "Mild Caution";
+    return "Neutral";
+  }
+
+  // Fallback to count-based assessment
   if (plus === 0 && minus === 0) return "Neutral";
   if (plus > 0 && minus === 0) {
     if (plus >= 3) return "High Benefit";
@@ -21008,6 +21334,60 @@ function organLevelFromCounts({ plus = 0, minus = 0 }) {
   if (minus > plus) return "Caution";
   if (plus > minus) return "Benefit";
   return "Neutral";
+}
+
+// Generate doctor-like summary for an organ based on compounds
+function generateOrganSummary(organKey, compoundDetails, interactions) {
+  if (!compoundDetails || compoundDetails.length === 0) return null;
+
+  const benefits = compoundDetails.filter(c => c.effect === "benefit");
+  const cautions = compoundDetails.filter(c => c.effect === "caution" || c.effect === "risk");
+
+  const parts = [];
+
+  // Summarize benefits
+  if (benefits.length > 0) {
+    const topBenefits = benefits
+      .sort((a, b) => (b.strength || 0) - (a.strength || 0))
+      .slice(0, 3);
+
+    const benefitMechanisms = topBenefits
+      .map(b => b.mechanism)
+      .filter(Boolean)
+      .slice(0, 2);
+
+    if (benefitMechanisms.length > 0) {
+      parts.push(`Supports ${organKey} health through ${benefitMechanisms.join(" and ")}.`);
+    }
+
+    // Add specific explanation from top compound
+    if (topBenefits[0]?.explanation) {
+      const shortExplanation = topBenefits[0].explanation.split('.')[0] + '.';
+      parts.push(shortExplanation);
+    }
+  }
+
+  // Summarize cautions
+  if (cautions.length > 0) {
+    const topCaution = cautions.sort((a, b) => (b.strength || 0) - (a.strength || 0))[0];
+    if (topCaution?.mechanism) {
+      parts.push(`Note: ${topCaution.compound} may cause ${topCaution.mechanism}.`);
+    }
+  }
+
+  // Add relevant interactions
+  const relevantInteractions = (interactions || [])
+    .filter(i => i.organs_affected?.includes(organKey) || i.organs_affected?.length === 0)
+    .slice(0, 1);
+
+  if (relevantInteractions.length > 0) {
+    const int = relevantInteractions[0];
+    if (int.type === "synergy" || int.type === "absorption_enhance") {
+      parts.push(`Tip: ${int.description}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 async function assessOrgansLocally(
@@ -21035,7 +21415,7 @@ async function assessOrgansLocally(
   };
 
   // --- Molecular organ graph (D1): ingredient -> compounds -> organ effects ---
-  let organGraph = { organs: {}, compoundsByOrgan: {} };
+  let organGraph = { organs: {}, compoundsByOrgan: {}, compoundDetails: {}, interactions: [] };
   try {
     organGraph = await getOrganEffectsForIngredients(env, ingredients);
   } catch {
@@ -21045,13 +21425,33 @@ async function assessOrgansLocally(
   const organsArr = [];
   for (const [organKey, counts] of Object.entries(organGraph.organs || {})) {
     const level = organLevelFromCounts(counts);
+    const details = organGraph.compoundDetails?.[organKey] || [];
+    const summary = generateOrganSummary(organKey, details, organGraph.interactions);
+
+    // Get top compounds with their explanations
+    const topCompounds = details
+      .sort((a, b) => (b.strength || 0) - (a.strength || 0))
+      .slice(0, 3)
+      .map(d => ({
+        name: d.compound,
+        effect: d.effect,
+        mechanism: d.mechanism,
+        explanation: d.explanation,
+        citations: d.citations
+      }));
+
     organsArr.push({
       organ: organKey,
       level,
+      score: counts.score || 0,
       plus: counts.plus,
       minus: counts.minus,
       neutral: counts.neutral,
-      compounds: organGraph.compoundsByOrgan?.[organKey] || []
+      compounds: organGraph.compoundsByOrgan?.[organKey] || [],
+      // NEW: Enriched medical data
+      summary: summary,
+      top_compounds: topCompounds,
+      has_medical_detail: details.length > 0 && details.some(d => d.explanation)
     });
   }
 
@@ -21062,18 +21462,24 @@ async function assessOrgansLocally(
     flags: organsFlags,
     organs: organsArr,
     user_flags: user_flags || {},
-    ingredients
+    ingredients,
+    // NEW: Global interactions that apply across organs
+    compound_interactions: organGraph.interactions || []
   };
 
   // lightweight debug block
   organs.debug = organs.debug || {};
   organs.debug.molecular_summary = {
     organ_count: organsArr.length,
+    total_compounds_analyzed: Object.values(organGraph.compoundDetails || {}).flat().length,
+    interactions_found: organGraph.interactions?.length || 0,
     organs: organsArr.map((o) => ({
       organ: o.organ,
       level: o.level,
+      score: o.score,
       plus: o.plus,
-      minus: o.minus
+      minus: o.minus,
+      has_medical_detail: o.has_medical_detail
     }))
   };
 
