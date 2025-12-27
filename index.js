@@ -1,4 +1,4 @@
-/* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
+/* eslint-disable no-unused-vars, no-empty, no-useless-escape */
 
 // tb-dish-processor — Cloudflare Worker (Modules) — Uber Eats + Lexicon + Queue + Debug
 // Clean build: exact vendor body for /api/job, US bias + filter, proper Modules export.
@@ -902,15 +902,13 @@ async function handleOrgansFromDish(url, env, request) {
     return resp;
   }
 
-  const ingredientsRaw = Array.isArray(card?.ingredients)
-    ? card.ingredients
-    : [];
-  const originalLines = ingredientsRaw.map((item) =>
+  // Use rawIngredients from recipeResult (defined at line 867)
+  const originalLines = rawIngredients.map((item) =>
     typeof item === "string"
       ? item
       : item?.original || item?.name || item?.text || ""
   );
-  let ingredients = normalizeIngredientsArray(ingredientsRaw).map((entry) => ({
+  let ingredients = normalizeIngredientsArray(rawIngredients).map((entry) => ({
     name: canonicalizeIngredientName(entry.name),
     grams: entry.grams
   }));
@@ -11861,13 +11859,9 @@ async function fetchMenuFromUberEatsTiered(
 
   // Tier 2: Apify (fallback, slower but cleaner data)
   if (apifyEnabled) {
-    try {
-      const result = await fetchMenuFromApify(env, query, address, maxRows);
-      result._tier = "apify";
-      return result;
-    } catch (err) {
-      throw err;
-    }
+    const result = await fetchMenuFromApify(env, query, address, maxRows);
+    result._tier = "apify";
+    return result;
   }
 
   throw new Error("UberEats: No scraper tier available (missing RAPIDAPI_KEY and APIFY_TOKEN)");
