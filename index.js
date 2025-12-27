@@ -4949,7 +4949,11 @@ function inferHitsFromRecipeCard(card = {}) {
 function inferHitsFromText(title = "", desc = "") {
   const text = `${title} ${desc}`.toLowerCase();
   const hits = [];
-  const push = (o) =>
+  const seen = new Set(); // Avoid duplicate hits
+  const push = (o) => {
+    const key = o.canonical || o.term;
+    if (seen.has(key)) return;
+    seen.add(key);
     hits.push({
       term: o.term || o.canonical || o.label || null,
       canonical: o.canonical || o.term || o.label || null,
@@ -4957,19 +4961,17 @@ function inferHitsFromText(title = "", desc = "") {
       classes: o.classes || [],
       fodmap: o.fodmap,
       tags: o.tags || [],
-      source: "infer:title"
+      source: "infer:text"
     });
+  };
 
+  // FODMAP triggers
   if (/\bgarlic\b/.test(text)) {
     push({
       term: "garlic",
       canonical: "garlic",
       classes: ["garlic", "allium"],
-      fodmap: {
-        level: "high",
-        relevant: true,
-        drivers: ["garlic", "fructans"]
-      }
+      fodmap: { level: "high", relevant: true, drivers: ["garlic", "fructans"] }
     });
   }
   if (/\bonion\b|shallot|scallion/.test(text)) {
@@ -4977,36 +4979,350 @@ function inferHitsFromText(title = "", desc = "") {
       term: "onion",
       canonical: "onion",
       classes: ["onion", "allium"],
-      fodmap: {
-        level: "high",
-        relevant: true,
-        drivers: ["onion", "fructans"]
-      }
+      fodmap: { level: "high", relevant: true, drivers: ["onion", "fructans"] }
     });
   }
-  if (
-    /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
-      text
-    )
-  ) {
+  if (/\bhoney\b/.test(text)) {
     push({
-      term: "dairy",
-      canonical: "dairy",
+      term: "honey",
+      canonical: "honey",
+      classes: ["sweetener"],
+      fodmap: { level: "high", relevant: true, drivers: ["fructose"] }
+    });
+  }
+  if (/\bapple\b|apple cider/.test(text)) {
+    push({
+      term: "apple",
+      canonical: "apple",
+      classes: ["fruit"],
+      fodmap: { level: "high", relevant: true, drivers: ["fructose", "sorbitol"] }
+    });
+  }
+  if (/\bmushroom\b/.test(text)) {
+    push({
+      term: "mushroom",
+      canonical: "mushroom",
+      classes: ["vegetable", "fungi"],
+      fodmap: { level: "high", relevant: true, drivers: ["mannitol"] }
+    });
+  }
+  if (/\bcauliflower\b/.test(text)) {
+    push({
+      term: "cauliflower",
+      canonical: "cauliflower",
+      classes: ["vegetable"],
+      fodmap: { level: "high", relevant: true, drivers: ["mannitol"] }
+    });
+  }
+  if (/\bavocado\b|guacamole/.test(text)) {
+    push({
+      term: "avocado",
+      canonical: "avocado",
+      classes: ["fruit"],
+      fodmap: { level: "medium", relevant: true, drivers: ["sorbitol"] }
+    });
+  }
+
+  // Major allergens - FDA Big 9
+  // Dairy - detect specific types with their lactose levels
+  // High lactose: milk, ice cream, soft cheeses, cream, condensed milk
+  // Medium lactose: yogurt, sour cream, cottage cheese, ricotta
+  // Low lactose: butter, hard aged cheeses (parmesan, cheddar, gouda, brie, feta), ghee
+  // Lactose-free alternatives: lactose-free milk, lactaid
+
+  // High lactose dairy
+  if (/\bmilk\b(?!.*lactose.?free)/.test(text)) {
+    push({
+      term: "milk",
+      canonical: "milk",
       allergens: ["milk"],
       classes: ["dairy"],
-      fodmap: {
-        level: "low",
-        relevant: true,
-        drivers: ["lactose"]
-      }
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
     });
   }
-  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text)) {
+  if (/\bice cream|gelato\b/.test(text)) {
+    push({
+      term: "ice cream",
+      canonical: "ice_cream",
+      allergens: ["milk"],
+      classes: ["dairy", "dessert"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bheavy cream|whipping cream|half.and.half|condensed milk|evaporated milk\b/.test(text)) {
+    push({
+      term: "cream",
+      canonical: "cream",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcream cheese|mascarpone\b/.test(text)) {
+    push({
+      term: "cream cheese",
+      canonical: "cream_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Medium lactose dairy
+  if (/\byogurt|yoghurt\b/.test(text)) {
+    push({
+      term: "yogurt",
+      canonical: "yogurt",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bsour cream|crema\b/.test(text)) {
+    push({
+      term: "sour cream",
+      canonical: "sour_cream",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcottage cheese\b/.test(text)) {
+    push({
+      term: "cottage cheese",
+      canonical: "cottage_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bricotta\b/.test(text)) {
+    push({
+      term: "ricotta",
+      canonical: "ricotta",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bmozzarella\b/.test(text)) {
+    push({
+      term: "mozzarella",
+      canonical: "mozzarella",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Low lactose dairy (aged/hard cheeses, butter)
+  if (/\bparmesan|parmigiano|pecorino|romano\b/.test(text)) {
+    push({
+      term: "parmesan",
+      canonical: "parmesan",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcheddar\b/.test(text)) {
+    push({
+      term: "cheddar",
+      canonical: "cheddar",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bgouda|gruyere|swiss cheese|emmental\b/.test(text)) {
+    push({
+      term: "aged cheese",
+      canonical: "aged_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bbrie|camembert\b/.test(text)) {
+    push({
+      term: "brie",
+      canonical: "brie",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bfeta\b/.test(text)) {
+    push({
+      term: "feta",
+      canonical: "feta",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bblue cheese|gorgonzola|roquefort\b/.test(text)) {
+    push({
+      term: "blue cheese",
+      canonical: "blue_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bbutter\b(?!.*peanut|.*almond|.*cashew)/.test(text)) {
+    push({
+      term: "butter",
+      canonical: "butter",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bghee\b/.test(text)) {
+    push({
+      term: "ghee",
+      canonical: "ghee",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "none",
+      fodmap: { level: "low", relevant: false, drivers: [] }
+    });
+  }
+
+  // Generic cheese fallback (if no specific type detected)
+  if (/\bcheese\b/.test(text) && !seen.has("parmesan") && !seen.has("cheddar") && !seen.has("mozzarella") && !seen.has("feta") && !seen.has("brie") && !seen.has("ricotta") && !seen.has("cream_cheese") && !seen.has("cottage_cheese") && !seen.has("aged_cheese") && !seen.has("blue_cheese")) {
+    push({
+      term: "cheese",
+      canonical: "cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Generic creamy/dairy fallback
+  if (/\bcreamy\b|cream sauce|alfredo/.test(text) && !seen.has("cream") && !seen.has("cream_cheese") && !seen.has("sour_cream")) {
+    push({
+      term: "cream sauce",
+      canonical: "cream_sauce",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Whey/casein protein (common in processed foods)
+  if (/\bwhey|casein\b/.test(text)) {
+    push({
+      term: "whey/casein",
+      canonical: "whey_casein",
+      allergens: ["milk"],
+      classes: ["dairy", "protein"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bshrimp|prawn|lobster|crab|shellfish|clam|mussel|oyster|scallop|crawfish|crayfish\b/.test(text)) {
     push({
       term: "shellfish",
       canonical: "shellfish",
       allergens: ["shellfish"],
       classes: ["shellfish"]
+    });
+  }
+  if (/\bpeanut|peanuts\b/.test(text)) {
+    push({
+      term: "peanut",
+      canonical: "peanut",
+      allergens: ["peanut"],
+      classes: ["legume", "nut"]
+    });
+  }
+  if (/\balmond|walnut|pecan|cashew|pistachio|hazelnut|macadamia|brazil nut|tree nut/.test(text)) {
+    push({
+      term: "tree nut",
+      canonical: "tree_nut",
+      allergens: ["tree nut"],
+      classes: ["nut"]
+    });
+  }
+  if (/\begg\b|eggs\b|omelette|omelet|frittata|quiche|meringue|aioli|mayo|mayonnaise/.test(text)) {
+    push({
+      term: "egg",
+      canonical: "egg",
+      allergens: ["egg"],
+      classes: ["egg"]
+    });
+  }
+  if (/\bwheat|bread|flour|pasta|noodle|tortilla|pita|bagel|croissant|biscuit|cracker|pretzel|breaded|crusted|panko\b/.test(text)) {
+    push({
+      term: "wheat",
+      canonical: "wheat",
+      allergens: ["wheat", "gluten"],
+      classes: ["grain", "gluten"]
+    });
+  }
+  if (/\bsoy\b|soybean|tofu|tempeh|edamame|miso|soy sauce/.test(text)) {
+    push({
+      term: "soy",
+      canonical: "soy",
+      allergens: ["soy"],
+      classes: ["legume"]
+    });
+  }
+  if (/\bsalmon|tuna|cod|tilapia|halibut|trout|bass|anchov|sardine|mackerel|swordfish|mahi|snapper|\bfish\b/.test(text)) {
+    push({
+      term: "fish",
+      canonical: "fish",
+      allergens: ["fish"],
+      classes: ["fish", "seafood"]
+    });
+  }
+  if (/\bsesame|tahini\b/.test(text)) {
+    push({
+      term: "sesame",
+      canonical: "sesame",
+      allergens: ["sesame"],
+      classes: ["seed"]
+    });
+  }
+
+  // Gluten sources (beyond wheat)
+  if (/\bbarley|rye|spelt|triticale|farro|couscous|bulgur|seitan\b/.test(text)) {
+    push({
+      term: "gluten",
+      canonical: "gluten",
+      allergens: ["gluten"],
+      classes: ["grain", "gluten"]
+    });
+  }
+
+  // Sulfites (common in wine sauces, dried fruits)
+  if (/\bwine\b|wine sauce|dried fruit|dried apricot/.test(text)) {
+    push({
+      term: "sulfites",
+      canonical: "sulfites",
+      allergens: ["sulfites"],
+      classes: ["preservative"]
     });
   }
 
@@ -7979,17 +8295,18 @@ No extra keys, no commentary outside JSON.
         : "No portion reason provided.";
 
     // Normalize plate components: drop low-confidence, enforce at most one main, normalize area_ratio
+    // Also split compound labels like "bacon and sausage" into separate components
     let plate_components = plateComponentsRaw
       .filter((c) => {
         if (!c || typeof c !== "object") return false;
         const conf = typeof c.confidence === "number" ? c.confidence : 0;
         return conf >= 0.35;
       })
-      .map((c) => {
+      .flatMap((c) => {
         const role = typeof c.role === "string" && c.role ? c.role : "unknown";
         const category =
           typeof c.category === "string" && c.category ? c.category : "other";
-        const label =
+        const rawLabel =
           (typeof c.label === "string" && c.label) ||
           (typeof c.component === "string" && c.component) ||
           (typeof c.name === "string" && c.name) ||
@@ -8000,10 +8317,26 @@ No extra keys, no commentary outside JSON.
             ? c.area_ratio
             : 0;
 
+        // Split compound labels like "bacon and sausage", "eggs and toast", etc.
+        const splitPattern = /\s+and\s+|\s*,\s*|\s*&\s*/i;
+        const labels = rawLabel.split(splitPattern).map(s => s.trim()).filter(s => s.length > 0);
+
+        if (labels.length > 1) {
+          // Split area_ratio evenly among the split components
+          const splitRatio = area_ratio / labels.length;
+          return labels.map(label => ({
+            role,
+            category,
+            label,
+            confidence,
+            area_ratio: splitRatio
+          }));
+        }
+
         return {
           role,
           category,
-          label,
+          label: rawLabel,
           confidence,
           area_ratio
         };
@@ -24937,6 +25270,95 @@ async function runDishAnalysis(env, body, ctx) {
         ...comp
       }))
     : [];
+
+  // Vision-augmented recipe merging:
+  // If vision detected ingredients not in the original recipe, classify them
+  // and merge their allergen/FODMAP hits into the analysis
+  try {
+    const visualIngredients = debug.vision_insights?.visual_ingredients || [];
+    if (visualIngredients.length > 0) {
+      // Extract ingredient names from vision (high confidence only)
+      const visionIngredientNames = visualIngredients
+        .filter((vi) => vi && vi.confidence >= 0.6)
+        .map((vi) => vi.guess || vi.label || vi.category)
+        .filter(Boolean);
+
+      if (visionIngredientNames.length > 0) {
+        // Get existing ingredient names (normalized) for deduplication
+        const existingIngredients = new Set(
+          (ingredientsForLex || []).map((n) => n.toLowerCase().trim())
+        );
+
+        // Filter to only NEW ingredients not already in recipe
+        const newVisionIngredients = visionIngredientNames.filter(
+          (name) => !existingIngredients.has(name.toLowerCase().trim())
+        );
+
+        if (newVisionIngredients.length > 0) {
+          debug.vision_new_ingredients = newVisionIngredients;
+
+          // Classify these new ingredients (uses cache if available)
+          const visionFatsecretResult = await classifyIngredientsWithFatSecret(
+            env,
+            newVisionIngredients,
+            "en"
+          );
+
+          if (visionFatsecretResult.ok && visionFatsecretResult.allIngredientHits?.length > 0) {
+            debug.vision_allergen_hits = visionFatsecretResult.allIngredientHits;
+            debug.vision_fatsecret_cache_stats = visionFatsecretResult._cacheStats;
+            debug.vision_augmented_analysis = true;
+
+            // Merge vision-detected allergens into allergen_flags (avoiding duplicates)
+            const existingAllergenKinds = new Set(
+              (allergen_flags || []).map((f) => (f.kind || "").toLowerCase())
+            );
+
+            for (const hit of visionFatsecretResult.allIngredientHits) {
+              if (!hit.allergens || !Array.isArray(hit.allergens)) continue;
+              for (const allergen of hit.allergens) {
+                const kind = (allergen || "").toLowerCase();
+                if (kind && !existingAllergenKinds.has(kind)) {
+                  allergen_flags.push({
+                    kind: allergen,
+                    present: "yes",
+                    message: `Detected via vision: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  });
+                  existingAllergenKinds.add(kind);
+                }
+              }
+
+              // Also check lactose from vision
+              if (hit.lactose_band && hit.lactose_band !== "none") {
+                if (!lactose_flags || lactose_flags.level === "none") {
+                  lactose_flags = {
+                    level: hit.lactose_band,
+                    reason: `Vision detected dairy: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  };
+                }
+              }
+
+              // Check FODMAP from vision
+              if (hit.fodmap && (!fodmap_flags || fodmap_flags.level === "low")) {
+                const visionFodmapLevel = hit.fodmap.level || hit.fodmap;
+                if (visionFodmapLevel === "high" || visionFodmapLevel === "medium") {
+                  fodmap_flags = {
+                    level: visionFodmapLevel,
+                    reason: `Vision detected: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    debug.vision_merge_error = String((err && (err.stack || err.message)) || err);
+  }
 
   // Normalize nutrition to per-serving values using recipe yield
   // SKIP this divisor when restaurantCalories is provided (already per-serving)
