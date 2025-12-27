@@ -12,7 +12,11 @@
     "prettier": "^3.6.2"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "tune:menus": "node garage/tune-menus.js",
+    "garage:run": "node garage/run-garage.js",
+    "garage:test": "node garage/test-garage-mode.js",
+    "lint": "eslint index.js"
   },
   "keywords": [],
   "author": "",

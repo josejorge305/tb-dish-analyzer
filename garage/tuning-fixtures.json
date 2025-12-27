@@ -1,0 +1,158 @@
+[
+  {
+    "restaurant_id": "chipotle-mexican-grill",
+    "uber_url": "https://www.ubereats.com/store/chipotle-mexican-grill-2001-k-st-nw/sHvkP4eQSoatfK0HNqNPew",
+    "name": "Chipotle Mexican Grill",
+    "cuisine": "mexican",
+    "expected_categories": ["Bowls", "Burritos", "Tacos", "Salads", "Quesadillas", "Kids Meals", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "mcdonalds",
+    "uber_url": "https://www.ubereats.com/store/mcdonalds-1250-u-st-nw/sBzzAJ7wSvOPzyf2lOv8Ag",
+    "name": "McDonald's",
+    "cuisine": "american_fast_food",
+    "expected_categories": ["Burgers", "Chicken", "Breakfast", "Sides", "Drinks", "Desserts", "Happy Meals"]
+  },
+  {
+    "restaurant_id": "taco-bell",
+    "uber_url": "https://www.ubereats.com/store/taco-bell-1726-l-st-nw/i9J0Y1hERrmW3u4VQHxdIQ",
+    "name": "Taco Bell",
+    "cuisine": "mexican_fast_food",
+    "expected_categories": ["Tacos", "Burritos", "Quesadillas", "Nachos", "Specialties", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "subway",
+    "uber_url": "https://www.ubereats.com/store/subway-1156-18th-st-nw/WBXwvJTpSjS7B0e_6NJg0A",
+    "name": "Subway",
+    "cuisine": "sandwiches",
+    "expected_categories": ["Footlong Subs", "6\" Subs", "Wraps", "Salads", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "starbucks",
+    "uber_url": "https://www.ubereats.com/store/starbucks-1301-k-st-nw/RFP9VNE_QHiEVxXpVfK9eg",
+    "name": "Starbucks",
+    "cuisine": "coffee",
+    "expected_categories": ["Hot Coffee", "Cold Coffee", "Frappuccino", "Tea", "Food", "Pastries"],
+    "is_coffee_shop": true
+  },
+  {
+    "restaurant_id": "chick-fil-a",
+    "uber_url": "https://www.ubereats.com/store/chick-fil-a-1134-19th-st-nw/q8kL1VLSTBuIUgNxPAiCLg",
+    "name": "Chick-fil-A",
+    "cuisine": "chicken",
+    "expected_categories": ["Entrees", "Meals", "Salads", "Sides", "Kid's Meals", "Drinks", "Treats"]
+  },
+  {
+    "restaurant_id": "panera-bread",
+    "uber_url": "https://www.ubereats.com/store/panera-bread/Bf-3zq4iRCKCPdJz0fJz3Q",
+    "name": "Panera Bread",
+    "cuisine": "bakery_cafe",
+    "expected_categories": ["Soups", "Salads", "Sandwiches", "Mac & Cheese", "Bowls", "Bakery", "Drinks"]
+  },
+  {
+    "restaurant_id": "five-guys",
+    "uber_url": "https://www.ubereats.com/store/five-guys-1400-i-st-nw/RnfXaJ9XQSmZ2z_lhXxA1w",
+    "name": "Five Guys",
+    "cuisine": "burgers",
+    "expected_categories": ["Burgers", "Dogs", "Sandwiches", "Fries", "Drinks"]
+  },
+  {
+    "restaurant_id": "wendys",
+    "uber_url": "https://www.ubereats.com/store/wendys-1-dupont-circle-nw/IKRgLfaAQaKz3xFRqFxfVw",
+    "name": "Wendy's",
+    "cuisine": "american_fast_food",
+    "expected_categories": ["Burgers", "Chicken", "Salads", "Frosty", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "popeyes",
+    "uber_url": "https://www.ubereats.com/store/popeyes-louisiana-kitchen-1206-h-st-ne/OGJ7IrfdT--j6aZ9R0x1pA",
+    "name": "Popeyes",
+    "cuisine": "chicken",
+    "expected_categories": ["Chicken", "Sandwiches", "Seafood", "Sides", "Desserts", "Drinks"]
+  },
+  {
+    "restaurant_id": "cava",
+    "uber_url": "https://www.ubereats.com/store/cava-1330-connecticut-ave-nw/aNQ3vCJmQbqGdmGlOXtFpQ",
+    "name": "CAVA",
+    "cuisine": "mediterranean",
+    "expected_categories": ["Bowls", "Pitas", "Salads", "Dips & Spreads", "Drinks"]
+  },
+  {
+    "restaurant_id": "sweetgreen",
+    "uber_url": "https://www.ubereats.com/store/sweetgreen-1512-connecticut-ave-nw/XK6BLwFHQHKFGH9EKA6_Pg",
+    "name": "Sweetgreen",
+    "cuisine": "salads",
+    "expected_categories": ["Salads", "Warm Bowls", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "pizza-hut",
+    "uber_url": "https://www.ubereats.com/store/pizza-hut-1201-u-st-nw/C0BRrYxHTCqeVB6KnlThew",
+    "name": "Pizza Hut",
+    "cuisine": "pizza",
+    "expected_categories": ["Pizza", "Wings", "Pasta", "Breadsticks", "Sides", "Desserts", "Drinks"]
+  },
+  {
+    "restaurant_id": "dominos",
+    "uber_url": "https://www.ubereats.com/store/dominos-pizza-1429-h-st-ne/qHZGiB1jSCmpQXVs8lP9Qw",
+    "name": "Domino's Pizza",
+    "cuisine": "pizza",
+    "expected_categories": ["Pizza", "Chicken", "Sandwiches", "Pasta", "Sides", "Desserts", "Drinks"]
+  },
+  {
+    "restaurant_id": "olive-garden",
+    "uber_url": "https://www.ubereats.com/store/olive-garden-italian-restaurant-12200-fairfax-towne-center/PqNXLvKdQvygjBc6lSvBBw",
+    "name": "Olive Garden",
+    "cuisine": "italian",
+    "expected_categories": ["Appetizers", "Soups & Salads", "Pasta", "Entrees", "Desserts", "Drinks"]
+  },
+  {
+    "restaurant_id": "panda-express",
+    "uber_url": "https://www.ubereats.com/store/panda-express-1118-f-st-nw/Qf8vLWHxR6aEtGkVzpN5Vw",
+    "name": "Panda Express",
+    "cuisine": "chinese_american",
+    "expected_categories": ["Plates", "Bowls", "Entrees", "Sides", "Appetizers", "Drinks"]
+  },
+  {
+    "restaurant_id": "wingstop",
+    "uber_url": "https://www.ubereats.com/store/wingstop-2147-p-st-nw/1z_HCdXLRaO5Z7VKcVpW9g",
+    "name": "Wingstop",
+    "cuisine": "wings",
+    "expected_categories": ["Wings", "Boneless Wings", "Tenders", "Sides", "Dips", "Drinks"]
+  },
+  {
+    "restaurant_id": "jersey-mikes",
+    "uber_url": "https://www.ubereats.com/store/jersey-mikes-subs-1627-k-st-nw/7N7b8Q9KTnOtZ5MJ5hxPZw",
+    "name": "Jersey Mike's",
+    "cuisine": "sandwiches",
+    "expected_categories": ["Cold Subs", "Hot Subs", "Wraps", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "buffalo-wild-wings",
+    "uber_url": "https://www.ubereats.com/store/buffalo-wild-wings-701-6th-st-nw/Yh7M8PqaRVu8VtXz_EoV2g",
+    "name": "Buffalo Wild Wings",
+    "cuisine": "wings",
+    "expected_categories": ["Wings", "Boneless", "Burgers", "Sandwiches", "Salads", "Sides", "Drinks"]
+  },
+  {
+    "restaurant_id": "dunkin",
+    "uber_url": "https://www.ubereats.com/store/dunkin-1729-l-st-nw/kX3jB7nST3a1vZBCl9Z4Kw",
+    "name": "Dunkin'",
+    "cuisine": "coffee",
+    "expected_categories": ["Coffee", "Espresso", "Iced Drinks", "Donuts", "Breakfast", "Snacks"],
+    "is_coffee_shop": true
+  },
+  {
+    "restaurant_id": "shake-shack",
+    "uber_url": "https://www.ubereats.com/store/shake-shack-penn-quarter/Lx7vZhN0S5-vKB3k7YcK9Q",
+    "name": "Shake Shack",
+    "cuisine": "burgers",
+    "expected_categories": ["Burgers", "Chicken", "Hot Dogs", "Fries", "Shakes", "Drinks"]
+  },
+  {
+    "restaurant_id": "kfc",
+    "uber_url": "https://www.ubereats.com/store/kfc-1800-k-st-nw/g_bS4cKLT0aRj8JZKb5Dpg",
+    "name": "KFC",
+    "cuisine": "chicken",
+    "expected_categories": ["Chicken", "Sandwiches", "Bowls", "Sides", "Desserts", "Drinks"]
+  }
+]
