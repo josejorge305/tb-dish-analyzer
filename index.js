@@ -1,4 +1,4 @@
-/* eslint-disable no-undef, no-unused-vars, no-empty, no-useless-escape */
+/* eslint-disable no-unused-vars, no-empty, no-useless-escape */
 
 // tb-dish-processor — Cloudflare Worker (Modules) — Uber Eats + Lexicon + Queue + Debug
 // Clean build: exact vendor body for /api/job, US bias + filter, proper Modules export.
@@ -947,15 +947,13 @@ async function handleOrgansFromDish(url, env, request) {
     return resp;
   }
 
-  const ingredientsRaw = Array.isArray(card?.ingredients)
-    ? card.ingredients
-    : [];
-  const originalLines = ingredientsRaw.map((item) =>
+  // Use rawIngredients from recipeResult (defined at line 867)
+  const originalLines = rawIngredients.map((item) =>
     typeof item === "string"
       ? item
       : item?.original || item?.name || item?.text || ""
   );
-  let ingredients = normalizeIngredientsArray(ingredientsRaw).map((entry) => ({
+  let ingredients = normalizeIngredientsArray(rawIngredients).map((entry) => ({
     name: canonicalizeIngredientName(entry.name),
     grams: entry.grams
   }));
@@ -977,6 +975,9 @@ async function handleOrgansFromDish(url, env, request) {
   // --- organ assessment (inline) ---
   let organLevels = {};
   let organDrivers = {};
+  // Note: assessOrgansFromIngredients is an optional external function
+  // that may be injected at runtime. The typeof check handles the case
+  // where it's not available.
   try {
     if (typeof assessOrgansFromIngredients === "function") {
       console.log(
@@ -984,6 +985,7 @@ async function handleOrgansFromDish(url, env, request) {
         normalizedIngredients.length,
         "ingredients"
       );
+      // eslint-disable-next-line no-undef
       const assessRes = await assessOrgansFromIngredients(
         normalizedIngredients,
         { weightKg: weight_kg }
@@ -1104,11 +1106,38 @@ async function handleOrgansFromDish(url, env, request) {
   const driversText = topDriversText(driversSlim);
 
   const organ_summaries = organ?.summaries ?? {};
+
+  // Extract enriched organ data from assessOrgansLocally response
+  const organDetailsArr = organ?.organs || [];
+  const organ_details = {};
+  const organ_medical_summaries = {};
+  const organ_scores = {};
+  for (const o of organDetailsArr) {
+    const key = o.organ;
+    if (!key) continue;
+    // Use new enriched level if available
+    if (o.level && !organLevels[key]) {
+      organLevels[key] = o.level;
+    }
+    organ_scores[key] = o.score || 0;
+    organ_medical_summaries[key] = o.summary || null;
+    organ_details[key] = {
+      level: o.level,
+      score: o.score || 0,
+      summary: o.summary || null,
+      top_compounds: o.top_compounds || [],
+      compounds: o.compounds || [],
+      has_medical_detail: o.has_medical_detail || false
+    };
+  }
+
+  // Extract compound interactions
+  const compound_interactions = organ?.compound_interactions || [];
   const organ_top_drivers = { ...(organDrivers || {}) };
   const scoring = organ?.scoring || {};
   const filled = { organ_levels: organLevels || {} };
   const levels =
-    (typeof organ_levels !== "undefined" && organ_levels) ||
+    organLevels ||
     filled?.organ_levels ||
     scoring?.organ_levels ||
     scoring?.levels ||
@@ -1122,7 +1151,9 @@ async function handleOrgansFromDish(url, env, request) {
     ({
       "High Benefit": 80,
       Benefit: 40,
+      "Mild Benefit": 20,
       Neutral: 0,
+      "Mild Caution": -20,
       Caution: -40,
       "High Caution": -80
     })[s] ?? 0;
@@ -1130,7 +1161,9 @@ async function handleOrgansFromDish(url, env, request) {
     ({
       "High Benefit": "#16a34a",
       Benefit: "#22c55e",
+      "Mild Benefit": "#86efac",
       Neutral: "#a1a1aa",
+      "Mild Caution": "#fcd34d",
       Caution: "#f59e0b",
       "High Caution": "#dc2626"
     })[s] ?? "#a1a1aa";
@@ -1196,6 +1229,11 @@ async function handleOrgansFromDish(url, env, request) {
     organ_bars,
     organ_colors,
     insight_lines,
+    // NEW: Enriched medical data
+    organ_scores,
+    organ_medical_summaries,
+    organ_details,
+    compound_interactions,
     recipe_debug
   };
 
@@ -2673,7 +2711,28 @@ async function lookupComboFromDB(env, dishName, restaurantName) {
  * @param {string} restaurantName
  * @returns {Promise<{components: array, source: string}>}
  */
+// LATENCY OPTIMIZATION: Cache combo decomposition results
+// Same combo meal = same components (permanent knowledge)
+function buildComboCacheKey(dishName, restaurantName) {
+  const normalized = [
+    (dishName || "").toLowerCase().trim(),
+    (restaurantName || "").toLowerCase().trim()
+  ].join("|");
+  return `combo-llm:${hashShort(normalized)}`;
+}
+
 async function decomposeComboWithLLM(env, dishName, restaurantName) {
+  // Check cache first
+  const cacheKey = buildComboCacheKey(dishName, restaurantName);
+  if (env?.MENUS_CACHE) {
+    try {
+      const cached = await env.MENUS_CACHE.get(cacheKey, "json");
+      if (cached && Array.isArray(cached.components)) {
+        return { ...cached, cached: true };
+      }
+    } catch {}
+  }
+
   const prompt = `You are a food expert. The dish "${dishName}"${restaurantName ? ` from "${restaurantName}"` : ""} is a combo/platter meal.
 
 List the individual food items that come with this meal. Return ONLY a JSON array of objects with this format:
@@ -2689,6 +2748,8 @@ Rules:
 - Return valid JSON only, no explanation`;
 
   try {
+    let result = null;
+
     // Try OpenAI first
     if (env.OPENAI_API_KEY) {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -2711,13 +2772,13 @@ Rules:
         const jsonMatch = content.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           const components = JSON.parse(jsonMatch[0]);
-          return { components, source: "openai" };
+          result = { components, source: "openai" };
         }
       }
     }
 
     // Fallback to Cloudflare AI
-    if (env.AI) {
+    if (!result && env.AI) {
       const aiResult = await env.AI.run("@cf/meta/llama-3-8b-instruct", {
         messages: [{ role: "user", content: prompt }]
       });
@@ -2725,15 +2786,80 @@ Rules:
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         const components = JSON.parse(jsonMatch[0]);
-        return { components, source: "cloudflare" };
+        result = { components, source: "cloudflare" };
       }
     }
 
-    return { components: [], source: "none" };
+    if (!result) {
+      result = { components: [], source: "none" };
+    }
+
+    // Cache successful result (permanent - combo compositions don't change)
+    if (result.components.length > 0 && env?.MENUS_CACHE) {
+      try {
+        await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+          ...result,
+          _cachedAt: new Date().toISOString()
+        }));
+      } catch {}
+    }
+
+    return result;
   } catch (e) {
     console.error("decomposeComboWithLLM error:", e);
     return { components: [], source: "error", error: String(e) };
   }
+}
+
+/**
+ * LATENCY OPTIMIZATION: Cache FatSecret access token
+ * Tokens last 3600s, so we cache for 3000s to be safe
+ * Eliminates redundant OAuth calls (500ms each)
+ */
+async function getFatSecretTokenCached(env) {
+  if (!env.FATSECRET_CLIENT_ID || !env.FATSECRET_CLIENT_SECRET) {
+    return null;
+  }
+
+  // Try KV cache first
+  const cacheKey = "fatsecret:access_token";
+  if (env?.MENUS_CACHE) {
+    try {
+      const cached = await env.MENUS_CACHE.get(cacheKey, "json");
+      if (cached?.token && cached.expiresAt > Date.now()) {
+        return cached.token;
+      }
+    } catch {}
+  }
+
+  // Fetch new token
+  const tokenResponse = await fetch("https://oauth.fatsecret.com/connect/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${btoa(`${env.FATSECRET_CLIENT_ID}:${env.FATSECRET_CLIENT_SECRET}`)}`
+    },
+    body: "grant_type=client_credentials&scope=basic"
+  });
+
+  if (!tokenResponse.ok) return null;
+  const tokenData = await tokenResponse.json();
+  const accessToken = tokenData.access_token;
+  const expiresIn = tokenData.expires_in || 3600;
+
+  // Cache token (with buffer before expiry)
+  if (accessToken && env?.MENUS_CACHE) {
+    try {
+      await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+        token: accessToken,
+        expiresAt: Date.now() + (expiresIn - 300) * 1000 // 5min buffer
+      }), {
+        expirationTtl: expiresIn - 300 // Let KV expire it too
+      });
+    } catch {}
+  }
+
+  return accessToken;
 }
 
 /**
@@ -2750,19 +2876,9 @@ async function fetchComponentNutrition(env, componentName, quantity = 1) {
   }
 
   try {
-    // Get FatSecret OAuth token (reuse existing helper if available)
-    const tokenResponse = await fetch("https://oauth.fatsecret.com/connect/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${btoa(`${env.FATSECRET_CLIENT_ID}:${env.FATSECRET_CLIENT_SECRET}`)}`
-      },
-      body: "grant_type=client_credentials&scope=basic"
-    });
-
-    if (!tokenResponse.ok) return null;
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
+    // LATENCY OPTIMIZATION: Use cached token instead of fetching every time
+    const accessToken = await getFatSecretTokenCached(env);
+    if (!accessToken) return null;
 
     // Search for the food
     const searchUrl = `https://platform.fatsecret.com/rest/server.api?method=foods.search&search_expression=${encodeURIComponent(componentName)}&format=json&max_results=1`;
@@ -3073,7 +3189,7 @@ function extractMenuItemsFromUber(raw, queryText = "") {
   if (results.length === 1) {
     chosenRestaurants = [results[0]];
   } else {
-    // legacy scoring, but choose only ONE best
+    // Improved scoring with minimum threshold to avoid wrong matches
     const scored = results.map((r) => {
       const name = (r.title || r.sanitizedTitle || r.name || "").toLowerCase();
       const q = (queryText || "").toLowerCase();
@@ -3083,24 +3199,40 @@ function extractMenuItemsFromUber(raw, queryText = "") {
         if (name === q) score = 100;
         else if (name.startsWith(q)) score = 90;
         else if (name.includes(q)) score = 80;
+        else if (q.includes(name) && name.length > 3) score = 75; // restaurant name is substring of query
         else {
+          // Word overlap scoring - require significant overlap
           const nTokens = name.split(/\s+/);
           const qTokens = q.split(/\s+/);
           const nSet = new Set(nTokens);
           let overlap = 0;
+          let keyWordMatch = false;
           for (const t of qTokens) {
-            if (nSet.has(t)) overlap++;
+            if (nSet.has(t)) {
+              overlap++;
+              // Check if this is a "key" word (not common words)
+              if (t.length > 4 && !['the', 'and', 'restaurant', 'cafe', 'bar', 'grill'].includes(t)) {
+                keyWordMatch = true;
+              }
+            }
           }
           const ratio = overlap / Math.max(1, qTokens.length);
-          score = Math.round(60 * ratio);
+          // Only give credit if key words match, not just common words like "factory"
+          score = keyWordMatch ? Math.round(60 * ratio) : Math.round(30 * ratio);
         }
       }
       return { r, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
-    if (scored[0]) {
-      chosenRestaurants = [scored[0].r]; // ONLY top one
+    // Require minimum score of 50 to avoid picking completely wrong restaurants
+    const MIN_MATCH_SCORE = 50;
+    if (scored[0] && scored[0].score >= MIN_MATCH_SCORE) {
+      chosenRestaurants = [scored[0].r]; // ONLY top one if score is good enough
+    } else if (scored[0]) {
+      // Log warning but still use best match if nothing better
+      console.warn(`[extractMenuItemsFromUber] Low match score ${scored[0].score} for query "${queryText}" -> "${scored[0].r.title || scored[0].r.name}"`);
+      chosenRestaurants = [scored[0].r];
     }
   }
 
@@ -3357,7 +3489,7 @@ function filterAndRankItems(items, searchParams, env) {
     );
   }
 
-  const HITS_LIMIT = Number(searchParams.get("top") || env.HITS_LIMIT || "25");
+  const HITS_LIMIT = Number(searchParams.get("top") || env.HITS_LIMIT || "250");
   return rankTop(candidates, HITS_LIMIT);
 }
 
@@ -4898,7 +5030,11 @@ function inferHitsFromRecipeCard(card = {}) {
 function inferHitsFromText(title = "", desc = "") {
   const text = `${title} ${desc}`.toLowerCase();
   const hits = [];
-  const push = (o) =>
+  const seen = new Set(); // Avoid duplicate hits
+  const push = (o) => {
+    const key = o.canonical || o.term;
+    if (seen.has(key)) return;
+    seen.add(key);
     hits.push({
       term: o.term || o.canonical || o.label || null,
       canonical: o.canonical || o.term || o.label || null,
@@ -4906,19 +5042,17 @@ function inferHitsFromText(title = "", desc = "") {
       classes: o.classes || [],
       fodmap: o.fodmap,
       tags: o.tags || [],
-      source: "infer:title"
+      source: "infer:text"
     });
+  };
 
+  // FODMAP triggers
   if (/\bgarlic\b/.test(text)) {
     push({
       term: "garlic",
       canonical: "garlic",
       classes: ["garlic", "allium"],
-      fodmap: {
-        level: "high",
-        relevant: true,
-        drivers: ["garlic", "fructans"]
-      }
+      fodmap: { level: "high", relevant: true, drivers: ["garlic", "fructans"] }
     });
   }
   if (/\bonion\b|shallot|scallion/.test(text)) {
@@ -4926,36 +5060,350 @@ function inferHitsFromText(title = "", desc = "") {
       term: "onion",
       canonical: "onion",
       classes: ["onion", "allium"],
-      fodmap: {
-        level: "high",
-        relevant: true,
-        drivers: ["onion", "fructans"]
-      }
+      fodmap: { level: "high", relevant: true, drivers: ["onion", "fructans"] }
     });
   }
-  if (
-    /(milk|cream|butter|cheese|parmesan|mozzarella|yogurt|whey|casein)\b/.test(
-      text
-    )
-  ) {
+  if (/\bhoney\b/.test(text)) {
     push({
-      term: "dairy",
-      canonical: "dairy",
+      term: "honey",
+      canonical: "honey",
+      classes: ["sweetener"],
+      fodmap: { level: "high", relevant: true, drivers: ["fructose"] }
+    });
+  }
+  if (/\bapple\b|apple cider/.test(text)) {
+    push({
+      term: "apple",
+      canonical: "apple",
+      classes: ["fruit"],
+      fodmap: { level: "high", relevant: true, drivers: ["fructose", "sorbitol"] }
+    });
+  }
+  if (/\bmushroom\b/.test(text)) {
+    push({
+      term: "mushroom",
+      canonical: "mushroom",
+      classes: ["vegetable", "fungi"],
+      fodmap: { level: "high", relevant: true, drivers: ["mannitol"] }
+    });
+  }
+  if (/\bcauliflower\b/.test(text)) {
+    push({
+      term: "cauliflower",
+      canonical: "cauliflower",
+      classes: ["vegetable"],
+      fodmap: { level: "high", relevant: true, drivers: ["mannitol"] }
+    });
+  }
+  if (/\bavocado\b|guacamole/.test(text)) {
+    push({
+      term: "avocado",
+      canonical: "avocado",
+      classes: ["fruit"],
+      fodmap: { level: "medium", relevant: true, drivers: ["sorbitol"] }
+    });
+  }
+
+  // Major allergens - FDA Big 9
+  // Dairy - detect specific types with their lactose levels
+  // High lactose: milk, ice cream, soft cheeses, cream, condensed milk
+  // Medium lactose: yogurt, sour cream, cottage cheese, ricotta
+  // Low lactose: butter, hard aged cheeses (parmesan, cheddar, gouda, brie, feta), ghee
+  // Lactose-free alternatives: lactose-free milk, lactaid
+
+  // High lactose dairy
+  if (/\bmilk\b(?!.*lactose.?free)/.test(text)) {
+    push({
+      term: "milk",
+      canonical: "milk",
       allergens: ["milk"],
       classes: ["dairy"],
-      fodmap: {
-        level: "low",
-        relevant: true,
-        drivers: ["lactose"]
-      }
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
     });
   }
-  if (/\bshrimp|prawn|lobster|crab|shellfish\b/.test(text)) {
+  if (/\bice cream|gelato\b/.test(text)) {
+    push({
+      term: "ice cream",
+      canonical: "ice_cream",
+      allergens: ["milk"],
+      classes: ["dairy", "dessert"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bheavy cream|whipping cream|half.and.half|condensed milk|evaporated milk\b/.test(text)) {
+    push({
+      term: "cream",
+      canonical: "cream",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcream cheese|mascarpone\b/.test(text)) {
+    push({
+      term: "cream cheese",
+      canonical: "cream_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Medium lactose dairy
+  if (/\byogurt|yoghurt\b/.test(text)) {
+    push({
+      term: "yogurt",
+      canonical: "yogurt",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bsour cream|crema\b/.test(text)) {
+    push({
+      term: "sour cream",
+      canonical: "sour_cream",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcottage cheese\b/.test(text)) {
+    push({
+      term: "cottage cheese",
+      canonical: "cottage_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bricotta\b/.test(text)) {
+    push({
+      term: "ricotta",
+      canonical: "ricotta",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "medium", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bmozzarella\b/.test(text)) {
+    push({
+      term: "mozzarella",
+      canonical: "mozzarella",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Low lactose dairy (aged/hard cheeses, butter)
+  if (/\bparmesan|parmigiano|pecorino|romano\b/.test(text)) {
+    push({
+      term: "parmesan",
+      canonical: "parmesan",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bcheddar\b/.test(text)) {
+    push({
+      term: "cheddar",
+      canonical: "cheddar",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bgouda|gruyere|swiss cheese|emmental\b/.test(text)) {
+    push({
+      term: "aged cheese",
+      canonical: "aged_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bbrie|camembert\b/.test(text)) {
+    push({
+      term: "brie",
+      canonical: "brie",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bfeta\b/.test(text)) {
+    push({
+      term: "feta",
+      canonical: "feta",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bblue cheese|gorgonzola|roquefort\b/.test(text)) {
+    push({
+      term: "blue cheese",
+      canonical: "blue_cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bbutter\b(?!.*peanut|.*almond|.*cashew)/.test(text)) {
+    push({
+      term: "butter",
+      canonical: "butter",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bghee\b/.test(text)) {
+    push({
+      term: "ghee",
+      canonical: "ghee",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "none",
+      fodmap: { level: "low", relevant: false, drivers: [] }
+    });
+  }
+
+  // Generic cheese fallback (if no specific type detected)
+  if (/\bcheese\b/.test(text) && !seen.has("parmesan") && !seen.has("cheddar") && !seen.has("mozzarella") && !seen.has("feta") && !seen.has("brie") && !seen.has("ricotta") && !seen.has("cream_cheese") && !seen.has("cottage_cheese") && !seen.has("aged_cheese") && !seen.has("blue_cheese")) {
+    push({
+      term: "cheese",
+      canonical: "cheese",
+      allergens: ["milk"],
+      classes: ["dairy", "cheese"],
+      lactose_band: "medium",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Generic creamy/dairy fallback
+  if (/\bcreamy\b|cream sauce|alfredo/.test(text) && !seen.has("cream") && !seen.has("cream_cheese") && !seen.has("sour_cream")) {
+    push({
+      term: "cream sauce",
+      canonical: "cream_sauce",
+      allergens: ["milk"],
+      classes: ["dairy"],
+      lactose_band: "high",
+      fodmap: { level: "high", relevant: true, drivers: ["lactose"] }
+    });
+  }
+
+  // Whey/casein protein (common in processed foods)
+  if (/\bwhey|casein\b/.test(text)) {
+    push({
+      term: "whey/casein",
+      canonical: "whey_casein",
+      allergens: ["milk"],
+      classes: ["dairy", "protein"],
+      lactose_band: "low",
+      fodmap: { level: "low", relevant: true, drivers: ["lactose"] }
+    });
+  }
+  if (/\bshrimp|prawn|lobster|crab|shellfish|clam|mussel|oyster|scallop|crawfish|crayfish\b/.test(text)) {
     push({
       term: "shellfish",
       canonical: "shellfish",
       allergens: ["shellfish"],
       classes: ["shellfish"]
+    });
+  }
+  if (/\bpeanut|peanuts\b/.test(text)) {
+    push({
+      term: "peanut",
+      canonical: "peanut",
+      allergens: ["peanut"],
+      classes: ["legume", "nut"]
+    });
+  }
+  if (/\balmond|walnut|pecan|cashew|pistachio|hazelnut|macadamia|brazil nut|tree nut/.test(text)) {
+    push({
+      term: "tree nut",
+      canonical: "tree_nut",
+      allergens: ["tree nut"],
+      classes: ["nut"]
+    });
+  }
+  if (/\begg\b|eggs\b|omelette|omelet|frittata|quiche|meringue|aioli|mayo|mayonnaise/.test(text)) {
+    push({
+      term: "egg",
+      canonical: "egg",
+      allergens: ["egg"],
+      classes: ["egg"]
+    });
+  }
+  if (/\bwheat|bread|flour|pasta|noodle|tortilla|pita|bagel|croissant|biscuit|cracker|pretzel|breaded|crusted|panko\b/.test(text)) {
+    push({
+      term: "wheat",
+      canonical: "wheat",
+      allergens: ["wheat", "gluten"],
+      classes: ["grain", "gluten"]
+    });
+  }
+  if (/\bsoy\b|soybean|tofu|tempeh|edamame|miso|soy sauce/.test(text)) {
+    push({
+      term: "soy",
+      canonical: "soy",
+      allergens: ["soy"],
+      classes: ["legume"]
+    });
+  }
+  if (/\bsalmon|tuna|cod|tilapia|halibut|trout|bass|anchov|sardine|mackerel|swordfish|mahi|snapper|\bfish\b/.test(text)) {
+    push({
+      term: "fish",
+      canonical: "fish",
+      allergens: ["fish"],
+      classes: ["fish", "seafood"]
+    });
+  }
+  if (/\bsesame|tahini\b/.test(text)) {
+    push({
+      term: "sesame",
+      canonical: "sesame",
+      allergens: ["sesame"],
+      classes: ["seed"]
+    });
+  }
+
+  // Gluten sources (beyond wheat)
+  if (/\bbarley|rye|spelt|triticale|farro|couscous|bulgur|seitan\b/.test(text)) {
+    push({
+      term: "gluten",
+      canonical: "gluten",
+      allergens: ["gluten"],
+      classes: ["grain", "gluten"]
+    });
+  }
+
+  // Sulfites (common in wine sauces, dried fruits)
+  if (/\bwine\b|wine sauce|dried fruit|dried apricot/.test(text)) {
+    push({
+      term: "sulfites",
+      canonical: "sulfites",
+      allergens: ["sulfites"],
+      classes: ["preservative"]
     });
   }
 
@@ -5734,7 +6182,9 @@ function computeBarometerFromLevelsAll(ORGANS, lv) {
     ({
       "High Benefit": 80,
       Benefit: 40,
+      "Mild Benefit": 20,
       Neutral: 0,
+      "Mild Caution": -20,
       Caution: -40,
       "High Caution": -80
     })[s] ?? 0;
@@ -5954,43 +6404,49 @@ async function lookupIngredientFromSuperBrain(env, ingredientName) {
 
     const ingredientId = ingredient.id;
 
-    // Step 2: Fetch nutrients
-    const { results: nutrients } = await env.D1_DB.prepare(`
-      SELECT nutrient_code, nutrient_name, amount_per_100g, unit
-      FROM ingredient_nutrients
-      WHERE ingredient_id = ?
-    `).bind(ingredientId).all();
-
-    // Step 3: Fetch allergens
-    const { results: allergens } = await env.D1_DB.prepare(`
-      SELECT af.allergen_code, ad.display_name, af.confidence
-      FROM ingredient_allergen_flags af
-      LEFT JOIN allergen_definitions ad ON ad.allergen_code = af.allergen_code
-      WHERE af.ingredient_id = ?
-    `).bind(ingredientId).all();
-
-    // Step 4: Fetch glycemic index
-    const glycemic = await env.D1_DB.prepare(`
-      SELECT glycemic_index, glycemic_load, gi_category, serving_size_g
-      FROM ingredient_glycemic
-      WHERE ingredient_id = ?
-      LIMIT 1
-    `).bind(ingredientId).first();
-
-    // Step 5: Fetch bioactives
-    const { results: bioactives } = await env.D1_DB.prepare(`
-      SELECT compound_name, compound_class, amount_per_100g, unit, health_effects, target_organs
-      FROM ingredient_bioactives
-      WHERE ingredient_id = ?
-    `).bind(ingredientId).all();
-
-    // Step 6: Fetch categories
-    const { results: categories } = await env.D1_DB.prepare(`
-      SELECT fc.category_code, fc.category_name
-      FROM ingredient_categories ic
-      JOIN food_categories fc ON fc.category_code = ic.category_code
-      WHERE ic.ingredient_id = ?
-    `).bind(ingredientId).all();
+    // LATENCY OPTIMIZATION: Run all 5 detail queries in parallel using Promise.all
+    // This reduces 5 sequential round-trips (~250-500ms) to 1 parallel batch (~50-100ms)
+    const [
+      { results: nutrients },
+      { results: allergens },
+      glycemic,
+      { results: bioactives },
+      { results: categories }
+    ] = await Promise.all([
+      // Query 1: Fetch nutrients
+      env.D1_DB.prepare(`
+        SELECT nutrient_code, nutrient_name, amount_per_100g, unit
+        FROM ingredient_nutrients
+        WHERE ingredient_id = ?
+      `).bind(ingredientId).all(),
+      // Query 2: Fetch allergens
+      env.D1_DB.prepare(`
+        SELECT af.allergen_code, ad.display_name, af.confidence
+        FROM ingredient_allergen_flags af
+        LEFT JOIN allergen_definitions ad ON ad.allergen_code = af.allergen_code
+        WHERE af.ingredient_id = ?
+      `).bind(ingredientId).all(),
+      // Query 3: Fetch glycemic index
+      env.D1_DB.prepare(`
+        SELECT glycemic_index, glycemic_load, gi_category, serving_size_g
+        FROM ingredient_glycemic
+        WHERE ingredient_id = ?
+        LIMIT 1
+      `).bind(ingredientId).first(),
+      // Query 4: Fetch bioactives
+      env.D1_DB.prepare(`
+        SELECT compound_name, compound_class, amount_per_100g, unit, health_effects, target_organs
+        FROM ingredient_bioactives
+        WHERE ingredient_id = ?
+      `).bind(ingredientId).all(),
+      // Query 5: Fetch categories
+      env.D1_DB.prepare(`
+        SELECT fc.category_code, fc.category_name
+        FROM ingredient_categories ic
+        JOIN food_categories fc ON fc.category_code = ic.category_code
+        WHERE ic.ingredient_id = ?
+      `).bind(ingredientId).all()
+    ]);
 
     // Build nutrition object in expected format
     const nutritionMap = {};
@@ -6784,11 +7240,11 @@ function detectAllExtras(baseIngredients, visionComponents, menuDescription) {
 async function getCachedNutrition(env, name) {
   if (!env?.R2_BUCKET) return null;
   const key = `nutrition/${normKey(name)}.json`;
-  const head = await r2Head(env, key);
-  if (!head) return null;
-  const obj = await env.R2_BUCKET.get(key);
-  if (!obj) return null;
+  // LATENCY OPTIMIZATION: Skip r2Head() - just try get() directly
+  // This eliminates one unnecessary round-trip (~30-60ms saved)
   try {
+    const obj = await env.R2_BUCKET.get(key);
+    if (!obj) return null;
     return await obj.json();
   } catch {
     return null;
@@ -6805,25 +7261,30 @@ async function putCachedNutrition(env, name, data) {
 
 // LATENCY OPTIMIZATION: Process all ingredients in parallel instead of sequential
 // Priority: Super Brain (D1) → R2 Cache → USDA FDC → Open Food Facts
+// Added: Ingredient deduplication - same ingredient looked up once, result shared
 async function enrichWithNutrition(env, rows = []) {
-  await Promise.all(rows.map(async (row) => {
-    const q = (row?.name || row?.original || "").trim();
-    if (!q) return;
+  // LATENCY OPTIMIZATION: Deduplicate ingredients before lookup
+  // "2 cups flour" and "1 cup flour" both normalize to "flour" - only look up once
+  const ingredientToRows = new Map(); // normalized name → [row indices]
 
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const q = (row?.name || row?.original || "").trim().toLowerCase();
+    if (!q) continue;
+
+    if (!ingredientToRows.has(q)) {
+      ingredientToRows.set(q, []);
+    }
+    ingredientToRows.get(q).push(i);
+  }
+
+  // Fetch unique ingredients in parallel
+  const uniqueIngredients = Array.from(ingredientToRows.keys());
+  const results = await Promise.all(uniqueIngredients.map(async (q) => {
     // Try Super Brain cache first (our curated D1 database)
     const superBrainHit = await lookupIngredientFromSuperBrain(env, q);
     if (superBrainHit) {
-      row.nutrition = superBrainHit.nutrients;
-      row._superBrain = {
-        ingredientId: superBrainHit.ingredientId,
-        description: superBrainHit.description,
-        source: 'super_brain',
-        allergens: superBrainHit.allergens,
-        glycemic: superBrainHit.glycemic,
-        bioactives: superBrainHit.bioactives,
-        categories: superBrainHit.categories
-      };
-      return;
+      return { type: 'superBrain', data: superBrainHit, q };
     }
 
     // Fallback: R2 cache → external APIs
@@ -6837,16 +7298,41 @@ async function enrichWithNutrition(env, rows = []) {
         } catch {}
       }
     }
-    if (hit?.nutrients) {
-      row.nutrition = hit.nutrients;
-      row._fdc = {
-        id: hit.fdcId,
-        description: hit.description || null,
-        dataType: hit.dataType || null,
-        source: hit.source || "USDA_FDC"
-      };
-    }
+    return hit ? { type: 'fdc', data: hit, q } : { type: 'none', q };
   }));
+
+  // Apply results to all rows that share the same ingredient
+  for (const result of results) {
+    const rowIndices = ingredientToRows.get(result.q) || [];
+
+    for (const idx of rowIndices) {
+      const row = rows[idx];
+
+      if (result.type === 'superBrain') {
+        const superBrainHit = result.data;
+        row.nutrition = superBrainHit.nutrients;
+        row._superBrain = {
+          ingredientId: superBrainHit.ingredientId,
+          description: superBrainHit.description,
+          source: 'super_brain',
+          allergens: superBrainHit.allergens,
+          glycemic: superBrainHit.glycemic,
+          bioactives: superBrainHit.bioactives,
+          categories: superBrainHit.categories
+        };
+      } else if (result.type === 'fdc' && result.data?.nutrients) {
+        const hit = result.data;
+        row.nutrition = hit.nutrients;
+        row._fdc = {
+          id: hit.fdcId,
+          description: hit.description || null,
+          dataType: hit.dataType || null,
+          source: hit.source || "USDA_FDC"
+        };
+      }
+    }
+  }
+
   return rows;
 }
 
@@ -7278,9 +7764,54 @@ Return 10-25 concise ingredient lines a home cook would list (no steps). Use pla
 //
 // Returns: { ok: boolean, data?: any, error?: string }
 
+// LATENCY OPTIMIZATION: Organs LLM response caching
+// PIPELINE_VERSION in key auto-invalidates when prompts/scoring logic changes
+// IMPORTANT: Include vision_insights to prevent stale cache when image data differs
+function buildOrgansCacheKey(payload) {
+  const parts = [
+    PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
+    (payload.dishName || "").toLowerCase().trim(),
+    (payload.restaurantName || "").toLowerCase().trim(),
+    JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
+    JSON.stringify((payload.ingredientsNormalized || []).map(i =>
+      (i.name || i.normalized || "").toLowerCase().trim()
+    ).sort()),
+    // Include vision data in cache key for correctness
+    payload.vision_insights ? hashShort(JSON.stringify(payload.vision_insights)) : "no-vision",
+    payload.plate_components?.length ? hashShort(JSON.stringify(payload.plate_components)) : "no-components"
+  ];
+  return `organs-llm:${hashShort(parts.join("|"))}`;
+}
+
+async function getOrgansLLMCached(env, cacheKey) {
+  if (!env?.MENUS_CACHE) return null;
+  try {
+    return await env.MENUS_CACHE.get(cacheKey, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putOrgansLLMCached(env, cacheKey, result) {
+  if (!env?.MENUS_CACHE) return;
+  try {
+    // NO TTL - LLM output for same inputs is deterministic
+    // PIPELINE_VERSION in cache key handles invalidation when prompts change
+    await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+      ...result,
+      _cachedAt: new Date().toISOString()
+    }));
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 async function runOrgansLLM(env, payload) {
-  if (!env.OPENAI_API_KEY) {
-    return { ok: false, error: "missing-openai-api-key" };
+  // LATENCY OPTIMIZATION: Check cache first (1500-3000ms → 50ms on cache hit)
+  const cacheKey = buildOrgansCacheKey(payload);
+  const cached = await getOrgansLLMCached(env, cacheKey);
+  if (cached && cached.ok && cached.data) {
+    return { ...cached, cached: true };
   }
 
   const model = "gpt-4o-mini";
@@ -7383,60 +7914,78 @@ You MUST return JSON with this shape:
 ${EVIDENCE_GUIDELINES}
 `;
 
-  const body = {
-    model,
-    response_format: { type: "json_object" },
-    max_completion_tokens: 1200,
-    messages: [
-      { role: "system", content: systemPrompt.trim() },
-      {
-        role: "user",
-        // send minified JSON to reduce tokens
-        content: JSON.stringify(payload)
-      }
-    ]
-  };
+  const messages = [
+    { role: "system", content: systemPrompt.trim() },
+    { role: "user", content: JSON.stringify(payload) }
+  ];
+
+  // LATENCY OPTIMIZATION: Race OpenAI and Cloudflare AI in parallel
+  const racingProviders = [];
+
+  // OpenAI provider
+  if (env.OPENAI_API_KEY) {
+    racingProviders.push(
+      (async () => {
+        const body = {
+          model,
+          response_format: { type: "json_object" },
+          max_completion_tokens: 1200,
+          messages
+        };
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`
+          },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`openai-organ-error-${res.status}`);
+        const json = await res.json();
+        const content = json?.choices?.[0]?.message?.content || "";
+        const parsed = JSON.parse(content);
+        return { ok: true, data: parsed, provider: "openai" };
+      })()
+    );
+  }
+
+  // Cloudflare AI provider
+  if (env.AI) {
+    racingProviders.push(
+      (async () => {
+        const cfMessages = messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }));
+        const aiResult = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+          messages: cfMessages,
+          max_tokens: 1200
+        });
+        if (!aiResult?.response) throw new Error("cloudflare-organ-empty");
+        // Extract JSON from response (may have markdown wrapping)
+        let content = aiResult.response;
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) content = jsonMatch[0];
+        const parsed = JSON.parse(content);
+        return { ok: true, data: parsed, provider: "cloudflare" };
+      })()
+    );
+  }
+
+  if (racingProviders.length === 0) {
+    return { ok: false, error: "no-llm-providers-available" };
+  }
 
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      return {
-        ok: false,
-        error: `openai-organ-error-${res.status}`,
-        details: text
-      };
-    }
-
-    const json = await res.json();
-    const content = json?.choices?.[0]?.message?.content || "";
-
-    let parsed;
-    try {
-      parsed = JSON.parse(content);
-    } catch (e) {
-      return {
-        ok: false,
-        error: "openai-organ-json-parse-error",
-        details: String(e),
-        raw: content
-      };
-    }
-
-    return { ok: true, data: parsed };
-  } catch (err) {
+    const result = await Promise.any(racingProviders);
+    // Cache successful result (non-blocking)
+    putOrgansLLMCached(env, cacheKey, result);
+    return result;
+  } catch (aggregateError) {
     return {
       ok: false,
-      error: "openai-organ-exception",
-      details: String(err)
+      error: "all-organ-llms-failed",
+      details: aggregateError.errors?.map(e => e.message).join("; ")
     };
   }
 }
@@ -7540,7 +8089,14 @@ YOUR TASKS:
 4. Set extra flags:
    - pork, beef, alcohol, spicy (each: "yes" | "no" | "maybe" with reason).
 5. Emit lifestyle_tags and lifestyle_checks for red meat, vegetarian/vegan.
-6. Emit component_allergens describing key components on the plate using the SAME allergen/lactose/FODMAP structure as the global ones.
+6. ALWAYS emit component_allergens - this is REQUIRED even when plate_components is empty:
+   - If plate_components is provided, use those components.
+   - If plate_components is empty/missing, INFER components from the dishName (e.g., "Grand Slam with Eggs, Bacon, Pancakes" → Eggs, Bacon, Pancakes).
+   - Each component needs its own allergen/lactose/FODMAP analysis.
+   - Combo meals, breakfast platters, and multi-item dishes MUST have multiple component entries.
+   - BOWL DISHES (burrito bowls, poke bowls, grain bowls, acai bowls): Always break into base (rice/greens), protein, beans/legumes, toppings, sauces/dressings as separate components.
+   - LOADED DISHES (loaded fries, nachos, potato skins): Break into base item, cheese, meat toppings, sauces separately.
+   - SANDWICHES/SUBS: Break into bread, protein/meat, cheese, vegetables, condiments as separate components for allergen tracking.
 
 STRICTNESS RULES (IMPORTANT):
 - DO NOT invent ingredients that are not clearly implied or typical by name/description.
@@ -7663,7 +8219,7 @@ ${EVIDENCE_GUIDELINES}
   const body = {
     model,
     response_format: { type: "json_object" },
-    max_completion_tokens: 900,
+    max_completion_tokens: 4000, // Increased for multi-component dishes with detailed per-component allergen analysis
     messages: [
       { role: "system", content: systemPrompt.trim() },
       {
@@ -7728,12 +8284,13 @@ async function runAllergenGrokLLM(env, input, systemPrompt) {
   }
 
   const body = {
-    model: env.GROK_MODEL || "grok-2-latest",
+    model: env.GROK_MODEL || "grok-3", // grok-3 is the current public API model
     messages: [
       { role: "system", content: systemPrompt.trim() },
       { role: "user", content: JSON.stringify(input) }
     ],
-    temperature: 0.1
+    temperature: 0.1,
+    max_tokens: 4000 // Increased for multi-component dishes with detailed per-component allergen analysis
   };
 
   try {
@@ -7795,7 +8352,7 @@ async function runAllergenCloudflareLLM(env, input, systemPrompt) {
         { role: "system", content: systemPrompt.trim() + "\n\nIMPORTANT: Return ONLY valid JSON, no markdown or explanations." },
         { role: "user", content: JSON.stringify(input) }
       ],
-      max_tokens: 1500,
+      max_tokens: 2500, // Increased for multi-component dishes
       temperature: 0.1
     });
 
@@ -7825,49 +8382,145 @@ async function runAllergenCloudflareLLM(env, input, systemPrompt) {
   }
 }
 
+// LATENCY OPTIMIZATION: LLM response caching for allergen analysis
+// Same dish + ingredients + vision data + pipeline version = same allergen output
+// PIPELINE_VERSION in key auto-invalidates cache when prompts/logic change
+// IMPORTANT: Include vision_insights to prevent stale cache when image data differs
+function buildAllergenCacheKey(input) {
+  const parts = [
+    PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
+    (input.dishName || "").toLowerCase().trim(),
+    (input.restaurantName || "").toLowerCase().trim(),
+    (input.menuSection || "").toLowerCase().trim(),
+    JSON.stringify((input.ingredients || []).map(i =>
+      (i.name || i.normalized || "").toLowerCase().trim()
+    ).sort()),
+    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort()),
+    // Include vision data in cache key for correctness
+    input.vision_insights ? hashShort(JSON.stringify(input.vision_insights)) : "no-vision",
+    input.plate_components?.length ? hashShort(JSON.stringify(input.plate_components)) : "no-components"
+  ];
+  return `allergen-llm:${hashShort(parts.join("|"))}`;
+}
+
+async function getAllergenLLMCached(env, cacheKey) {
+  if (!env?.MENUS_CACHE) return null;
+  try {
+    return await env.MENUS_CACHE.get(cacheKey, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putAllergenLLMCached(env, cacheKey, result) {
+  if (!env?.MENUS_CACHE) return;
+  try {
+    // NO TTL - LLM output for same inputs is deterministic
+    // PIPELINE_VERSION in cache key handles invalidation when prompts change
+    await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+      ...result,
+      _cachedAt: new Date().toISOString()
+    }));
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 // --- Tiered LLM allergen analysis: OpenAI → Grok → Cloudflare ---
+// LATENCY OPTIMIZATION: Race OpenAI + Cloudflare in parallel, use first success
 async function runAllergenTieredLLM(env, input) {
+  // Check cache first
+  const cacheKey = buildAllergenCacheKey(input);
+  const cached = await getAllergenLLMCached(env, cacheKey);
+  if (cached && cached.ok && cached.data) {
+    return { ...cached, cached: true };
+  }
+
   // Build the shared system prompt
   const systemPrompt = buildAllergenSystemPrompt();
 
-  // Tier 1: OpenAI (primary - best quality)
+  // Track errors from each tier for debugging
+  const tierErrors = {};
+
+  // LATENCY OPTIMIZATION: Race OpenAI and Cloudflare AI in parallel
+  // Use whichever responds successfully first
+  const racingProviders = [];
+
   if (env.OPENAI_API_KEY) {
-    const openaiResult = await runAllergenMiniLLM(env, input);
-    if (openaiResult.ok) {
-      openaiResult.tier = 1;
-      openaiResult.provider = "openai";
-      return openaiResult;
-    }
-    // Log but continue to next tier
-    console.warn("OpenAI allergen LLM failed:", openaiResult.error);
+    racingProviders.push(
+      (async () => {
+        const result = await runAllergenMiniLLM(env, input);
+        if (result.ok) {
+          result.tier = 1;
+          result.provider = "openai";
+          return result;
+        }
+        tierErrors.openai = { error: result.error, details: result.details };
+        throw new Error(result.error || "openai_failed");
+      })()
+    );
+  } else {
+    tierErrors.openai = { error: "no-api-key" };
   }
 
-  // Tier 2: Grok (xAI - strong alternative)
-  const grokKey = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
-  if (grokKey) {
-    const grokResult = await runAllergenGrokLLM(env, input, systemPrompt);
-    if (grokResult.ok) {
-      grokResult.tier = 2;
-      return grokResult;
-    }
-    console.warn("Grok allergen LLM failed:", grokResult.error);
-  }
-
-  // Tier 3: Cloudflare AI Llama (always available)
   if (env.AI) {
-    const cfResult = await runAllergenCloudflareLLM(env, input, systemPrompt);
-    if (cfResult.ok) {
-      cfResult.tier = 3;
-      return cfResult;
+    racingProviders.push(
+      (async () => {
+        const result = await runAllergenCloudflareLLM(env, input, systemPrompt);
+        if (result.ok) {
+          result.tier = 3;
+          result.provider = "cloudflare";
+          return result;
+        }
+        tierErrors.cloudflare = { error: result.error, details: result.details };
+        throw new Error(result.error || "cloudflare_failed");
+      })()
+    );
+  } else {
+    tierErrors.cloudflare = { error: "no-ai-binding" };
+  }
+
+  let result = null;
+
+  if (racingProviders.length > 0) {
+    try {
+      // Promise.any returns the first successful result
+      result = await Promise.any(racingProviders);
+    } catch (aggregateError) {
+      // All racing providers failed, log but continue to Grok fallback
+      console.warn("All racing allergen LLMs failed:", aggregateError.errors?.map(e => e.message));
     }
-    console.warn("Cloudflare Llama allergen LLM failed:", cfResult.error);
+  }
+
+  // Fallback to Grok if racing failed
+  if (!result) {
+    const grokKey = (env.GROK_API_KEY || env.XAI_API_KEY || "").trim();
+    if (grokKey) {
+      const grokResult = await runAllergenGrokLLM(env, input, systemPrompt);
+      if (grokResult.ok) {
+        grokResult.tier = 2;
+        result = grokResult;
+      } else {
+        tierErrors.grok = { error: grokResult.error, details: grokResult.details };
+        console.warn("Grok allergen LLM failed:", grokResult.error);
+      }
+    } else {
+      tierErrors.grok = { error: "no-api-key" };
+    }
+  }
+
+  // Cache successful result (non-blocking)
+  if (result && result.ok) {
+    putAllergenLLMCached(env, cacheKey, result);
+    return result;
   }
 
   // All tiers failed - this should never happen in production
   return {
     ok: false,
     error: "all-allergen-llm-tiers-failed",
-    details: "OpenAI, Grok, and Cloudflare AI all failed to analyze allergens"
+    details: "OpenAI, Cloudflare AI, and Grok all failed to analyze allergens",
+    tierErrors
   };
 }
 
@@ -7898,7 +8551,14 @@ YOUR TASKS:
 4. Set extra flags:
    - pork, beef, alcohol, spicy (each: "yes" | "no" | "maybe" with reason).
 5. Emit lifestyle_tags and lifestyle_checks for red meat, vegetarian/vegan.
-6. Emit component_allergens describing key components on the plate using the SAME allergen/lactose/FODMAP structure as the global ones.
+6. ALWAYS emit component_allergens - this is REQUIRED even when plate_components is empty:
+   - If plate_components is provided, use those components.
+   - If plate_components is empty/missing, INFER components from the dishName (e.g., "Grand Slam with Eggs, Bacon, Pancakes" → Eggs, Bacon, Pancakes).
+   - Each component needs its own allergen/lactose/FODMAP analysis.
+   - Combo meals, breakfast platters, and multi-item dishes MUST have multiple component entries.
+   - BOWL DISHES (burrito bowls, poke bowls, grain bowls, acai bowls): Always break into base (rice/greens), protein, beans/legumes, toppings, sauces/dressings as separate components.
+   - LOADED DISHES (loaded fries, nachos, potato skins): Break into base item, cheese, meat toppings, sauces separately.
+   - SANDWICHES/SUBS: Break into bread, protein/meat, cheese, vegetables, condiments as separate components for allergen tracking.
 
 STRICTNESS RULES (IMPORTANT):
 - DO NOT invent ingredients that are not clearly implied or typical by name/description.
@@ -8154,6 +8814,12 @@ Return exactly ONE JSON object with this shape:
   }
 }
 
+// LATENCY OPTIMIZATION: Cache portion vision results
+// Same image = same visual analysis (permanent knowledge)
+function buildPortionVisionCacheKey(imageUrl) {
+  return `portion-vision:${hashShort(imageUrl)}`;
+}
+
 async function runPortionVisionLLM(env, input) {
   const imageUrl = input && input.imageUrl ? String(input.imageUrl) : null;
 
@@ -8175,6 +8841,17 @@ async function runPortionVisionLLM(env, input) {
       },
       insights: null
     };
+  }
+
+  // Check cache first (same image = same visual analysis)
+  const cacheKey = buildPortionVisionCacheKey(imageUrl);
+  if (env?.MENUS_CACHE) {
+    try {
+      const cached = await env.MENUS_CACHE.get(cacheKey, "json");
+      if (cached && cached.ok && cached.insights) {
+        return { ...cached, cached: true };
+      }
+    } catch {}
   }
 
   if (!env.OPENAI_API_KEY) {
@@ -8264,6 +8941,8 @@ IMPORTANT:
 - Prefer high-confidence visual signals: visible eggs, bacon, cheese, shrimp, etc.
 
 ${EVIDENCE_GUIDELINES}
+
+${getVisionCorrectionPromptAddendum()}
 
 OUTPUT:
 Return ONE JSON object with this exact shape:
@@ -8448,17 +9127,18 @@ No extra keys, no commentary outside JSON.
         : "No portion reason provided.";
 
     // Normalize plate components: drop low-confidence, enforce at most one main, normalize area_ratio
+    // Also split compound labels like "bacon and sausage" into separate components
     let plate_components = plateComponentsRaw
       .filter((c) => {
         if (!c || typeof c !== "object") return false;
         const conf = typeof c.confidence === "number" ? c.confidence : 0;
         return conf >= 0.35;
       })
-      .map((c) => {
+      .flatMap((c) => {
         const role = typeof c.role === "string" && c.role ? c.role : "unknown";
         const category =
           typeof c.category === "string" && c.category ? c.category : "other";
-        const label =
+        const rawLabel =
           (typeof c.label === "string" && c.label) ||
           (typeof c.component === "string" && c.component) ||
           (typeof c.name === "string" && c.name) ||
@@ -8469,10 +9149,26 @@ No extra keys, no commentary outside JSON.
             ? c.area_ratio
             : 0;
 
+        // Split compound labels like "bacon and sausage", "eggs and toast", etc.
+        const splitPattern = /\s+and\s+|\s*,\s*|\s*&\s*/i;
+        const labels = rawLabel.split(splitPattern).map(s => s.trim()).filter(s => s.length > 0);
+
+        if (labels.length > 1) {
+          // Split area_ratio evenly among the split components
+          const splitRatio = area_ratio / labels.length;
+          return labels.map(label => ({
+            role,
+            category,
+            label,
+            confidence,
+            area_ratio: splitRatio
+          }));
+        }
+
         return {
           role,
           category,
-          label,
+          label: rawLabel,
           confidence,
           area_ratio
         };
@@ -8566,7 +9262,7 @@ No extra keys, no commentary outside JSON.
       plate_components
     };
 
-    return {
+    const result = {
       ok: true,
       source: "portion_vision_openai",
       portionFactor: pf,
@@ -8583,6 +9279,18 @@ No extra keys, no commentary outside JSON.
       },
       insights
     };
+
+    // Cache successful result (permanent - same image = same visual analysis)
+    if (env?.MENUS_CACHE) {
+      try {
+        await env.MENUS_CACHE.put(cacheKey, JSON.stringify({
+          ...result,
+          _cachedAt: new Date().toISOString()
+        }));
+      } catch {}
+    }
+
+    return result;
   } catch (err) {
     return {
       ok: false,
@@ -9135,8 +9843,37 @@ async function fetchFromOpenAI(env, dish, cuisine = "", lang = "en") {
   }
 }
 
+// LATENCY OPTIMIZATION: Cache Zestful parsing results
+// Ingredient parsing is deterministic - same inputs always give same outputs
+function buildZestfulCacheKey(lines) {
+  const sorted = [...lines].map(l => (l || "").toLowerCase().trim()).sort();
+  return `zestful:${PIPELINE_VERSION}:${hashShort(sorted.join("|"))}`;
+}
+
+async function getZestfulCached(env, cacheKey) {
+  if (!env?.MENUS_CACHE) return null;
+  try {
+    return await env.MENUS_CACHE.get(cacheKey, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putZestfulCached(env, cacheKey, data) {
+  if (!env?.MENUS_CACHE || !data) return;
+  try {
+    // No TTL - parsing results are permanent knowledge
+    await env.MENUS_CACHE.put(cacheKey, JSON.stringify(data));
+  } catch {}
+}
+
 async function callZestful(env, lines = []) {
   if (!lines?.length) return null;
+
+  // Check cache first
+  const cacheKey = buildZestfulCacheKey(lines);
+  const cached = await getZestfulCached(env, cacheKey);
+  if (cached) return cached;
 
   const host = (env.ZESTFUL_RAPID_HOST || "zestful.p.rapidapi.com").trim();
   const url = `https://${host}/parseIngredients`;
@@ -9182,7 +9919,12 @@ async function callZestful(env, lines = []) {
       _conf: r.confidence ?? null
     }));
 
-    return parsed.length ? parsed : null;
+    if (parsed.length) {
+      // Cache successful result (non-blocking)
+      putZestfulCached(env, cacheKey, parsed);
+      return parsed;
+    }
+    return null;
   } catch (err) {
     console.log("Zestful fail:", err?.message || String(err));
     return null;
@@ -9190,7 +9932,30 @@ async function callZestful(env, lines = []) {
 }
 
 // --- Open Food Facts fallback ---
+// LATENCY OPTIMIZATION: Cache OFF results - nutrition data is permanent knowledge
+async function getOFFCached(env, name) {
+  if (!env?.MENUS_CACHE || !name) return null;
+  const key = `off:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    return await env.MENUS_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putOFFCached(env, name, data) {
+  if (!env?.MENUS_CACHE || !name) return;
+  const key = `off:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    await env.MENUS_CACHE.put(key, JSON.stringify(data));
+  } catch {}
+}
+
 async function callOFF(env, name) {
+  // Check cache first
+  const cached = await getOFFCached(env, name);
+  if (cached) return cached;
+
   const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(name)}&search_simple=1&action=process&json=1&page_size=1`;
   try {
     const res = await fetch(url, {
@@ -9201,7 +9966,7 @@ async function callOFF(env, name) {
     const p = data?.products?.[0];
     if (!p) return null;
 
-    return {
+    const result = {
       description: p.product_name || p.generic_name || name,
       brand: p.brands || null,
       source: "OPEN_FOOD_FACTS",
@@ -9218,6 +9983,10 @@ async function callOFF(env, name) {
             : null
       }
     };
+
+    // Cache result (non-blocking)
+    putOFFCached(env, name, result);
+    return result;
   } catch (err) {
     return null;
   }
@@ -9453,10 +10222,33 @@ function nutritionSummaryFromEdamamTotalNutrients(totalNutrients) {
 }
 
 // --- USDA FoodData Central: search + prefer SR/Foundation + detail fetch ---
+// LATENCY OPTIMIZATION: Cache USDA FDC results - nutrition data is permanent knowledge
+async function getUSDAFDCCached(env, name) {
+  if (!env?.MENUS_CACHE || !name) return null;
+  const key = `usda-fdc:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    return await env.MENUS_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putUSDAFDCCached(env, name, data) {
+  if (!env?.MENUS_CACHE || !name) return;
+  const key = `usda-fdc:${PIPELINE_VERSION}:${name.toLowerCase().trim()}`;
+  try {
+    await env.MENUS_CACHE.put(key, JSON.stringify(data));
+  } catch {}
+}
+
 async function callUSDAFDC(env, name) {
   const host = env.USDA_FDC_HOST || "api.nal.usda.gov";
   const key = env.USDA_FDC_API_KEY;
   if (!key || !name) return null;
+
+  // Check cache first
+  const cached = await getUSDAFDCCached(env, name);
+  if (cached) return cached;
 
   const searchUrl = `https://${host}/fdc/v1/foods/search?query=${encodeURIComponent(name)}&pageSize=5&dataType=SR%20Legacy,Survey%20(FNDDS),Foundation,Branded&api_key=${key}`;
   const sres = await fetch(searchUrl, {
@@ -9613,27 +10405,41 @@ async function callUSDAFDC(env, name) {
       bestMatchEvenIfProcessed = payload;
 
     if (hasMacros && matches && !processed) {
+      // Cache and return
+      putUSDAFDCCached(env, name, payload);
       return payload;
     }
   }
 
-  if (bestMatchEvenIfProcessed) return bestMatchEvenIfProcessed;
-  if (bestWithMacros) return bestWithMacros;
-  if (firstPayload) return firstPayload;
+  let result = null;
+  if (bestMatchEvenIfProcessed) {
+    result = bestMatchEvenIfProcessed;
+  } else if (bestWithMacros) {
+    result = bestWithMacros;
+  } else if (firstPayload) {
+    result = firstPayload;
+  } else {
+    const best = foods[0];
+    if (best) {
+      result = {
+        fdcId: best.fdcId,
+        description: best.description,
+        brand: best.brandOwner || null,
+        dataType: best.dataType || null,
+        nutrients: makeEmpty(),
+        nutrients_per_serving: null,
+        nutrients_per_100g: null,
+        serving: null,
+        source: "USDA_FDC"
+      };
+    }
+  }
 
-  const best = foods[0];
-  if (!best) return null;
-  return {
-    fdcId: best.fdcId,
-    description: best.description,
-    brand: best.brandOwner || null,
-    dataType: best.dataType || null,
-    nutrients: makeEmpty(),
-    nutrients_per_serving: null,
-    nutrients_per_100g: null,
-    serving: null,
-    source: "USDA_FDC"
-  };
+  // Cache successful result (non-blocking)
+  if (result) {
+    putUSDAFDCCached(env, name, result);
+  }
+  return result;
 }
 
 async function resolveNutritionFromUSDA(env, dishName, description) {
@@ -9760,6 +10566,141 @@ async function enqueueDishDirect(env, payload) {
 }
 
 // ---- Step 41.12: enqueue top items + write lean placeholders ----
+// ---- Parallel Batch Analysis System ----
+// In-memory priority tracking for the current request lifecycle
+const priorityJobIds = new Set();
+
+// Generate unique batch ID for tracking
+function generateBatchId() {
+  return `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Generate unique job ID for each dish
+function generateJobId() {
+  return (globalThis.crypto?.randomUUID && crypto.randomUUID()) ||
+    `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// Process a single dish analysis in background and cache the result
+async function processAndCacheDish(env, jobId, dishPayload) {
+  const startTime = Date.now();
+
+  try {
+    // Update status to processing
+    await r2WriteJSON(env, `jobs/${jobId}.json`, {
+      id: jobId,
+      status: "processing",
+      started_at: new Date().toISOString(),
+      dish_name: dishPayload.dishName,
+      restaurant_name: dishPayload.restaurantName
+    });
+
+    // Run the actual dish analysis
+    // In background batch mode, we run FULL analysis (including organs)
+    // since user isn't waiting - no need to skip organs and lazy-load
+    const { status, result } = await runDishAnalysis(env, {
+      ...dishPayload,
+      // Include organs in background processing - we have time
+      skip_organs: false
+    }, null);
+
+    const processingMs = Date.now() - startTime;
+
+    if (status === 200 && result?.ok) {
+      // Write completed result to R2
+      await r2WriteJSON(env, `jobs/${jobId}.json`, {
+        id: jobId,
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        processing_ms: processingMs,
+        dish_name: dishPayload.dishName,
+        restaurant_name: dishPayload.restaurantName,
+        result: result
+      });
+
+      // Also cache in KV for fast access
+      const cacheKey = buildDishCacheKey(dishPayload);
+      if (env?.DISH_ANALYSIS_CACHE) {
+        await env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(result), {
+          expirationTtl: 86400 * 30 // 30 days
+        });
+      }
+
+      return { ok: true, jobId, status: "completed", processing_ms: processingMs };
+    } else {
+      // Analysis failed
+      await r2WriteJSON(env, `jobs/${jobId}.json`, {
+        id: jobId,
+        status: "failed",
+        failed_at: new Date().toISOString(),
+        processing_ms: processingMs,
+        dish_name: dishPayload.dishName,
+        error: result?.error || "analysis_failed"
+      });
+      return { ok: false, jobId, status: "failed", error: result?.error };
+    }
+  } catch (err) {
+    const processingMs = Date.now() - startTime;
+    // Write error status
+    await r2WriteJSON(env, `jobs/${jobId}.json`, {
+      id: jobId,
+      status: "error",
+      error_at: new Date().toISOString(),
+      processing_ms: processingMs,
+      dish_name: dishPayload.dishName,
+      error: String(err?.message || err)
+    });
+    return { ok: false, jobId, status: "error", error: String(err?.message || err) };
+  }
+}
+
+// Process multiple dishes in parallel with concurrency control
+async function processBatchInBackground(env, batchId, jobs, options = {}) {
+  const { concurrency = 5 } = options;
+  const results = [];
+
+  // Sort by priority - prioritized jobs first
+  const sortedJobs = [...jobs].sort((a, b) => {
+    const aPriority = priorityJobIds.has(a.jobId) ? 0 : 1;
+    const bPriority = priorityJobIds.has(b.jobId) ? 0 : 1;
+    return aPriority - bPriority;
+  });
+
+  // Process in batches with concurrency limit
+  for (let i = 0; i < sortedJobs.length; i += concurrency) {
+    const batch = sortedJobs.slice(i, i + concurrency);
+    const batchResults = await Promise.allSettled(
+      batch.map(job => processAndCacheDish(env, job.jobId, job.payload))
+    );
+
+    results.push(...batchResults.map((r, idx) => ({
+      jobId: batch[idx].jobId,
+      status: r.status,
+      value: r.status === "fulfilled" ? r.value : null,
+      error: r.status === "rejected" ? String(r.reason) : null
+    })));
+  }
+
+  // Update batch status
+  const completed = results.filter(r => r.value?.status === "completed").length;
+  const failed = results.filter(r => r.value?.status === "failed" || r.error).length;
+
+  await r2WriteJSON(env, `batches/${batchId}.json`, {
+    id: batchId,
+    status: "completed",
+    completed_at: new Date().toISOString(),
+    total: jobs.length,
+    completed: completed,
+    failed: failed,
+    jobs: results.map(r => ({
+      jobId: r.jobId,
+      status: r.value?.status || "error"
+    }))
+  });
+
+  return { batchId, total: jobs.length, completed, failed };
+}
+
 async function enqueueTopItems(
   env,
   topItems,
@@ -10476,48 +11417,60 @@ async function resolveRecipeWithCache(
     return { candidateOut, selected };
   }
 
-  const cached = !force ? await recipeCacheRead(env, cacheKey) : null;
-  if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
-    cacheHit = true;
-    pickedSource = cached.from || cached.provider || "cache";
-    recipe = cached.recipe;
-    ingredients = [...cached.ingredients];
-    notes =
-      typeof cached.notes === "object" && cached.notes
-        ? { ...cached.notes }
-        : {};
-    out = {
-      ...cached,
-      cache: true,
-      recipe,
-      ingredients
-    };
-    selectedProvider = pickedSource;
+  // LATENCY OPTIMIZATION: Run cache read and provider fetch in parallel
+  // On cache miss, we save the cache lookup latency (~50-200ms)
+  // On cache hit, we use cached result (provider call is discarded)
+  let cached = null;
+  let providerResultPromise = null;
+
+  if (force) {
+    // Force reanalyze: skip cache entirely
+    const { candidateOut, selected } = await resolveFromProviders();
+    out = candidateOut;
+    selectedProvider = selected;
   } else {
-    const { candidateOut, selected } = await resolveFromProviders();
-    out = candidateOut;
-    selectedProvider = selected;
-  }
+    // Start both cache read and provider call in parallel
+    const cachePromise = recipeCacheRead(env, cacheKey).catch(() => null);
+    providerResultPromise = resolveFromProviders();
 
-  const cachedTitle =
-    (out && out.recipe && (out.recipe.title || out.recipe.name)) || "";
-  const dishLower = dish.toLowerCase();
-  if (
-    cacheHit &&
-    cachedTitle &&
-    isDietTitle(cachedTitle) &&
-    !isDietTitle(dishLower)
-  ) {
-    cacheHit = false;
-    out = null;
-    recipe = null;
-    ingredients = [];
-    notes = { ...(notes || {}), skipped_cached_diet: cachedTitle };
-    pickedSource = "cache_skip_diet";
+    cached = await cachePromise;
 
-    const { candidateOut, selected } = await resolveFromProviders();
-    out = candidateOut;
-    selectedProvider = selected;
+    if (cached && cached.recipe && Array.isArray(cached.ingredients)) {
+      // Check for diet title mismatch before accepting cache
+      const cachedTitle = (cached.recipe.title || cached.recipe.name || "");
+      const dishLower = dish.toLowerCase();
+      const isDietMismatch = cachedTitle && isDietTitle(cachedTitle) && !isDietTitle(dishLower);
+
+      if (!isDietMismatch) {
+        cacheHit = true;
+        pickedSource = cached.from || cached.provider || "cache";
+        recipe = cached.recipe;
+        ingredients = [...cached.ingredients];
+        notes =
+          typeof cached.notes === "object" && cached.notes
+            ? { ...cached.notes }
+            : {};
+        out = {
+          ...cached,
+          cache: true,
+          recipe,
+          ingredients
+        };
+        selectedProvider = pickedSource;
+      } else {
+        // Diet title mismatch - use provider result
+        notes = { ...(notes || {}), skipped_cached_diet: cachedTitle };
+        pickedSource = "cache_skip_diet";
+        const { candidateOut, selected } = await providerResultPromise;
+        out = candidateOut;
+        selectedProvider = selected;
+      }
+    } else {
+      // Cache miss - use provider result (already running in parallel)
+      const { candidateOut, selected } = await providerResultPromise;
+      out = candidateOut;
+      selectedProvider = selected;
+    }
   }
 
   if (!cacheHit) {
@@ -11861,7 +12814,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
 // ========== Uber Eats (Apify) — Tier 1 Scraper ==========
 // ========== Apify Async with Webhooks ==========
 // Start an async Apify run and get notified via webhook when complete
-async function startApifyRunAsync(env, query, address, maxRows = 15, locale = "en-US", jobId = null) {
+async function startApifyRunAsync(env, query, address, maxRows = 250, locale = "en-US", jobId = null) {
   const token = env.APIFY_TOKEN;
   const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
 
@@ -11959,7 +12912,7 @@ async function fetchMenuFromApify(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 15,
+  maxRows = 250,
   locale = "en-US"
 ) {
   const token = env.APIFY_TOKEN;
@@ -12042,7 +12995,7 @@ async function fetchMenuFromUberEatsTiered(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 15,
+  maxRows = 250,
   lat = null,
   lng = null,
   radius = 5000
@@ -12075,13 +13028,9 @@ async function fetchMenuFromUberEatsTiered(
 
   // Tier 2: Apify (fallback, slower but cleaner data)
   if (apifyEnabled) {
-    try {
-      const result = await fetchMenuFromApify(env, query, address, maxRows);
-      result._tier = "apify";
-      return result;
-    } catch (err) {
-      throw err;
-    }
+    const result = await fetchMenuFromApify(env, query, address, maxRows);
+    result._tier = "apify";
+    return result;
   }
 
   throw new Error("UberEats: No scraper tier available (missing RAPIDAPI_KEY and APIFY_TOKEN)");
@@ -12091,7 +13040,7 @@ async function fetchMenuFromUberEatsTiered(
 // Returns same interface as postJobByAddress: { ok, immediate, raw, job_id?, _tier }
 // Runs both scrapers in parallel and returns the first successful response
 async function postJobByAddressTiered(
-  { query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null },
+  { query, address, maxRows = 250, locale = "en-US", page = 1, webhook = null },
   env
 ) {
   const apifyEnabled = !!env.APIFY_TOKEN;
@@ -12161,7 +13110,7 @@ async function postJobByAddressTiered(
 // ========== Uber Eats Tiered Job by Location (GPS) — Apify (Tier 1) → RapidAPI (Tier 2) ==========
 // Returns same interface as postJobByLocation: { ok, data/results, _tier }
 async function postJobByLocationTiered(
-  { query, lat, lng, radius = 6000, maxRows = 25 },
+  { query, lat, lng, radius = 6000, maxRows = 250 },
   env
 ) {
   const tier1Enabled = !!env.APIFY_TOKEN;
@@ -12565,7 +13514,7 @@ async function searchNearbyCandidates(
 
 // ---- UBER EATS: CREATE A JOB BY ADDRESS (exact vendor format) ----
 async function postJobByAddress(
-  { query, address, maxRows = 15, locale = "en-US", page = 1, webhook = null },
+  { query, address, maxRows = 250, locale = "en-US", page = 1, webhook = null },
   env
 ) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
@@ -12579,7 +13528,7 @@ async function postJobByAddress(
   // ✅ Exact body per vendor docs
   const body = {
     scraper: {
-      maxRows: Number(maxRows) || 15,
+      maxRows: Number(maxRows) || 250,
       query: String(query || ""),
       address: String(address),
       locale: String(locale || "en-US"),
@@ -12962,15 +13911,39 @@ function flattenUberPayloadToItemsGateway(payload, opts = {}) {
         .trim();
       let score = 0;
       if (title === targetName) score += 100;
-      if (title.includes(targetName)) score += 50;
-      if (targetName.includes(title) && title.length > 0) score += 40;
+      else if (title.startsWith(targetName)) score += 90;
+      else if (title.includes(targetName)) score += 80;
+      else if (targetName.includes(title) && title.length > 3) score += 70;
+      else {
+        // Word overlap scoring with key word matching
+        const titleTokens = title.split(/\s+/);
+        const targetTokens = targetName.split(/\s+/);
+        const titleSet = new Set(titleTokens);
+        let overlap = 0;
+        let keyWordMatch = false;
+        for (const t of targetTokens) {
+          if (titleSet.has(t)) {
+            overlap++;
+            if (t.length > 4 && !['the', 'and', 'restaurant', 'cafe', 'bar', 'grill'].includes(t)) {
+              keyWordMatch = true;
+            }
+          }
+        }
+        const ratio = overlap / Math.max(1, targetTokens.length);
+        score = keyWordMatch ? Math.round(60 * ratio) : Math.round(25 * ratio);
+      }
       return { s, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
     const bestScore = scored[0]?.score ?? 0;
+    const MIN_MATCH_SCORE = 50;
 
-    if (bestScore > 0) {
+    if (bestScore >= MIN_MATCH_SCORE) {
+      const best = scored.filter((x) => x.score === bestScore).map((x) => x.s);
+      stores = best.length ? best : stores;
+    } else if (bestScore > 0) {
+      console.warn(`[flattenUberPayloadToItemsGateway] Low match score ${bestScore} for "${targetName}"`);
       const best = scored.filter((x) => x.score === bestScore).map((x) => x.s);
       stores = best.length ? best : stores;
     }
@@ -13441,7 +14414,7 @@ async function runAddressJobRaw(
   {
     query = "seafood",
     address = "South Miami, FL, USA",
-    maxRows = 3,
+    maxRows = 250,
     locale = "en-US",
     page = 1
   },
@@ -13451,7 +14424,7 @@ async function runAddressJobRaw(
   const key = env.RAPIDAPI_KEY || "";
   const body = {
     scraper: {
-      maxRows: Number(maxRows) || 3,
+      maxRows: Number(maxRows) || 250,
       query,
       address,
       locale,
@@ -13995,6 +14968,460 @@ const _worker_impl = {
       }
     }
 
+    // ============ PARALLEL BATCH ANALYSIS ENDPOINTS ============
+
+    // OPTIONS preflight for batch endpoints (CORS)
+    if (pathname.startsWith("/api/analyze/batch") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // POST /api/analyze/batch - Start parallel analysis for multiple dishes
+    // When restaurant page loads, frontend calls this with all menu items
+    // Returns immediately with job IDs while processing continues in background
+    if (pathname === "/api/analyze/batch" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const dishes = body.dishes || body.items || [];
+        const restaurantName = body.restaurantName || body.restaurant || "";
+        const concurrency = Math.min(body.concurrency || 5, 10); // Max 10 parallel
+
+        if (!Array.isArray(dishes) || dishes.length === 0) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_dishes",
+              hint: "Provide dishes array in request body."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Limit batch size to prevent abuse
+        if (dishes.length > 100) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "batch_too_large",
+              hint: "Maximum 100 dishes per batch."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        const batchId = generateBatchId();
+        const jobs = [];
+
+        // Check cache and create jobs for uncached dishes
+        for (const dish of dishes) {
+          const dishName = dish.dishName || dish.name || dish.title || "";
+          if (!dishName) continue;
+
+          const payload = {
+            dishName,
+            restaurantName: dish.restaurantName || restaurantName,
+            menuDescription: dish.description || dish.menuDescription || "",
+            menuSection: dish.section || dish.menuSection || "",
+            canonicalCategory: dish.category || dish.canonicalCategory || "",
+            imageUrl: dish.imageUrl || dish.image_url || null,
+            cuisine: dish.cuisine || body.cuisine || "",
+            placeId: dish.placeId || body.placeId || "",
+            user_id: body.user_id || body.userId || "",
+            skip_organs: true // Faster initial load, lazy-load organs later
+          };
+
+          // Check if already cached
+          const cacheKey = buildDishCacheKey(payload);
+          let cached = null;
+          if (env?.DISH_ANALYSIS_CACHE) {
+            try {
+              cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+            } catch (e) { /* ignore cache errors */ }
+          }
+
+          const jobId = generateJobId();
+          jobs.push({
+            jobId,
+            dishName,
+            payload,
+            cached: cached?.ok ? true : false,
+            cachedResult: cached?.ok ? cached : null
+          });
+        }
+
+        // Separate cached and uncached dishes
+        const cachedJobs = jobs.filter(j => j.cached);
+        const uncachedJobs = jobs.filter(j => !j.cached);
+
+        // Write initial batch status to R2
+        await r2WriteJSON(env, `batches/${batchId}.json`, {
+          id: batchId,
+          status: "processing",
+          created_at: new Date().toISOString(),
+          total: jobs.length,
+          cached: cachedJobs.length,
+          pending: uncachedJobs.length,
+          jobs: jobs.map(j => ({
+            jobId: j.jobId,
+            dishName: j.dishName,
+            status: j.cached ? "cached" : "pending"
+          }))
+        });
+
+        // Write initial status for each uncached job
+        await Promise.all(uncachedJobs.map(j =>
+          r2WriteJSON(env, `jobs/${j.jobId}.json`, {
+            id: j.jobId,
+            status: "pending",
+            created_at: new Date().toISOString(),
+            dish_name: j.dishName
+          })
+        ));
+
+        // Start background processing with ctx.waitUntil
+        // This ensures processing continues even if client disconnects
+        if (ctx && uncachedJobs.length > 0) {
+          ctx.waitUntil(
+            processBatchInBackground(env, batchId, uncachedJobs, { concurrency })
+              .catch(err => console.error("Batch processing error:", err))
+          );
+        }
+
+        // Return immediately with job IDs
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            batchId,
+            total: jobs.length,
+            cached: cachedJobs.length,
+            processing: uncachedJobs.length,
+            jobs: jobs.map(j => ({
+              jobId: j.jobId,
+              dishName: j.dishName,
+              status: j.cached ? "cached" : "pending",
+              result: j.cachedResult || null
+            }))
+          }),
+          { status: 202, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "batch_analysis_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
+    // GET /api/analyze/batch/status - Check status of a batch or individual job
+    // Poll this endpoint to get analysis results as they complete
+    if (pathname === "/api/analyze/batch/status" && request.method === "GET") {
+      try {
+        const batchId = url.searchParams.get("batchId") || url.searchParams.get("batch_id");
+        const jobId = url.searchParams.get("jobId") || url.searchParams.get("job_id");
+
+        if (!batchId && !jobId) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_id",
+              hint: "Provide batchId or jobId query parameter."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Single job status
+        if (jobId) {
+          const jobData = await r2ReadJSON(env, `jobs/${jobId}.json`);
+          if (!jobData) {
+            return new Response(
+              JSON.stringify({ ok: false, error: "job_not_found" }),
+              { status: 404, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+            );
+          }
+          return new Response(
+            JSON.stringify({ ok: true, job: jobData }),
+            { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Batch status
+        const batchData = await r2ReadJSON(env, `batches/${batchId}.json`);
+        if (!batchData) {
+          return new Response(
+            JSON.stringify({ ok: false, error: "batch_not_found" }),
+            { status: 404, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Optionally include full job results
+        const includeResults = url.searchParams.get("results") === "1";
+        if (includeResults && batchData.jobs) {
+          const jobResults = await Promise.all(
+            batchData.jobs.map(async (j) => {
+              const jobData = await r2ReadJSON(env, `jobs/${j.jobId}.json`);
+              return { ...j, data: jobData };
+            })
+          );
+          batchData.jobs = jobResults;
+        }
+
+        return new Response(
+          JSON.stringify({ ok: true, batch: batchData }),
+          { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "status_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
+    // POST /api/analyze/batch/priority - Elevate priority for a specific dish
+    // When user clicks "show analysis", call this to process that dish immediately
+    if (pathname === "/api/analyze/batch/priority" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const jobId = body.jobId || body.job_id;
+        const dishPayload = body.dish || body.payload;
+
+        if (!jobId) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_job_id",
+              hint: "Provide jobId in request body."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Check current job status
+        const jobData = await r2ReadJSON(env, `jobs/${jobId}.json`);
+
+        // If already completed, return the result immediately
+        if (jobData?.status === "completed" && jobData?.result) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              status: "completed",
+              result: jobData.result
+            }),
+            { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // If pending, process immediately instead of waiting
+        if (jobData?.status === "pending" || dishPayload) {
+          // Mark as priority in memory (for batch processor to check)
+          priorityJobIds.add(jobId);
+
+          // Process immediately if we have the payload
+          const payload = dishPayload || {
+            dishName: jobData?.dish_name,
+            restaurantName: jobData?.restaurant_name,
+            menuDescription: jobData?.menu_description || "",
+            skip_organs: false // Include organs for priority requests
+          };
+
+          if (!payload.dishName) {
+            return new Response(
+              JSON.stringify({
+                ok: false,
+                error: "missing_dish_payload",
+                hint: "Provide dish payload for pending jobs."
+              }),
+              { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+            );
+          }
+
+          // Process synchronously for priority request
+          const result = await processAndCacheDish(env, jobId, payload);
+
+          return new Response(
+            JSON.stringify({
+              ok: result.ok,
+              status: result.status,
+              result: result.ok ? (await r2ReadJSON(env, `jobs/${jobId}.json`))?.result : null,
+              error: result.error
+            }),
+            { status: result.ok ? 200 : 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // If processing, return current status
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            status: jobData?.status || "unknown",
+            message: "Job is currently being processed"
+          }),
+          { status: 202, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "priority_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
+    // ============ END PARALLEL BATCH ANALYSIS ENDPOINTS ============
+
+    // POST /api/analyze/organs - Trigger organs-only analysis for a dish
+    // Used when frontend has cached analysis with organs_pending=true
+    // and user clicks the organs section
+    if (pathname === "/api/analyze/organs" && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    if (pathname === "/api/analyze/organs" && request.method === "POST") {
+      try {
+        const body = (await readJson(request)) || {};
+        const dishName = (body.dishName || body.dish || "").trim();
+        const restaurantName = (body.restaurantName || body.restaurant || "").trim();
+        const pollKey = body.pollKey || body.poll_key || body.organs_poll_key || "";
+
+        if (!dishName) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: "missing_dish_name",
+              hint: "Provide dishName in request body."
+            }),
+            { status: 400, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+
+        // Check if organs already cached (from background processing)
+        const organsCacheKey = pollKey || `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+        if (env?.MENUS_CACHE) {
+          const cached = await env.MENUS_CACHE.get(organsCacheKey, "json");
+          if (cached?.ok && cached?.data) {
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                cached: true,
+                organs: cached.data,
+                timestamp: cached.timestamp
+              }),
+              { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+            );
+          }
+        }
+
+        // Build minimal payload for organs LLM
+        // Use provided data or fetch from cached analysis
+        let llmPayload = {
+          dishName,
+          restaurantName,
+          ingredientLines: body.ingredientLines || body.ingredients || [],
+          ingredientsNormalized: body.ingredientsNormalized || [],
+          existingFlags: body.existingFlags || {},
+          userFlags: body.userFlags || body.user_flags || [],
+          locale: body.lang || body.locale || "en",
+          vision_insights: body.vision_insights || null,
+          plate_components: body.plate_components || []
+        };
+
+        // If we don't have ingredients, try to get from cached analysis
+        if (llmPayload.ingredientLines.length === 0 && llmPayload.ingredientsNormalized.length === 0) {
+          const dishCacheKey = buildDishCacheKey({
+            dishName,
+            restaurantName,
+            menuDescription: body.menuDescription || "",
+            menuSection: body.menuSection || "",
+            canonicalCategory: body.canonicalCategory || ""
+          });
+
+          if (env?.DISH_ANALYSIS_CACHE) {
+            try {
+              const cachedAnalysis = await env.DISH_ANALYSIS_CACHE.get(dishCacheKey, "json");
+              if (cachedAnalysis?.normalized) {
+                llmPayload.ingredientLines = cachedAnalysis.normalized.ingredients_lines || cachedAnalysis.normalized.lines || [];
+                llmPayload.ingredientsNormalized = cachedAnalysis.normalized.items || [];
+              }
+              if (cachedAnalysis?.plate_components) {
+                llmPayload.plate_components = cachedAnalysis.plate_components;
+              }
+            } catch (e) { /* ignore cache errors */ }
+          }
+        }
+
+        // Run organs LLM
+        const t0 = Date.now();
+        const organsResult = await runOrgansLLM(env, llmPayload);
+        const processingMs = Date.now() - t0;
+
+        if (organsResult?.ok && organsResult?.data) {
+          // Cache the result for future polling
+          if (env?.MENUS_CACHE) {
+            await env.MENUS_CACHE.put(organsCacheKey, JSON.stringify({
+              ok: true,
+              data: organsResult.data,
+              timestamp: Date.now()
+            }));
+          }
+
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              cached: false,
+              organs: organsResult.data,
+              processing_ms: processingMs
+            }),
+            { status: 200, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        } else {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: organsResult?.error || "organs_analysis_failed",
+              processing_ms: processingMs
+            }),
+            { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+          );
+        }
+      } catch (err) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "organs_exception",
+            details: String(err?.message || err)
+          }),
+          { status: 500, headers: { "Content-Type": "application/json", ...CORS_ALL } }
+        );
+      }
+    }
+
     if (pathname === "/analyze/allergens-mini" && request.method === "POST") {
       return handleAllergenMini(request, env, ctx);
     }
@@ -14018,6 +15445,43 @@ const _worker_impl = {
             headers: { "Content-Type": "application/json" }
           }
         );
+      }
+    }
+
+    // Lightweight endpoint for polling organs status (used with skip_organs flow)
+    if (pathname === "/pipeline/organs-status" && request.method === "GET") {
+      try {
+        const pollKey = url.searchParams.get("key");
+        if (!pollKey) {
+          return okJson({ ok: false, error: "missing_key_param" }, 400);
+        }
+
+        if (!env?.MENUS_CACHE) {
+          return okJson({ ok: false, error: "cache_unavailable" }, 500);
+        }
+
+        const cached = await env.MENUS_CACHE.get(pollKey, "json");
+        if (cached && cached.ok && cached.data) {
+          return okJson({
+            ok: true,
+            ready: true,
+            organs: cached.data,
+            timestamp: cached.timestamp
+          });
+        }
+
+        // Not ready yet
+        return okJson({
+          ok: true,
+          ready: false,
+          message: "Organs analysis still processing"
+        });
+      } catch (err) {
+        return okJson({
+          ok: false,
+          error: "organs_status_exception",
+          details: String(err?.message || err)
+        }, 500);
       }
     }
     if (
@@ -14179,7 +15643,9 @@ const _worker_impl = {
         ({
           "High Benefit": 80,
           Benefit: 40,
+          "Mild Benefit": 20,
           Neutral: 0,
+          "Mild Caution": -20,
           Caution: -40,
           "High Caution": -80
         })[s] ?? 0;
@@ -14187,7 +15653,9 @@ const _worker_impl = {
         ({
           "High Benefit": "#16a34a",
           Benefit: "#22c55e",
+          "Mild Benefit": "#86efac",
           Neutral: "#a1a1aa",
+          "Mild Caution": "#fcd34d",
           Caution: "#f59e0b",
           "High Caution": "#dc2626"
         })[s] ?? "#a1a1aa";
@@ -15751,7 +17219,7 @@ const _worker_impl = {
       let totalDeleted = 0;
       let cursor = undefined;
       do {
-        const list = await kv.list({ prefix: "menu:", limit: 100, cursor });
+        const list = await kv.list({ prefix: "menu/", limit: 100, cursor });
         for (const k of list.keys) {
           await kv.delete(k.name);
           totalDeleted++;
@@ -15764,6 +17232,429 @@ const _worker_impl = {
         message: "All menu cache cleared",
         deleted_count: totalDeleted
       }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    // --- DEBUG: View stale menu entries ---
+    if (pathname === "/debug/menu-cache/stale") {
+      const limit = Number(searchParams.get("limit") || "50");
+      const staleEntries = await getStaleMenuEntries(env, limit);
+      return new Response(JSON.stringify({
+        ok: true,
+        stale_threshold_days: Math.floor(MENU_STALE_SECONDS / 86400),
+        stale_count: staleEntries.length,
+        entries: staleEntries
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    // --- DEBUG: View cron run status ---
+    if (pathname === "/debug/menu-cache/cron-status") {
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const lastRun = await kv.get("cron/last_run", "json");
+      return new Response(JSON.stringify({
+        ok: true,
+        cron_schedule: "0 3 * * * (daily at 3 AM UTC)",
+        stale_threshold_days: Math.floor(MENU_STALE_SECONDS / 86400),
+        cache_ttl_days: Math.floor(MENU_TTL_SECONDS / 86400),
+        last_run: lastRun || null
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    // --- DEBUG: Manually trigger menu refresh for a specific entry ---
+    if (pathname === "/debug/menu-cache/refresh" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const { query, address, forceUS } = body;
+      if (!query || !address) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Missing query or address in POST body",
+          example: { query: "Chipotle", address: "123 Main St, Los Angeles, CA", forceUS: true }
+        }, null, 2), { status: 400, headers: { "content-type": "application/json" } });
+      }
+
+      const cacheKey = cacheKeyForMenu(query, address, !!forceUS);
+      const result = await refreshMenuInBackground(env, { query, address, forceUS, cacheKey });
+      return new Response(JSON.stringify({
+        ok: result.ok,
+        query,
+        address,
+        cacheKey,
+        result
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
+    // === Franchise Menu System Endpoints ===
+
+    // GET /store/:id/menu - Get effective menu for a store
+    if (pathname.startsWith("/store/") && pathname.endsWith("/menu") && request.method === "GET") {
+      const storeId = pathname.replace("/store/", "").replace("/menu", "");
+      if (!storeId || isNaN(Number(storeId))) {
+        return jsonResponse({ ok: false, error: "Invalid store ID" }, 400);
+      }
+      const result = await getEffectiveMenu(env, Number(storeId));
+      return jsonResponse(result, result.ok ? 200 : 404);
+    }
+
+    // GET /franchise/brands - List all brands
+    if (pathname === "/franchise/brands" && request.method === "GET") {
+      try {
+        const brands = await env.D1_DB.prepare("SELECT * FROM brands ORDER BY canonical_name").all();
+        return jsonResponse({ ok: true, brands: brands.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /franchise/brands/:id/items - Get menu items for a brand
+    if (pathname.startsWith("/franchise/brands/") && pathname.endsWith("/items") && request.method === "GET") {
+      const brandId = pathname.replace("/franchise/brands/", "").replace("/items", "");
+      if (!brandId || isNaN(Number(brandId))) {
+        return jsonResponse({ ok: false, error: "Invalid brand ID" }, 400);
+      }
+      try {
+        const items = await env.D1_DB.prepare(`
+          SELECT fmi.*,
+            (SELECT COUNT(*) FROM menu_item_scopes WHERE menu_item_id = fmi.id AND status = 'ACTIVE') as active_scopes
+          FROM franchise_menu_items fmi
+          WHERE fmi.brand_id = ?
+          ORDER BY fmi.category, fmi.canonical_name
+        `).bind(Number(brandId)).all();
+        return jsonResponse({ ok: true, items: items.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /franchise/stores - List franchise stores
+    if (pathname === "/franchise/stores" && request.method === "GET") {
+      const limit = Number(searchParams.get("limit") || "50");
+      const brandId = searchParams.get("brand_id");
+      try {
+        let query = `
+          SELECT s.*, b.canonical_name as brand_name
+          FROM stores s
+          LEFT JOIN brands b ON b.id = s.brand_id
+          WHERE s.brand_id IS NOT NULL
+        `;
+        const params = [];
+        if (brandId) {
+          query += " AND s.brand_id = ?";
+          params.push(Number(brandId));
+        }
+        query += " ORDER BY s.updated_at DESC LIMIT ?";
+        params.push(limit);
+
+        const stores = await env.D1_DB.prepare(query).bind(...params).all();
+        return jsonResponse({ ok: true, stores: stores.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /franchise/detect-brand - Detect brand from place data
+    if (pathname === "/franchise/detect-brand" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      if (!body.name) {
+        return jsonResponse({ ok: false, error: "Missing 'name' in body" }, 400);
+      }
+      const brand = await detectBrand(env, body);
+      return jsonResponse({
+        ok: true,
+        input: body.name,
+        normalized: normalizeBrandName(body.name),
+        brand: brand || null,
+        is_franchise: !!brand
+      });
+    }
+
+    // POST /franchise/onboard-store - Onboard a store (detect brand, create store record)
+    if (pathname === "/franchise/onboard-store" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      if (!body.name) {
+        return jsonResponse({ ok: false, error: "Missing 'name' in body" }, 400);
+      }
+
+      // Detect brand
+      const brand = await detectBrand(env, body);
+
+      // Upsert store
+      const store = await upsertStore(env, {
+        place_id: body.place_id,
+        uber_store_id: body.uber_store_id,
+        brand_id: brand?.id || null,
+        name: body.name,
+        address: body.address,
+        city: body.city,
+        state_province: body.state_province || body.state,
+        postal_code: body.postal_code,
+        country_code: body.country_code || "US",
+        latitude: body.latitude || body.lat,
+        longitude: body.longitude || body.lng,
+        source: body.source || "api"
+      });
+
+      return jsonResponse({
+        ok: true,
+        brand: brand || null,
+        is_franchise: !!brand,
+        store
+      });
+    }
+
+    // POST /internal/store/:id/delta - Trigger delta discovery (internal)
+    if (pathname.startsWith("/internal/store/") && pathname.endsWith("/delta") && request.method === "POST") {
+      const storeId = pathname.replace("/internal/store/", "").replace("/delta", "");
+      if (!storeId || isNaN(Number(storeId))) {
+        return jsonResponse({ ok: false, error: "Invalid store ID" }, 400);
+      }
+
+      const body = await request.json().catch(() => ({}));
+      if (!body.items || !Array.isArray(body.items)) {
+        return jsonResponse({ ok: false, error: "Missing 'items' array in body" }, 400);
+      }
+
+      const result = await deltaMenuDiscovery(env, Number(storeId), body.items, body.source_type || "ubereats");
+      return jsonResponse(result);
+    }
+
+    // POST /internal/jobs/promote - Run promotion jobs (cron/internal)
+    if (pathname === "/internal/jobs/promote" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const brandId = body.brand_id;
+
+      if (!brandId) {
+        return jsonResponse({ ok: false, error: "Missing 'brand_id' in body" }, 400);
+      }
+
+      const storeToRegion = await promoteStoreToRegion(env, brandId);
+      const regionToCountry = await promoteRegionToCountry(env, brandId);
+      const staleInactive = await markStaleInactive(env, brandId);
+
+      return jsonResponse({
+        ok: true,
+        brand_id: brandId,
+        promotions: {
+          store_to_region: storeToRegion,
+          region_to_country: regionToCountry
+        },
+        stale_inactive: staleInactive
+      });
+    }
+
+    // POST /internal/jobs/reconcile-batch - Run reconcile for scheduled stores (cron/internal)
+    if (pathname === "/internal/jobs/reconcile-batch" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const limit = body.limit || 10;
+
+      const stores = await getStoresDueForReconcile(env, limit);
+
+      return jsonResponse({
+        ok: true,
+        stores_due: stores.length,
+        stores: stores.map(s => ({
+          id: s.id,
+          name: s.name,
+          brand_name: s.brand_name,
+          last_reconciled_at: s.last_reconciled_at,
+          next_reconcile_after: s.next_reconcile_after
+        })),
+        hint: "Call /internal/store/:id/delta with menu items to reconcile each store"
+      });
+    }
+
+    // GET /franchise/stats - Get franchise system stats
+    if (pathname === "/franchise/stats" && request.method === "GET") {
+      try {
+        const brandCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM brands").first();
+        const storeCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM stores WHERE brand_id IS NOT NULL").first();
+        const itemCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM franchise_menu_items").first();
+        const scopeCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM menu_item_scopes").first();
+        const sightingCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM menu_item_sightings").first();
+        const snapshotCount = await env.D1_DB.prepare("SELECT COUNT(*) as count FROM store_menu_snapshots").first();
+
+        const scopesByType = await env.D1_DB.prepare(`
+          SELECT scope_type, status, COUNT(*) as count
+          FROM menu_item_scopes
+          GROUP BY scope_type, status
+        `).all();
+
+        return jsonResponse({
+          ok: true,
+          stats: {
+            brands: brandCount?.count || 0,
+            franchise_stores: storeCount?.count || 0,
+            menu_items: itemCount?.count || 0,
+            scopes: scopeCount?.count || 0,
+            sightings: sightingCount?.count || 0,
+            snapshots: snapshotCount?.count || 0
+          },
+          scopes_by_type: scopesByType.results || [],
+          config: FRANCHISE_CONFIG
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // === DAYPART SEEDING ENDPOINTS ===
+
+    // POST /internal/seeding/start - Start or resume a seeding run
+    if (pathname === "/internal/seeding/start" && request.method === "POST") {
+      try {
+        const body = await readJson(request) || {};
+        const runType = body.run_type || 'INITIAL';
+        const result = await startOrResumeSeedRun(env, runType);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/seeding/tick - Process one franchise (for cron or manual triggering)
+    if (pathname === "/internal/seeding/tick" && request.method === "POST") {
+      try {
+        const result = await seedingTick(env, ctx);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/seeding/status - Get seeding run status
+    if (pathname === "/internal/seeding/status" && request.method === "GET") {
+      try {
+        const runId = searchParams.get("run_id");
+        if (runId) {
+          const status = await getSeedRunStatus(env, runId);
+          return jsonResponse({ ok: true, ...status });
+        }
+        // Get latest run
+        const latest = await env.D1_DB.prepare(`
+          SELECT * FROM franchise_seed_runs ORDER BY started_at DESC LIMIT 1
+        `).first();
+        if (!latest) return jsonResponse({ ok: true, message: "No seed runs found" });
+        const status = await getSeedRunStatus(env, latest.run_id);
+        return jsonResponse({ ok: true, ...status });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/seeding/done-list - Get completed franchises list
+    if (pathname === "/internal/seeding/done-list" && request.method === "GET") {
+      try {
+        const runId = searchParams.get("run_id");
+        let targetRunId = runId;
+        if (!targetRunId) {
+          const latest = await env.D1_DB.prepare(`
+            SELECT run_id FROM franchise_seed_runs ORDER BY started_at DESC LIMIT 1
+          `).first();
+          targetRunId = latest?.run_id;
+        }
+        if (!targetRunId) return new Response("No seed runs found", { status: 404 });
+        const report = await getCompletedFranchisesList(env, targetRunId);
+        return new Response(report || "No data", { status: 200, headers: { "Content-Type": "text/plain" } });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/seeding/pause - Pause the current seeding run
+    if (pathname === "/internal/seeding/pause" && request.method === "POST") {
+      try {
+        const result = await env.D1_DB.prepare(`
+          UPDATE franchise_seed_runs
+          SET status = 'PAUSED', updated_at = datetime('now')
+          WHERE status = 'RUNNING'
+        `).run();
+        return jsonResponse({ ok: true, paused: result.meta?.changes > 0 });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/seeding/resume - Resume a paused seeding run
+    if (pathname === "/internal/seeding/resume" && request.method === "POST") {
+      try {
+        const result = await env.D1_DB.prepare(`
+          UPDATE franchise_seed_runs
+          SET status = 'RUNNING', updated_at = datetime('now')
+          WHERE status = 'PAUSED'
+        `).run();
+        return jsonResponse({ ok: true, resumed: result.meta?.changes > 0 });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/dayparts/tick - Process due daypart jobs
+    if (pathname === "/internal/dayparts/tick" && request.method === "POST") {
+      try {
+        const result = await daypartJobTick(env, ctx);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // POST /internal/dayparts/promote - Run daypart promotion
+    if (pathname === "/internal/dayparts/promote" && request.method === "POST") {
+      try {
+        const body = await readJson(request) || {};
+        const brandId = body.brand_id || null;
+        const result = await promoteDayparts(env, brandId);
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/dayparts/status - Get daypart coverage status
+    if (pathname === "/internal/dayparts/status" && request.method === "GET") {
+      try {
+        const status = await getDaypartStatus(env);
+        return jsonResponse({ ok: true, ...status });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /internal/dayparts/jobs - List daypart jobs
+    if (pathname === "/internal/dayparts/jobs" && request.method === "GET") {
+      try {
+        const brandId = searchParams.get("brand_id");
+        const status = searchParams.get("status") || 'ACTIVE';
+        let query = `SELECT dj.*, b.canonical_name as brand_name FROM franchise_daypart_jobs dj
+          JOIN brands b ON b.id = dj.brand_id WHERE dj.status = ?`;
+        let params = [status];
+        if (brandId) {
+          query += ` AND dj.brand_id = ?`;
+          params.push(brandId);
+        }
+        query += ` ORDER BY dj.next_run_at_utc LIMIT 100`;
+        const result = await env.D1_DB.prepare(query).bind(...params).all();
+        return jsonResponse({ ok: true, jobs: result.results || [] });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
+    }
+
+    // GET /store/:id/menu/daypart - Get effective menu with daypart filtering
+    if (pathname.match(/^\/store\/\d+\/menu\/daypart$/) && request.method === "GET") {
+      try {
+        const storeId = parseInt(pathname.split("/")[2]);
+        const daypart = searchParams.get("daypart");
+        const tzid = searchParams.get("tzid") || "America/New_York";
+        const includeAll = searchParams.get("all") === "true";
+        const result = await getEffectiveMenuWithDaypart(env, storeId, { daypart, tzid, includeAllDayparts: includeAll });
+        return jsonResponse(result);
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err?.message }, 500);
+      }
     }
 
     if (pathname === "/debug/r2-list") {
@@ -16007,14 +17898,10 @@ const _worker_impl = {
               Math.floor((Date.now() - Date.parse(cached.savedAt)) / 1000)
             );
           }
-          // [38.3] age warning for cached data (>20h considered stale-ish)
-          if (cached?.savedAt) {
-            const ageSec = Math.max(
-              0,
-              (Date.now() - Date.parse(cached.savedAt)) / 1000
-            );
-            if (ageSec > 20 * 3600)
-              setWarn("Cached data is older than ~20 hours (may be stale).");
+          // [38.3] age warning for cached data (stale after MENU_STALE_SECONDS)
+          if (cached?.isStale) {
+            const ageDays = Math.floor(cached.ageSeconds / 86400);
+            setWarn(`Cached data is ${ageDays} days old (refreshing in background).`);
           }
           // Allow inspecting the cached payload directly
           if (wantDebugCache) {
@@ -16047,9 +17934,8 @@ const _worker_impl = {
             if (cachedItems) cacheStatus = "hit";
 
             // Stale-while-revalidate: return cache immediately, refresh in background if stale
-            // Cache is considered stale after 1 hour (3600 seconds)
-            const STALE_THRESHOLD_SEC = 3600;
-            const isStale = cacheAgeSec && cacheAgeSec > STALE_THRESHOLD_SEC;
+            // Cache is considered stale after MENU_STALE_SECONDS (15 days)
+            const isStale = cached.isStale || (cacheAgeSec && cacheAgeSec > MENU_STALE_SECONDS);
 
             // Hydrate a local flattenedItems from cache so the same enqueue logic can use it
             if (cachedItems) {
@@ -16081,6 +17967,15 @@ const _worker_impl = {
               const forceUS = !!forceUSFlag;
               trace.used_path = "cache"; // [38.9]
               await bumpStatusKV(env, { cache: 1 });
+
+              // Background refresh: if stale, trigger async menu refresh (non-blocking)
+              if (isStale && ctx?.waitUntil) {
+                ctx.waitUntil(
+                  refreshMenuInBackground(env, { query, address: addressRaw, forceUS, cacheKey })
+                    .catch(err => console.log("[menu-refresh] background error:", err?.message))
+                );
+              }
+
               return respondTB(
                 withBodyAnalytics(
                   {
@@ -16096,7 +17991,7 @@ const _worker_impl = {
                       items: flattenedItems.slice(0, maxRows)
                     },
                     enqueued,
-                    hint: isStale ? "Cache is stale. Add ?fresh=1 to force refresh." : null,
+                    hint: isStale ? "Cache is stale (>15 days). Refreshing in background. Add ?fresh=1 to force immediate refresh." : null,
                     ...warnPart()
                   },
                   ctx,
@@ -18296,7 +20191,7 @@ const _worker_impl = {
           // Wait for completion if needed
           finished = job?.immediate
             ? job
-            : await waitForJob(env, job, { attempts: 6 });
+            : await waitForUberJobGateway(env, job, { attempts: 6 });
         } else if (latNum != null && lngNum != null) {
           // Location job path first
           try {
@@ -18306,7 +20201,7 @@ const _worker_impl = {
             );
             finished = job?.immediate
               ? job
-              : await waitForJob(env, job, { attempts: 6 });
+              : await waitForUberJobGateway(env, job, { attempts: 6 });
           } catch (e) {
             // Fallback to direct nearby search if job approach fails
             const nearby = await searchNearbyCandidates(
@@ -18392,6 +20287,10 @@ const _worker_impl = {
           }))
           .filter((x) => x.title);
 
+        const usedHost = finished?._tier === "apify"
+          ? "api.apify.com"
+          : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
+
         return jsonResponseWithTB(
           withBodyAnalytics(
             {
@@ -18467,6 +20366,211 @@ const _worker_impl = {
       return new Response(JSON.stringify(organs), {
         status: 200,
         headers
+      });
+    }
+
+    // NEW: Detailed organ analysis endpoint with full medical explanations
+    if (pathname === "/organs/detailed" && request.method === "POST") {
+      const id = _cid(request.headers);
+      const body = (await readJsonSafe(request)) || {};
+
+      const ingredients = Array.isArray(body.ingredients)
+        ? body.ingredients
+        : typeof body.dish === "string"
+          ? [{ name: body.dish }]
+          : [];
+      const user_flags = body.user_flags || body.userFlags || {};
+      const lex_hits = Array.isArray(body.lex_hits) ? body.lex_hits : [];
+
+      // Get enriched organ assessment
+      const organResult = await assessOrgansLocally(env, {
+        ingredients,
+        user_flags,
+        lex_hits
+      });
+
+      // Build detailed response with all 10 organs
+      const ALL_ORGANS = ["brain", "heart", "liver", "gut", "kidney", "immune", "eyes", "skin", "bones", "thyroid"];
+      const organDetailsArr = organResult?.organs || [];
+
+      const levelToBar = (s) => ({
+        "High Benefit": 80, Benefit: 40, "Mild Benefit": 20,
+        Neutral: 0, "Mild Caution": -20, Caution: -40, "High Caution": -80
+      })[s] ?? 0;
+
+      const levelToColor = (s) => ({
+        "High Benefit": "#16a34a", Benefit: "#22c55e", "Mild Benefit": "#86efac",
+        Neutral: "#a1a1aa", "Mild Caution": "#fcd34d", Caution: "#f59e0b", "High Caution": "#dc2626"
+      })[s] ?? "#a1a1aa";
+
+      // Build organ_levels and organ_details from assessment
+      const organ_levels = {};
+      const organ_bars = {};
+      const organ_colors = {};
+      const organ_scores = {};
+      const organ_medical_summaries = {};
+      const organ_details = {};
+
+      for (const o of organDetailsArr) {
+        const key = o.organ;
+        if (!key) continue;
+        organ_levels[key] = o.level || "Neutral";
+        organ_bars[key] = levelToBar(o.level);
+        organ_colors[key] = levelToColor(o.level);
+        organ_scores[key] = o.score || 0;
+        organ_medical_summaries[key] = o.summary || null;
+        organ_details[key] = {
+          level: o.level,
+          score: o.score || 0,
+          summary: o.summary || null,
+          top_compounds: o.top_compounds || [],
+          compounds: o.compounds || [],
+          has_medical_detail: o.has_medical_detail || false
+        };
+      }
+
+      // Fill in missing organs as Neutral
+      for (const organKey of ALL_ORGANS) {
+        if (!organ_levels[organKey]) {
+          organ_levels[organKey] = "Neutral";
+          organ_bars[organKey] = 0;
+          organ_colors[organKey] = "#a1a1aa";
+          organ_scores[organKey] = 0;
+        }
+      }
+
+      // Calculate overall barometer
+      const scores = Object.values(organ_bars);
+      const tummy_barometer = scores.length > 0
+        ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+        : 0;
+      const barometer_color = tummy_barometer >= 40 ? "#16a34a"
+        : tummy_barometer > 0 ? "#22c55e"
+        : tummy_barometer === 0 ? "#a1a1aa"
+        : tummy_barometer <= -40 ? "#dc2626"
+        : "#f59e0b";
+
+      const response = {
+        ok: true,
+        organs_supported: ALL_ORGANS,
+        organ_count: ALL_ORGANS.length,
+        tummy_barometer,
+        barometer_color,
+        organ_levels,
+        organ_bars,
+        organ_colors,
+        organ_scores,
+        organ_medical_summaries,
+        organ_details,
+        compound_interactions: organResult?.compound_interactions || [],
+        flags: organResult?.flags || {},
+        ingredients: ingredients.map(i => i.name || i.original || i).filter(Boolean)
+      };
+
+      const headers = new Headers({
+        "content-type": "application/json; charset=utf-8",
+        "x-correlation-id": id,
+        "x-tb-route": "/organs/detailed"
+      });
+
+      return new Response(JSON.stringify(response), { status: 200, headers });
+    }
+
+    // NEW: Get compound info for a specific ingredient
+    if (pathname === "/compounds/lookup" && request.method === "GET") {
+      const ingredient = url.searchParams.get("ingredient") || "";
+      if (!ingredient) {
+        return json({ ok: false, error: "Missing ?ingredient= parameter" }, { status: 400 });
+      }
+
+      if (!env?.D1_DB) {
+        return json({ ok: false, error: "Database not available" }, { status: 500 });
+      }
+
+      try {
+        const like = `%${ingredient.toLowerCase()}%`;
+
+        // Get compounds for this ingredient
+        const mappingRes = await env.D1_DB.prepare(
+          `SELECT ic.compound_id, ic.amount_per_100g, ic.variability, ic.notes,
+                  c.name, c.common_name, c.category, c.mechanism_summary, c.cid
+           FROM ingredient_compounds ic
+           JOIN compounds c ON c.id = ic.compound_id
+           WHERE LOWER(ic.ingredient_pattern) LIKE ?
+           LIMIT 20`
+        ).bind(like).all();
+
+        const compounds = mappingRes?.results || [];
+
+        // For each compound, get organ effects
+        const enrichedCompounds = [];
+        for (const c of compounds) {
+          const effRes = await env.D1_DB.prepare(
+            `SELECT organ, effect, strength, mechanism, pathway, explanation, citations,
+                    threshold_mg, optimal_mg, dose_response
+             FROM compound_organ_effects
+             WHERE compound_id = ?`
+          ).bind(c.compound_id).all();
+
+          enrichedCompounds.push({
+            compound: c.common_name || c.name,
+            category: c.category,
+            mechanism_summary: c.mechanism_summary,
+            pubchem_cid: c.cid,
+            amount_per_100g: c.amount_per_100g,
+            variability: c.variability,
+            organ_effects: (effRes?.results || []).map(e => ({
+              organ: e.organ,
+              effect: e.effect,
+              strength: e.strength,
+              mechanism: e.mechanism,
+              explanation: e.explanation,
+              citations: e.citations,
+              threshold_mg: e.threshold_mg,
+              optimal_mg: e.optimal_mg
+            }))
+          });
+        }
+
+        return json({
+          ok: true,
+          ingredient,
+          compound_count: enrichedCompounds.length,
+          compounds: enrichedCompounds
+        });
+      } catch (err) {
+        return json({ ok: false, error: String(err?.message || err) }, { status: 500 });
+      }
+    }
+
+    // NEW: List all supported organs with descriptions
+    if (pathname === "/organs/supported" && request.method === "GET") {
+      const organs = [
+        { key: "brain", name: "Brain", icon: "🧠", system: "Nervous", description: "Cognitive function, memory, mood, neuroprotection" },
+        { key: "heart", name: "Heart", icon: "❤️", system: "Cardiovascular", description: "Cardiovascular health, blood pressure, cholesterol, circulation" },
+        { key: "liver", name: "Liver", icon: "🫀", system: "Digestive", description: "Detoxification, fat metabolism, bile production" },
+        { key: "gut", name: "Gut", icon: "🦠", system: "Digestive", description: "Microbiome, digestion, nutrient absorption, gut barrier" },
+        { key: "kidney", name: "Kidneys", icon: "🫘", system: "Urinary", description: "Filtration, electrolyte balance, blood pressure regulation" },
+        { key: "immune", name: "Immune", icon: "🛡️", system: "Immune", description: "Infection defense, inflammation regulation, immune cell function" },
+        { key: "eyes", name: "Eyes", icon: "👁️", system: "Sensory", description: "Vision, macular health, blue light protection, dry eye" },
+        { key: "skin", name: "Skin", icon: "✨", system: "Integumentary", description: "Collagen, hydration, UV protection, wound healing" },
+        { key: "bones", name: "Bones", icon: "🦴", system: "Skeletal", description: "Bone density, mineralization, fracture prevention" },
+        { key: "thyroid", name: "Thyroid", icon: "🦋", system: "Endocrine", description: "Metabolism, energy, hormone production, temperature" }
+      ];
+
+      return json({
+        ok: true,
+        organ_count: organs.length,
+        organs,
+        level_scale: [
+          { level: "High Benefit", bar: 80, color: "#16a34a", description: "Strong positive impact" },
+          { level: "Benefit", bar: 40, color: "#22c55e", description: "Positive impact" },
+          { level: "Mild Benefit", bar: 20, color: "#86efac", description: "Slight positive impact" },
+          { level: "Neutral", bar: 0, color: "#a1a1aa", description: "No significant impact" },
+          { level: "Mild Caution", bar: -20, color: "#fcd34d", description: "Slight concern" },
+          { level: "Caution", bar: -40, color: "#f59e0b", description: "Use with awareness" },
+          { level: "High Caution", bar: -80, color: "#dc2626", description: "Significant concern" }
+        ]
       });
     }
 
@@ -18546,6 +20650,141 @@ const _worker_impl = {
         "POST /enqueue",
       { status: 200, headers: { "content-type": "text/plain" } }
     );
+  },
+
+  // ---- Scheduled handler: background menu cache refresh ----
+  scheduled: async (controller, env, ctx) => {
+    console.log("[scheduled] Menu cache refresh cron started");
+    const startTime = Date.now();
+    let refreshed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    try {
+      // Get stale menu entries (limit to 10 per run to avoid timeout)
+      const staleEntries = await getStaleMenuEntries(env, 10);
+      console.log(`[scheduled] Found ${staleEntries.length} stale menu(s) to refresh`);
+
+      for (const entry of staleEntries) {
+        try {
+          console.log(`[scheduled] Refreshing: ${entry.query} @ ${entry.address} (${entry.ageDays} days old)`);
+          const result = await refreshMenuInBackground(env, {
+            query: entry.query,
+            address: entry.address,
+            forceUS: entry.forceUS,
+            cacheKey: entry.key
+          });
+
+          if (result.ok) {
+            refreshed++;
+          } else {
+            skipped++;
+          }
+        } catch (err) {
+          console.log(`[scheduled] Failed to refresh ${entry.query}: ${err?.message}`);
+          failed++;
+        }
+
+        // Rate limit: wait 2 seconds between refreshes to avoid API throttling
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[scheduled] Menu refresh complete: ${refreshed} refreshed, ${skipped} skipped, ${failed} failed (${elapsed}ms)`);
+
+      // Log stats to KV for monitoring
+      if (env.MENUS_CACHE) {
+        await env.MENUS_CACHE.put("cron/last_run", JSON.stringify({
+          ran_at: new Date().toISOString(),
+          elapsed_ms: elapsed,
+          stale_found: staleEntries.length,
+          refreshed,
+          skipped,
+          failed
+        }), { expirationTtl: 7 * 24 * 3600 });
+      }
+
+      // --- Franchise reconciliation (15-day cycle) ---
+      console.log("[scheduled] Starting franchise reconciliation...");
+      const franchiseStart = Date.now();
+      let franchiseReconciled = 0;
+
+      try {
+        // Get stores due for reconciliation
+        const storesDue = await getStoresDueForReconcile(env, 5);
+        console.log(`[scheduled] Found ${storesDue.length} franchise store(s) due for reconciliation`);
+
+        // Log which stores are due (but actual reconciliation needs menu data from external source)
+        // The actual reconciliation happens when /internal/store/:id/delta is called with menu items
+        // This cron just identifies which stores need attention
+
+        if (env.MENUS_CACHE && storesDue.length > 0) {
+          await env.MENUS_CACHE.put("cron/franchise_reconcile", JSON.stringify({
+            ran_at: new Date().toISOString(),
+            stores_due: storesDue.map(s => ({
+              id: s.id,
+              name: s.name,
+              brand_name: s.brand_name,
+              last_reconciled_at: s.last_reconciled_at
+            }))
+          }), { expirationTtl: 7 * 24 * 3600 });
+        }
+
+        // Run promotion jobs for all brands with recent activity
+        const brands = await env.D1_DB?.prepare("SELECT id FROM brands LIMIT 10").all();
+        for (const brand of brands?.results || []) {
+          await promoteStoreToRegion(env, brand.id);
+          await markStaleInactive(env, brand.id);
+        }
+
+        console.log(`[scheduled] Franchise reconciliation complete (${Date.now() - franchiseStart}ms)`);
+      } catch (franchiseErr) {
+        console.log(`[scheduled] Franchise reconciliation error: ${franchiseErr?.message}`);
+      }
+
+      // --- Daypart Seeding System ---
+      console.log("[scheduled] Starting daypart seeding jobs...");
+      const daypartStart = Date.now();
+
+      try {
+        // 1. Process seeding tick (if active run exists)
+        const seedingResult = await seedingTick(env, ctx);
+        if (seedingResult.brand) {
+          console.log(`[scheduled] Seeded franchise: ${seedingResult.brand}`);
+        }
+
+        // 2. Process due daypart jobs (sample menus at scheduled local times)
+        const daypartJobResult = await daypartJobTick(env, ctx);
+        if (daypartJobResult.processed > 0) {
+          console.log(`[scheduled] Processed ${daypartJobResult.processed} daypart job(s)`);
+        }
+
+        // 3. Run daypart promotions (analyze sightings and promote items to GLOBAL scope)
+        // Run daily - only if it's around 4 AM UTC to avoid running too frequently
+        const currentHour = new Date().getUTCHours();
+        if (currentHour >= 3 && currentHour <= 5) {
+          const promoResult = await promoteDayparts(env);
+          console.log(`[scheduled] Daypart promotion: ${promoResult.promoted} items promoted`);
+        }
+
+        // Log stats to KV
+        if (env.MENUS_CACHE) {
+          await env.MENUS_CACHE.put("cron/daypart_jobs", JSON.stringify({
+            ran_at: new Date().toISOString(),
+            elapsed_ms: Date.now() - daypartStart,
+            seeding: seedingResult,
+            daypart_jobs: daypartJobResult
+          }), { expirationTtl: 7 * 24 * 3600 });
+        }
+
+        console.log(`[scheduled] Daypart jobs complete (${Date.now() - daypartStart}ms)`);
+      } catch (daypartErr) {
+        console.log(`[scheduled] Daypart jobs error: ${daypartErr?.message}`);
+      }
+
+    } catch (err) {
+      console.log(`[scheduled] Cron error: ${err?.message}`);
+    }
   }
 };
 
@@ -18604,7 +20843,9 @@ function canonicalizeIngredientName(name = "") {
 }
 
 // ==== Global limits & TTLs (safe defaults) ====
-const MENU_TTL_SECONDS = 18 * 3600; // 18 hours cache TTL for menu snapshots
+// Menu cache: never truly expire, but refresh stale menus in background
+const MENU_TTL_SECONDS = 365 * 24 * 3600; // 1 year - menus persist indefinitely
+const MENU_STALE_SECONDS = 15 * 24 * 3600; // 15 days - trigger background refresh after this
 const LIMITS = {
   DEFAULT_TOP: 10,
   TOP_MIN: 1,
@@ -19758,7 +21999,7 @@ async function searchDishSuggestions(env, query, options = {}) {
 }
 
 async function getOrganEffectsForIngredients(env, ingredients = []) {
-  if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {} };
+  if (!env?.D1_DB) return { organs: {}, compoundsByOrgan: {}, compoundDetails: {}, interactions: [] };
 
   const names = Array.from(
     new Set(
@@ -19782,70 +22023,127 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
 
   const organs = {};
   const compoundsByOrgan = {};
+  const compoundDetails = {}; // NEW: detailed compound info per organ
+  const foundCompoundIds = new Set(); // Track compounds for interaction lookup
 
-  // LATENCY OPTIMIZATION: Parallelize compound lookups
-  // Step 1: Run all compound lookups in parallel
-  const compoundResults = await Promise.all(
-    names.map(async (name) => {
-      try {
-        const like = `%${name}%`;
+  // Process each ingredient to find compounds and organ effects
+  for (const name of names) {
+    try {
+      // First try ingredient_compounds mapping (more accurate)
+      const like = `%${name}%`;
+      const mappingRes = await env.D1_DB.prepare(
+        `SELECT ic.compound_id, ic.amount_per_100g, ic.notes as mapping_notes,
+                c.name, c.common_name, c.category, c.mechanism_summary, c.cid
+         FROM ingredient_compounds ic
+         JOIN compounds c ON c.id = ic.compound_id
+         WHERE ic.ingredient_pattern LIKE ?
+         LIMIT 10`
+      ).bind(like).all();
+
+      let comps = mappingRes?.results || [];
+
+      // Fallback to direct compound name match if no mappings found
+      if (comps.length === 0) {
         const compRes = await env.D1_DB.prepare(
-          `SELECT id, name, common_name, cid
+          `SELECT id as compound_id, name, common_name, category, mechanism_summary, cid
            FROM compounds
            WHERE LOWER(name) LIKE ? OR LOWER(common_name) LIKE ?
            ORDER BY name LIMIT 3`
-        )
-          .bind(like, like)
-          .all();
-        return { name, comps: compRes?.results || [] };
-      } catch {
-        return { name, comps: [] };
+        ).bind(like, like).all();
+        comps = compRes?.results || [];
       }
-    })
-  );
 
-  // Step 2: Collect unique compound IDs for organ effect lookup
-  const uniqueCompounds = new Map(); // id -> { compound, ingredientName }
-  for (const { name, comps } of compoundResults) {
-    for (const c of comps) {
-      if (!uniqueCompounds.has(c.id)) {
-        uniqueCompounds.set(c.id, { compound: c, ingredientName: name });
+      for (const c of comps) {
+        const compoundId = c.compound_id || c.id;
+        foundCompoundIds.add(compoundId);
+
+        // Get enriched organ effects with medical explanations
+        const effRes = await env.D1_DB.prepare(
+          `SELECT organ, effect, strength, mechanism, pathway, explanation,
+                  citations, threshold_mg, optimal_mg, dose_response, population_notes
+           FROM compound_organ_effects
+           WHERE compound_id = ?`
+        ).bind(compoundId).all();
+
+        const effs = effRes?.results || [];
+        for (const e of effs) {
+          const organKey = (e.organ || "unknown").toLowerCase().trim();
+          if (!organKey) continue;
+
+          if (!organs[organKey]) {
+            organs[organKey] = { plus: 0, minus: 0, neutral: 0, score: 0 };
+            compoundsByOrgan[organKey] = new Set();
+            compoundDetails[organKey] = [];
+          }
+
+          const strength = parseFloat(e.strength) || 0.5;
+          const compoundName = c.common_name || c.name || name;
+
+          // Score-based assessment (not just counting)
+          if (e.effect === "benefit") {
+            organs[organKey].plus++;
+            organs[organKey].score += strength;
+          } else if (e.effect === "risk" || e.effect === "caution") {
+            organs[organKey].minus++;
+            organs[organKey].score -= strength;
+          } else {
+            organs[organKey].neutral++;
+          }
+
+          compoundsByOrgan[organKey].add(compoundName);
+
+          // Add detailed compound info with medical reasoning
+          compoundDetails[organKey].push({
+            compound: compoundName,
+            category: c.category || "unknown",
+            effect: e.effect,
+            strength: strength,
+            mechanism: e.mechanism || null,
+            pathway: e.pathway || null,
+            explanation: e.explanation || null,
+            citations: e.citations || null,
+            threshold_mg: e.threshold_mg || null,
+            optimal_mg: e.optimal_mg || null,
+            dose_response: e.dose_response || null,
+            population_notes: e.population_notes || null,
+            amount_in_food: c.amount_per_100g || null,
+            source_ingredient: name
+          });
+        }
       }
+    } catch {
+      // Skip this ingredient on error
     }
   }
 
-  // Step 3: Run all organ effect lookups in parallel
-  const effectResults = await Promise.all(
-    Array.from(uniqueCompounds.entries()).map(async ([compId, { compound, ingredientName }]) => {
-      try {
-        const effRes = await env.D1_DB.prepare(
-          `SELECT organ, effect, strength
-           FROM compound_organ_effects
-           WHERE compound_id = ?`
-        )
-          .bind(compId)
-          .all();
-        return { compound, ingredientName, effects: effRes?.results || [] };
-      } catch {
-        return { compound, ingredientName, effects: [] };
-      }
-    })
-  );
-
-  // Step 4: Build results from parallel lookups
-  for (const { compound: c, ingredientName, effects } of effectResults) {
-    for (const e of effects) {
-      const organKey = (e.organ || "unknown").toLowerCase().trim();
-      if (!organKey) continue;
-      if (!organs[organKey]) {
-        organs[organKey] = { plus: 0, minus: 0, neutral: 0 };
-        compoundsByOrgan[organKey] = new Set();
-      }
-      if (e.effect === "benefit") organs[organKey].plus++;
-      else if (e.effect === "risk") organs[organKey].minus++;
-      else organs[organKey].neutral++;
-
-      compoundsByOrgan[organKey].add(c.name || c.common_name || ingredientName);
+  // Fetch compound interactions for found compounds
+  let interactions = [];
+  if (foundCompoundIds.size > 1) {
+    try {
+      const idList = Array.from(foundCompoundIds).join(',');
+      const interRes = await env.D1_DB.prepare(
+        `SELECT ci.*,
+                ca.name as compound_a_name, ca.common_name as compound_a_common,
+                cb.name as compound_b_name, cb.common_name as compound_b_common
+         FROM compound_interactions ci
+         JOIN compounds ca ON ca.id = ci.compound_a_id
+         JOIN compounds cb ON cb.id = ci.compound_b_id
+         WHERE ci.compound_a_id IN (${idList}) AND ci.compound_b_id IN (${idList})
+         LIMIT 10`
+      ).all();
+      interactions = (interRes?.results || []).map(i => ({
+        compounds: [
+          i.compound_a_common || i.compound_a_name,
+          i.compound_b_common || i.compound_b_name
+        ],
+        type: i.interaction_type,
+        description: i.effect_description,
+        mechanism: i.mechanism,
+        strength: i.strength,
+        organs_affected: safeParseJSON(i.organs_affected, [])
+      }));
+    } catch {
+      // ignore interaction lookup failures
     }
   }
 
@@ -19854,10 +22152,32 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
     compoundsByOrganOut[org] = Array.from(set);
   }
 
-  return { organs, compoundsByOrgan: compoundsByOrganOut };
+  return { organs, compoundsByOrgan: compoundsByOrganOut, compoundDetails, interactions };
 }
 
-function organLevelFromCounts({ plus = 0, minus = 0 }) {
+// Helper for safe JSON parsing
+function safeParseJSON(str, fallback = null) {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
+function organLevelFromCounts({ plus = 0, minus = 0, score = 0 }) {
+  // Use score-based assessment when available (more nuanced)
+  if (score !== 0) {
+    if (score >= 2.5) return "High Benefit";
+    if (score >= 1.0) return "Benefit";
+    if (score >= 0.3) return "Mild Benefit";
+    if (score <= -2.5) return "High Caution";
+    if (score <= -1.0) return "Caution";
+    if (score <= -0.3) return "Mild Caution";
+    return "Neutral";
+  }
+
+  // Fallback to count-based assessment
   if (plus === 0 && minus === 0) return "Neutral";
   if (plus > 0 && minus === 0) {
     if (plus >= 3) return "High Benefit";
@@ -19871,6 +22191,60 @@ function organLevelFromCounts({ plus = 0, minus = 0 }) {
   if (minus > plus) return "Caution";
   if (plus > minus) return "Benefit";
   return "Neutral";
+}
+
+// Generate doctor-like summary for an organ based on compounds
+function generateOrganSummary(organKey, compoundDetails, interactions) {
+  if (!compoundDetails || compoundDetails.length === 0) return null;
+
+  const benefits = compoundDetails.filter(c => c.effect === "benefit");
+  const cautions = compoundDetails.filter(c => c.effect === "caution" || c.effect === "risk");
+
+  const parts = [];
+
+  // Summarize benefits
+  if (benefits.length > 0) {
+    const topBenefits = benefits
+      .sort((a, b) => (b.strength || 0) - (a.strength || 0))
+      .slice(0, 3);
+
+    const benefitMechanisms = topBenefits
+      .map(b => b.mechanism)
+      .filter(Boolean)
+      .slice(0, 2);
+
+    if (benefitMechanisms.length > 0) {
+      parts.push(`Supports ${organKey} health through ${benefitMechanisms.join(" and ")}.`);
+    }
+
+    // Add specific explanation from top compound
+    if (topBenefits[0]?.explanation) {
+      const shortExplanation = topBenefits[0].explanation.split('.')[0] + '.';
+      parts.push(shortExplanation);
+    }
+  }
+
+  // Summarize cautions
+  if (cautions.length > 0) {
+    const topCaution = cautions.sort((a, b) => (b.strength || 0) - (a.strength || 0))[0];
+    if (topCaution?.mechanism) {
+      parts.push(`Note: ${topCaution.compound} may cause ${topCaution.mechanism}.`);
+    }
+  }
+
+  // Add relevant interactions
+  const relevantInteractions = (interactions || [])
+    .filter(i => i.organs_affected?.includes(organKey) || i.organs_affected?.length === 0)
+    .slice(0, 1);
+
+  if (relevantInteractions.length > 0) {
+    const int = relevantInteractions[0];
+    if (int.type === "synergy" || int.type === "absorption_enhance") {
+      parts.push(`Tip: ${int.description}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 async function assessOrgansLocally(
@@ -19898,7 +22272,7 @@ async function assessOrgansLocally(
   };
 
   // --- Molecular organ graph (D1): ingredient -> compounds -> organ effects ---
-  let organGraph = { organs: {}, compoundsByOrgan: {} };
+  let organGraph = { organs: {}, compoundsByOrgan: {}, compoundDetails: {}, interactions: [] };
   try {
     organGraph = await getOrganEffectsForIngredients(env, ingredients);
   } catch {
@@ -19908,13 +22282,33 @@ async function assessOrgansLocally(
   const organsArr = [];
   for (const [organKey, counts] of Object.entries(organGraph.organs || {})) {
     const level = organLevelFromCounts(counts);
+    const details = organGraph.compoundDetails?.[organKey] || [];
+    const summary = generateOrganSummary(organKey, details, organGraph.interactions);
+
+    // Get top compounds with their explanations
+    const topCompounds = details
+      .sort((a, b) => (b.strength || 0) - (a.strength || 0))
+      .slice(0, 3)
+      .map(d => ({
+        name: d.compound,
+        effect: d.effect,
+        mechanism: d.mechanism,
+        explanation: d.explanation,
+        citations: d.citations
+      }));
+
     organsArr.push({
       organ: organKey,
       level,
+      score: counts.score || 0,
       plus: counts.plus,
       minus: counts.minus,
       neutral: counts.neutral,
-      compounds: organGraph.compoundsByOrgan?.[organKey] || []
+      compounds: organGraph.compoundsByOrgan?.[organKey] || [],
+      // NEW: Enriched medical data
+      summary: summary,
+      top_compounds: topCompounds,
+      has_medical_detail: details.length > 0 && details.some(d => d.explanation)
     });
   }
 
@@ -19925,18 +22319,24 @@ async function assessOrgansLocally(
     flags: organsFlags,
     organs: organsArr,
     user_flags: user_flags || {},
-    ingredients
+    ingredients,
+    // NEW: Global interactions that apply across organs
+    compound_interactions: organGraph.interactions || []
   };
 
   // lightweight debug block
   organs.debug = organs.debug || {};
   organs.debug.molecular_summary = {
     organ_count: organsArr.length,
+    total_compounds_analyzed: Object.values(organGraph.compoundDetails || {}).flat().length,
+    interactions_found: organGraph.interactions?.length || 0,
     organs: organsArr.map((o) => ({
       organ: o.organ,
       level: o.level,
+      score: o.score,
       plus: o.plus,
-      minus: o.minus
+      minus: o.minus,
+      has_medical_detail: o.has_medical_detail
     }))
   };
 
@@ -20183,7 +22583,9 @@ function cacheKeyForMenu(query, address, forceUS = false) {
   return `menu/${encodeURIComponent(q)}|${encodeURIComponent(a)}|${u}.json`;
 }
 
-// Read a cached menu snapshot from KV. Returns { savedAt, data } or null.
+// Read a cached menu snapshot from KV.
+// Returns { savedAt, data, ageSeconds, isStale } or null.
+// isStale=true means the menu should be refreshed in the background (but still served).
 async function readMenuFromCache(env, key) {
   if (!env?.MENUS_CACHE) {
     console.warn('[MenuCache] MENUS_CACHE binding not available');
@@ -20195,10 +22597,14 @@ async function readMenuFromCache(env, key) {
     const js = JSON.parse(raw);
     // Expect shape: { savedAt: ISO, data: { query, address, forceUS, items: [...] } }
     if (!js || typeof js !== "object" || !js.data) return null;
-    console.log(`[MenuCache] Cache HIT for key: ${key.slice(0, 80)}...`);
-    return js;
-  } catch (e) {
-    console.error(`[MenuCache] Read error for key ${key}:`, e.message);
+
+    // Calculate age and staleness
+    const savedAt = js.savedAt ? new Date(js.savedAt).getTime() : 0;
+    const ageSeconds = savedAt ? Math.floor((Date.now() - savedAt) / 1000) : 0;
+    const isStale = ageSeconds > MENU_STALE_SECONDS;
+
+    return { ...js, ageSeconds, isStale };
+  } catch {
     return null;
   }
 }
@@ -20220,6 +22626,2239 @@ async function writeMenuToCache(env, key, data) {
     return false;
   }
 }
+
+// Background refresh: fetch fresh menu data and update cache (non-blocking).
+// Called when serving stale cache to ensure next request gets fresh data.
+async function refreshMenuInBackground(env, { query, address, forceUS, cacheKey }) {
+  console.log(`[menu-refresh] Starting background refresh for: ${query} @ ${address}`);
+  try {
+    // Use the same tiered job fetcher as live requests
+    let addr = address;
+    if (forceUS && !/usa|united states/i.test(addr)) {
+      addr = `${address}, USA`;
+    }
+
+    const job = await postJobByAddressTiered({ query, address: addr, maxRows: 50 }, env);
+
+    if (job?.immediate) {
+      const rows = job.raw?.returnvalue?.data || [];
+      const rowsUS = filterRowsUS(rows, forceUS);
+
+      // Pick best restaurant
+      const googleContext = { name: query, address };
+      const best = pickBestRestaurant({ rows: rowsUS, query, googleContext });
+      const chosen = best || (rowsUS.length ? rowsUS[0] : null);
+
+      if (chosen?.menu?.length) {
+        // Normalize menu items for cache storage
+        const items = chosen.menu.map(m => ({
+          name: m.name || m.title || "",
+          section: m.section || "",
+          description: m.description || m.itemDescription || "",
+          price: m.price,
+          price_display: m.priceTagline || m.price_display || "",
+          calories_display: m.calories_display || null
+        }));
+        const finalKey = cacheKey || cacheKeyForMenu(query, address, forceUS);
+
+        await writeMenuToCache(env, finalKey, {
+          query,
+          address,
+          forceUS,
+          items
+        });
+        console.log(`[menu-refresh] Successfully refreshed: ${query} @ ${address} (${items.length} items)`);
+        return { ok: true, items: items.length };
+      }
+    }
+    console.log(`[menu-refresh] No menu data found for: ${query} @ ${address}`);
+    return { ok: false, reason: "no_data" };
+  } catch (err) {
+    console.log(`[menu-refresh] Error refreshing ${query}: ${err?.message}`);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// Get list of stale menu cache entries (for scheduled refresh).
+async function getStaleMenuEntries(env, limit = 50) {
+  if (!env?.MENUS_CACHE) return [];
+  const staleEntries = [];
+  let cursor = undefined;
+
+  do {
+    const list = await env.MENUS_CACHE.list({ prefix: "menu/", limit: 100, cursor });
+    for (const key of list.keys) {
+      if (staleEntries.length >= limit) break;
+      try {
+        const cached = await readMenuFromCache(env, key.name);
+        if (cached?.isStale) {
+          staleEntries.push({
+            key: key.name,
+            savedAt: cached.savedAt,
+            ageSeconds: cached.ageSeconds,
+            ageDays: Math.floor(cached.ageSeconds / 86400),
+            query: cached.data?.query,
+            address: cached.data?.address,
+            forceUS: cached.data?.forceUS
+          });
+        }
+      } catch {}
+    }
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor && staleEntries.length < limit);
+
+  return staleEntries;
+}
+// ==========================================================================
+
+// === Franchise Menu System =================================================
+// Implements hierarchical menu inheritance (GLOBAL → COUNTRY → REGION → STORE)
+// with append-only provenance tracking and 15-day auto-renewal.
+// CRITICAL: NOTHING IS EVER DELETED - only status updates to INACTIVE.
+
+// Configuration constants
+const FRANCHISE_CONFIG = {
+  ACTIVE_WINDOW_DAYS: 45,        // Items seen within this window are considered active
+  INACTIVE_AFTER_DAYS: 90,       // Mark as INACTIVE if not seen for this long
+  STORE_REFRESH_INTERVAL_DAYS: 15, // Reconcile stores every N days
+  FUZZY_MATCH_THRESHOLD: 0.92,   // Minimum similarity for fuzzy matching
+  TOKEN_OVERLAP_THRESHOLD: 0.85, // Minimum token overlap for matching
+  PROMOTION_THRESHOLDS: {
+    STORE_TO_REGION: { min_stores: 3, min_confidence: 0.70, window_days: 30 },
+    REGION_TO_COUNTRY: { min_regions: 3, min_confidence: 0.75, window_days: 45 },
+    COUNTRY_TO_GLOBAL: { min_countries: 3, min_confidence: 0.80, window_days: 90 }
+  }
+};
+
+// --- Brand Detection ---
+
+/**
+ * Normalize a restaurant name for brand matching
+ * @param {string} name - Restaurant name (e.g., "McDonald's #12345")
+ * @returns {string} - Normalized name (e.g., "mcdonalds")
+ */
+function normalizeBrandName(name) {
+  if (!name) return "";
+  return String(name)
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[''`]/g, "")                    // Remove apostrophes
+    .replace(/[®™©]/g, "")                    // Remove trademark symbols
+    .replace(/#\s*\d+/g, "")                  // Remove store numbers (#123)
+    .replace(/\(\s*[^)]*\s*\)/g, "")          // Remove parentheticals
+    .replace(/\s+(at|in|on|near)\s+.*/i, "") // Remove location suffixes
+    .replace(/-\s*(terminal|gate|mall|plaza|airport|station).*$/i, "") // Remove venue suffixes
+    .replace(/[^a-z0-9]/g, "")                // Keep only alphanumeric
+    .trim();
+}
+
+/**
+ * Detect brand from a place object
+ * @param {Object} env - Cloudflare env bindings
+ * @param {Object} place - Place object with name, address, etc.
+ * @returns {Promise<Object|null>} - Brand record or null
+ */
+async function detectBrand(env, place) {
+  if (!env?.D1_DB || !place?.name) return null;
+
+  const normalized = normalizeBrandName(place.name);
+  if (!normalized) return null;
+
+  try {
+    // Try exact match first
+    const exact = await env.D1_DB.prepare(
+      "SELECT * FROM brands WHERE normalized_name = ?"
+    ).bind(normalized).first();
+
+    if (exact) return exact;
+
+    // Try contains match (for names like "The McDonald's Restaurant")
+    const contains = await env.D1_DB.prepare(
+      "SELECT * FROM brands WHERE ? LIKE '%' || normalized_name || '%' ORDER BY LENGTH(normalized_name) DESC LIMIT 1"
+    ).bind(normalized).first();
+
+    return contains || null;
+  } catch (err) {
+    console.log("[franchise] Brand detection error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Derive region code from address components
+ * Format: {COUNTRY}-{STATE/PROVINCE} e.g., "US-FL", "US-CA", "GB-LND", "MX-CDMX"
+ */
+function deriveRegionCode(countryCode, stateProvince) {
+  if (!countryCode) return null;
+  const cc = countryCode.toUpperCase();
+  if (!stateProvince) return cc;
+
+  // Normalize state/province
+  const sp = stateProvince.toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .slice(0, 4); // Max 4 chars
+
+  return `${cc}-${sp}`;
+}
+
+// --- Store Management ---
+
+/**
+ * Upsert a store record (create or update, never delete)
+ */
+async function upsertStore(env, storeData) {
+  if (!env?.D1_DB) return null;
+
+  const {
+    place_id, uber_store_id, brand_id,
+    name, address, city, state_province, postal_code,
+    country_code, latitude, longitude, source
+  } = storeData;
+
+  const normalized_name = normalizeBrandName(name);
+  const region_code = deriveRegionCode(country_code, state_province);
+  const now = new Date().toISOString();
+
+  try {
+    // Try to find existing store
+    let existing = null;
+    if (place_id) {
+      existing = await env.D1_DB.prepare(
+        "SELECT * FROM stores WHERE place_id = ?"
+      ).bind(place_id).first();
+    }
+    if (!existing && uber_store_id) {
+      existing = await env.D1_DB.prepare(
+        "SELECT * FROM stores WHERE uber_store_id = ?"
+      ).bind(uber_store_id).first();
+    }
+
+    if (existing) {
+      // Update existing store
+      await env.D1_DB.prepare(`
+        UPDATE stores SET
+          brand_id = COALESCE(?, brand_id),
+          name = COALESCE(?, name),
+          normalized_name = COALESCE(?, normalized_name),
+          address = COALESCE(?, address),
+          city = COALESCE(?, city),
+          state_province = COALESCE(?, state_province),
+          postal_code = COALESCE(?, postal_code),
+          country_code = COALESCE(?, country_code),
+          region_code = COALESCE(?, region_code),
+          latitude = COALESCE(?, latitude),
+          longitude = COALESCE(?, longitude),
+          uber_store_id = COALESCE(?, uber_store_id),
+          last_seen_at = ?,
+          status = 'ACTIVE',
+          updated_at = ?
+        WHERE id = ?
+      `).bind(
+        brand_id, name, normalized_name, address, city, state_province,
+        postal_code, country_code, region_code, latitude, longitude,
+        uber_store_id, now, now, existing.id
+      ).run();
+
+      return { ...existing, brand_id, updated: true };
+    } else {
+      // Insert new store
+      const result = await env.D1_DB.prepare(`
+        INSERT INTO stores (
+          place_id, uber_store_id, brand_id, name, normalized_name,
+          address, city, state_province, postal_code, country_code, region_code,
+          latitude, longitude, source, status, first_seen_at, last_seen_at,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
+      `).bind(
+        place_id, uber_store_id, brand_id, name, normalized_name,
+        address, city, state_province, postal_code, country_code, region_code,
+        latitude, longitude, source, now, now, now, now
+      ).run();
+
+      return { id: result.meta?.last_row_id, place_id, brand_id, created: true };
+    }
+  } catch (err) {
+    console.log("[franchise] Store upsert error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Get store by place_id or uber_store_id
+ */
+async function getStore(env, { place_id, uber_store_id, store_id }) {
+  if (!env?.D1_DB) return null;
+
+  try {
+    if (store_id) {
+      return await env.D1_DB.prepare("SELECT * FROM stores WHERE id = ?").bind(store_id).first();
+    }
+    if (place_id) {
+      return await env.D1_DB.prepare("SELECT * FROM stores WHERE place_id = ?").bind(place_id).first();
+    }
+    if (uber_store_id) {
+      return await env.D1_DB.prepare("SELECT * FROM stores WHERE uber_store_id = ?").bind(uber_store_id).first();
+    }
+    return null;
+  } catch (err) {
+    console.log("[franchise] Get store error:", err?.message);
+    return null;
+  }
+}
+
+// --- Menu Item Identity Resolution ---
+
+/**
+ * Normalize menu item name for matching
+ */
+function normalizeMenuItemName(name) {
+  if (!name) return "";
+  return String(name)
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[®™©]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim();
+}
+
+/**
+ * Resolve an observed menu item name to a canonical franchise_menu_items record
+ * Uses: exact match → alias match → fuzzy match → create new
+ */
+async function resolveMenuItem(env, brandId, observedName, observedData = {}) {
+  if (!env?.D1_DB || !brandId || !observedName) return null;
+
+  const normalized = normalizeMenuItemName(observedName);
+  if (!normalized) return null;
+
+  try {
+    // 1. Exact match on franchise_menu_items
+    const exactItem = await env.D1_DB.prepare(`
+      SELECT * FROM franchise_menu_items
+      WHERE brand_id = ? AND normalized_name = ?
+    `).bind(brandId, normalized).first();
+
+    if (exactItem) {
+      return { item: exactItem, matchMethod: "exact" };
+    }
+
+    // 2. Alias match
+    const aliasMatch = await env.D1_DB.prepare(`
+      SELECT fmi.* FROM franchise_menu_items fmi
+      JOIN menu_item_aliases mia ON mia.menu_item_id = fmi.id
+      WHERE fmi.brand_id = ? AND mia.alias_normalized = ?
+    `).bind(brandId, normalized).first();
+
+    if (aliasMatch) {
+      return { item: aliasMatch, matchMethod: "alias" };
+    }
+
+    // 3. Create new item (conservative - no fuzzy matching for now)
+    const now = new Date().toISOString();
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO franchise_menu_items (
+        brand_id, canonical_name, normalized_name, category, description,
+        calories, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'CANDIDATE', ?, ?)
+    `).bind(
+      brandId, observedName, normalized,
+      observedData.category || observedData.section || null,
+      observedData.description || null,
+      observedData.calories || null,
+      now, now
+    ).run();
+
+    const newItem = await env.D1_DB.prepare(
+      "SELECT * FROM franchise_menu_items WHERE id = ?"
+    ).bind(result.meta?.last_row_id).first();
+
+    // Add the original observed name as an alias
+    if (newItem) {
+      await env.D1_DB.prepare(`
+        INSERT OR IGNORE INTO menu_item_aliases (menu_item_id, alias_text, alias_normalized, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(newItem.id, observedName, normalized, now).run();
+    }
+
+    return { item: newItem, matchMethod: "created", isNew: true };
+  } catch (err) {
+    console.log("[franchise] Resolve menu item error:", err?.message);
+    return null;
+  }
+}
+
+// --- Sightings (Append-Only Provenance) ---
+
+/**
+ * Record a menu item sighting (immutable - never update or delete)
+ */
+async function recordSighting(env, {
+  menu_item_id, store_id, source_type, source_ref,
+  observed_name, observed_description, observed_price_cents,
+  observed_calories, observed_section, observed_image_url,
+  confidence, match_method, raw_payload_ref
+}) {
+  if (!env?.D1_DB || !menu_item_id || !store_id) return null;
+
+  const now = new Date().toISOString();
+
+  try {
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO menu_item_sightings (
+        menu_item_id, store_id, source_type, source_ref,
+        observed_name, observed_description, observed_price_cents,
+        observed_calories, observed_section, observed_image_url,
+        confidence, match_method, observed_at, raw_payload_ref, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      menu_item_id, store_id, source_type || "ubereats", source_ref,
+      observed_name, observed_description, observed_price_cents,
+      observed_calories, observed_section, observed_image_url,
+      confidence || 0.7, match_method, now, raw_payload_ref, now
+    ).run();
+
+    return { id: result.meta?.last_row_id, recorded: true };
+  } catch (err) {
+    console.log("[franchise] Record sighting error:", err?.message);
+    return null;
+  }
+}
+
+// --- Scope Management (Current State - Mutable) ---
+
+/**
+ * Upsert a menu item scope (GLOBAL/COUNTRY/REGION/STORE)
+ * NEVER deletes - only updates status
+ */
+async function upsertScope(env, {
+  menu_item_id, scope_type, scope_key, status, confidence, price_cents
+}) {
+  if (!env?.D1_DB || !menu_item_id || !scope_type) return null;
+
+  const now = new Date().toISOString();
+
+  try {
+    // Check if scope exists
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM menu_item_scopes
+      WHERE menu_item_id = ? AND scope_type = ? AND (scope_key = ? OR (scope_key IS NULL AND ? IS NULL))
+    `).bind(menu_item_id, scope_type, scope_key, scope_key).first();
+
+    if (existing) {
+      // Update existing scope
+      await env.D1_DB.prepare(`
+        UPDATE menu_item_scopes SET
+          status = COALESCE(?, status),
+          confidence = COALESCE(?, confidence),
+          last_seen_at = ?,
+          last_reconciled_at = ?,
+          price_cents = COALESCE(?, price_cents),
+          updated_at = ?
+        WHERE id = ?
+      `).bind(
+        status, confidence, now, now, price_cents, now, existing.id
+      ).run();
+
+      return { id: existing.id, updated: true };
+    } else {
+      // Insert new scope
+      const result = await env.D1_DB.prepare(`
+        INSERT INTO menu_item_scopes (
+          menu_item_id, scope_type, scope_key, status, confidence,
+          first_seen_at, last_seen_at, last_reconciled_at,
+          price_cents, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        menu_item_id, scope_type, scope_key,
+        status || "CANDIDATE", confidence || 0.5,
+        now, now, now, price_cents, now, now
+      ).run();
+
+      return { id: result.meta?.last_row_id, created: true };
+    }
+  } catch (err) {
+    console.log("[franchise] Upsert scope error:", err?.message);
+    return null;
+  }
+}
+
+// --- Effective Menu Builder (Inheritance) ---
+
+/**
+ * Get effective menu for a store using hierarchical inheritance
+ * GLOBAL → COUNTRY → REGION → STORE (later overrides earlier)
+ */
+async function getEffectiveMenu(env, storeId) {
+  if (!env?.D1_DB || !storeId) return null;
+
+  try {
+    // Get store with brand info
+    const store = await env.D1_DB.prepare(`
+      SELECT s.*, b.canonical_name as brand_name
+      FROM stores s
+      LEFT JOIN brands b ON b.id = s.brand_id
+      WHERE s.id = ?
+    `).bind(storeId).first();
+
+    if (!store) return { ok: false, error: "Store not found" };
+    if (!store.brand_id) {
+      // Non-franchise store - fall back to regular menu cache
+      return { ok: false, error: "Not a franchise store", store };
+    }
+
+    // Build scope keys for inheritance
+    const scopeKeys = {
+      GLOBAL: null,
+      COUNTRY: store.country_code,
+      REGION: store.region_code,
+      STORE: String(store.id)
+    };
+
+    // Query all relevant scopes with item details
+    const scopes = await env.D1_DB.prepare(`
+      SELECT
+        fmi.id as item_id,
+        fmi.canonical_name,
+        fmi.normalized_name,
+        fmi.category,
+        fmi.description,
+        fmi.calories,
+        mis.scope_type,
+        mis.scope_key,
+        mis.status,
+        mis.confidence,
+        mis.first_seen_at,
+        mis.last_seen_at,
+        mis.price_cents
+      FROM menu_item_scopes mis
+      JOIN franchise_menu_items fmi ON fmi.id = mis.menu_item_id
+      WHERE fmi.brand_id = ?
+        AND (
+          (mis.scope_type = 'GLOBAL' AND mis.scope_key IS NULL)
+          OR (mis.scope_type = 'COUNTRY' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'REGION' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'STORE' AND mis.scope_key = ?)
+        )
+      ORDER BY fmi.id,
+        CASE mis.scope_type
+          WHEN 'GLOBAL' THEN 1
+          WHEN 'COUNTRY' THEN 2
+          WHEN 'REGION' THEN 3
+          WHEN 'STORE' THEN 4
+        END
+    `).bind(
+      store.brand_id,
+      scopeKeys.COUNTRY,
+      scopeKeys.REGION,
+      scopeKeys.STORE
+    ).all();
+
+    // Merge items with inheritance (later scope overrides earlier)
+    const itemMap = new Map();
+    const scopePriority = { GLOBAL: 1, COUNTRY: 2, REGION: 3, STORE: 4 };
+
+    for (const row of scopes.results || []) {
+      const existing = itemMap.get(row.item_id);
+      const newPriority = scopePriority[row.scope_type] || 0;
+      const existingPriority = existing ? (scopePriority[existing.scope_type] || 0) : 0;
+
+      // INACTIVE at a later scope suppresses earlier scope
+      if (row.status === "INACTIVE" && newPriority > existingPriority) {
+        itemMap.delete(row.item_id);
+        continue;
+      }
+
+      // Later scope overrides earlier, or update if same scope with higher confidence
+      if (!existing || newPriority > existingPriority ||
+          (newPriority === existingPriority && row.confidence > existing.confidence)) {
+        itemMap.set(row.item_id, {
+          id: row.item_id,
+          name: row.canonical_name,
+          normalized_name: row.normalized_name,
+          category: row.category,
+          description: row.description,
+          calories: row.calories,
+          price_cents: row.price_cents,
+          status: row.status,
+          confidence: row.confidence,
+          scope_type: row.scope_type,
+          last_seen_at: row.last_seen_at
+        });
+      }
+    }
+
+    // Filter to only ACTIVE/SEASONAL items
+    const activeItems = Array.from(itemMap.values())
+      .filter(item => item.status === "ACTIVE" || item.status === "SEASONAL");
+
+    return {
+      ok: true,
+      store: {
+        id: store.id,
+        name: store.name,
+        brand_id: store.brand_id,
+        brand_name: store.brand_name,
+        country_code: store.country_code,
+        region_code: store.region_code
+      },
+      items: activeItems,
+      item_count: activeItems.length,
+      scope_summary: {
+        GLOBAL: activeItems.filter(i => i.scope_type === "GLOBAL").length,
+        COUNTRY: activeItems.filter(i => i.scope_type === "COUNTRY").length,
+        REGION: activeItems.filter(i => i.scope_type === "REGION").length,
+        STORE: activeItems.filter(i => i.scope_type === "STORE").length
+      }
+    };
+  } catch (err) {
+    console.log("[franchise] Get effective menu error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// --- Store Menu Snapshots (Append-Only) ---
+
+/**
+ * Create a store menu snapshot (immutable)
+ */
+async function createSnapshot(env, storeId, menuItems, sourceType, sourceUrl) {
+  if (!env?.D1_DB || !storeId || !menuItems) return null;
+
+  const now = new Date().toISOString();
+
+  // Compute menu hash for change detection
+  const normalizedMenu = menuItems
+    .map(item => normalizeMenuItemName(item.name || item.title))
+    .sort()
+    .join("|");
+
+  const encoder = new TextEncoder();
+  const data = encoder.encode(normalizedMenu);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const menuHash = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+
+  try {
+    // Check if identical snapshot already exists (same hash)
+    const existing = await env.D1_DB.prepare(`
+      SELECT id FROM store_menu_snapshots
+      WHERE store_id = ? AND menu_hash = ?
+      ORDER BY snapshot_at DESC LIMIT 1
+    `).bind(storeId, menuHash).first();
+
+    if (existing) {
+      return { id: existing.id, unchanged: true, menuHash };
+    }
+
+    // Store payload in R2 if available
+    let payloadRef = null;
+    if (env.R2_BUCKET) {
+      const payloadKey = `snapshots/${storeId}/${now.replace(/[:.]/g, "-")}.json`;
+      await env.R2_BUCKET.put(payloadKey, JSON.stringify({
+        store_id: storeId,
+        snapshot_at: now,
+        source_type: sourceType,
+        source_url: sourceUrl,
+        items: menuItems
+      }));
+      payloadRef = payloadKey;
+    }
+
+    // Insert snapshot
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO store_menu_snapshots (
+        store_id, snapshot_at, menu_hash, item_count,
+        source_type, source_url, payload_ref, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      storeId, now, menuHash, menuItems.length,
+      sourceType || "ubereats", sourceUrl, payloadRef, now
+    ).run();
+
+    return {
+      id: result.meta?.last_row_id,
+      menuHash,
+      itemCount: menuItems.length,
+      payloadRef,
+      created: true
+    };
+  } catch (err) {
+    console.log("[franchise] Create snapshot error:", err?.message);
+    return null;
+  }
+}
+
+// --- Delta Discovery ---
+
+/**
+ * Run delta discovery for a store (background job)
+ * Extracts menu, creates snapshot, resolves items, records sightings, updates scopes
+ */
+async function deltaMenuDiscovery(env, storeId, menuItems, sourceType = "ubereats") {
+  if (!env?.D1_DB || !storeId || !menuItems?.length) {
+    return { ok: false, error: "Missing required data" };
+  }
+
+  try {
+    // Get store
+    const store = await getStore(env, { store_id: storeId });
+    if (!store || !store.brand_id) {
+      return { ok: false, error: "Store not found or not a franchise" };
+    }
+
+    // Create snapshot
+    const snapshot = await createSnapshot(env, storeId, menuItems, sourceType);
+    if (snapshot?.unchanged) {
+      console.log(`[franchise] Delta discovery: no changes for store ${storeId}`);
+      return { ok: true, unchanged: true, snapshot };
+    }
+
+    // Process each menu item
+    const results = {
+      resolved: 0,
+      created: 0,
+      sightings: 0,
+      scopes_updated: 0
+    };
+
+    const now = new Date().toISOString();
+    const seenItemIds = new Set();
+
+    for (const menuItem of menuItems) {
+      const observedName = menuItem.name || menuItem.title;
+      if (!observedName) continue;
+
+      // Resolve to canonical item
+      const resolved = await resolveMenuItem(env, store.brand_id, observedName, {
+        category: menuItem.section || menuItem.category,
+        description: menuItem.description,
+        calories: menuItem.restaurantCalories || menuItem.calories
+      });
+
+      if (!resolved?.item) continue;
+
+      const item = resolved.item;
+      seenItemIds.add(item.id);
+
+      if (resolved.isNew) {
+        results.created++;
+      } else {
+        results.resolved++;
+      }
+
+      // Record sighting
+      const sighting = await recordSighting(env, {
+        menu_item_id: item.id,
+        store_id: storeId,
+        source_type: sourceType,
+        observed_name: observedName,
+        observed_description: menuItem.description,
+        observed_price_cents: menuItem.price,
+        observed_calories: menuItem.restaurantCalories || menuItem.calories,
+        observed_section: menuItem.section,
+        observed_image_url: menuItem.imageUrl,
+        confidence: resolved.isNew ? 0.55 : 0.75,
+        match_method: resolved.matchMethod,
+        raw_payload_ref: snapshot?.payloadRef
+      });
+
+      if (sighting) results.sightings++;
+
+      // Update STORE scope
+      const scope = await upsertScope(env, {
+        menu_item_id: item.id,
+        scope_type: "STORE",
+        scope_key: String(storeId),
+        status: "ACTIVE",
+        confidence: resolved.isNew ? 0.55 : 0.75,
+        price_cents: menuItem.price
+      });
+
+      if (scope) results.scopes_updated++;
+    }
+
+    // Mark items NOT seen as potentially inactive (only if last_seen > INACTIVE_AFTER_DAYS)
+    const inactiveCutoff = new Date(Date.now() - FRANCHISE_CONFIG.INACTIVE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+    await env.D1_DB.prepare(`
+      UPDATE menu_item_scopes
+      SET status = 'INACTIVE', updated_at = ?
+      WHERE scope_type = 'STORE' AND scope_key = ?
+        AND status != 'INACTIVE'
+        AND last_seen_at < ?
+        AND menu_item_id NOT IN (${Array.from(seenItemIds).join(",") || "0"})
+    `).bind(now, String(storeId), inactiveCutoff).run();
+
+    // Update store reconciliation timestamp
+    const nextReconcile = new Date(Date.now() + FRANCHISE_CONFIG.STORE_REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    await env.D1_DB.prepare(`
+      UPDATE stores SET
+        last_reconciled_at = ?,
+        next_reconcile_after = ?,
+        updated_at = ?
+      WHERE id = ?
+    `).bind(now, nextReconcile, now, storeId).run();
+
+    return {
+      ok: true,
+      store_id: storeId,
+      snapshot,
+      results
+    };
+  } catch (err) {
+    console.log("[franchise] Delta discovery error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// --- Reconciliation Batch Job ---
+
+/**
+ * Get stores due for reconciliation (for cron job)
+ */
+async function getStoresDueForReconcile(env, limit = 10) {
+  if (!env?.D1_DB) return [];
+
+  const now = new Date().toISOString();
+
+  try {
+    // Get stores where next_reconcile_after has passed or is NULL
+    const result = await env.D1_DB.prepare(`
+      SELECT s.*, b.canonical_name as brand_name
+      FROM stores s
+      LEFT JOIN brands b ON b.id = s.brand_id
+      WHERE s.status = 'ACTIVE'
+        AND s.brand_id IS NOT NULL
+        AND (s.next_reconcile_after IS NULL OR s.next_reconcile_after <= ?)
+      ORDER BY s.next_reconcile_after ASC NULLS FIRST
+      LIMIT ?
+    `).bind(now, limit).all();
+
+    return result.results || [];
+  } catch (err) {
+    console.log("[franchise] Get stores for reconcile error:", err?.message);
+    return [];
+  }
+}
+
+// --- Promotion Jobs ---
+
+/**
+ * Promote items from STORE scope to REGION scope
+ * Runs periodically to identify widely available items
+ */
+async function promoteStoreToRegion(env, brandId) {
+  if (!env?.D1_DB || !brandId) return { ok: false };
+
+  const config = FRANCHISE_CONFIG.PROMOTION_THRESHOLDS.STORE_TO_REGION;
+  const cutoffDate = new Date(Date.now() - config.window_days * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  try {
+    // Find items seen in multiple stores in the same region
+    const candidates = await env.D1_DB.prepare(`
+      SELECT
+        fmi.id as menu_item_id,
+        s.region_code,
+        COUNT(DISTINCT s.id) as store_count,
+        AVG(mis.confidence) as avg_confidence
+      FROM menu_item_sightings mis
+      JOIN franchise_menu_items fmi ON fmi.id = mis.menu_item_id
+      JOIN stores s ON s.id = mis.store_id
+      WHERE fmi.brand_id = ?
+        AND mis.observed_at >= ?
+        AND s.region_code IS NOT NULL
+      GROUP BY fmi.id, s.region_code
+      HAVING store_count >= ? AND avg_confidence >= ?
+    `).bind(brandId, cutoffDate, config.min_stores, config.min_confidence).all();
+
+    let promoted = 0;
+    for (const candidate of candidates.results || []) {
+      // Check if REGION scope already exists
+      const existing = await env.D1_DB.prepare(`
+        SELECT id FROM menu_item_scopes
+        WHERE menu_item_id = ? AND scope_type = 'REGION' AND scope_key = ?
+      `).bind(candidate.menu_item_id, candidate.region_code).first();
+
+      if (!existing) {
+        await upsertScope(env, {
+          menu_item_id: candidate.menu_item_id,
+          scope_type: "REGION",
+          scope_key: candidate.region_code,
+          status: "ACTIVE",
+          confidence: candidate.avg_confidence
+        });
+        promoted++;
+      }
+    }
+
+    return { ok: true, promoted, checked: candidates.results?.length || 0 };
+  } catch (err) {
+    console.log("[franchise] Promote store to region error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Promote items from REGION scope to COUNTRY scope
+ */
+async function promoteRegionToCountry(env, brandId) {
+  if (!env?.D1_DB || !brandId) return { ok: false };
+
+  const config = FRANCHISE_CONFIG.PROMOTION_THRESHOLDS.REGION_TO_COUNTRY;
+  const cutoffDate = new Date(Date.now() - config.window_days * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    const candidates = await env.D1_DB.prepare(`
+      SELECT
+        mis_scope.menu_item_id,
+        s.country_code,
+        COUNT(DISTINCT s.region_code) as region_count,
+        AVG(mis_scope.confidence) as avg_confidence
+      FROM menu_item_scopes mis_scope
+      JOIN franchise_menu_items fmi ON fmi.id = mis_scope.menu_item_id
+      JOIN stores s ON mis_scope.scope_key = s.region_code
+      WHERE fmi.brand_id = ?
+        AND mis_scope.scope_type = 'REGION'
+        AND mis_scope.status = 'ACTIVE'
+        AND mis_scope.last_seen_at >= ?
+        AND s.country_code IS NOT NULL
+      GROUP BY mis_scope.menu_item_id, s.country_code
+      HAVING region_count >= ? AND avg_confidence >= ?
+    `).bind(brandId, cutoffDate, config.min_regions, config.min_confidence).all();
+
+    let promoted = 0;
+    for (const candidate of candidates.results || []) {
+      const existing = await env.D1_DB.prepare(`
+        SELECT id FROM menu_item_scopes
+        WHERE menu_item_id = ? AND scope_type = 'COUNTRY' AND scope_key = ?
+      `).bind(candidate.menu_item_id, candidate.country_code).first();
+
+      if (!existing) {
+        await upsertScope(env, {
+          menu_item_id: candidate.menu_item_id,
+          scope_type: "COUNTRY",
+          scope_key: candidate.country_code,
+          status: "ACTIVE",
+          confidence: candidate.avg_confidence
+        });
+        promoted++;
+      }
+    }
+
+    return { ok: true, promoted, checked: candidates.results?.length || 0 };
+  } catch (err) {
+    console.log("[franchise] Promote region to country error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Mark stale scopes as INACTIVE (NO DELETION - status flip only)
+ */
+async function markStaleInactive(env, brandId) {
+  if (!env?.D1_DB) return { ok: false };
+
+  const inactiveCutoff = new Date(Date.now() - FRANCHISE_CONFIG.INACTIVE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+
+  try {
+    const result = await env.D1_DB.prepare(`
+      UPDATE menu_item_scopes
+      SET status = 'INACTIVE', updated_at = ?
+      WHERE menu_item_id IN (
+        SELECT id FROM franchise_menu_items WHERE brand_id = ?
+      )
+      AND status != 'INACTIVE'
+      AND last_seen_at < ?
+    `).bind(now, brandId, inactiveCutoff).run();
+
+    return { ok: true, marked_inactive: result.meta?.changes || 0 };
+  } catch (err) {
+    console.log("[franchise] Mark stale inactive error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// ==========================================================================
+
+// === Vision Correction System ==============================================
+// Corrects recipe/ingredient data based on visual evidence from dish photos.
+// When vision detects a mismatch (e.g., sees spaghetti but recipe says penne),
+// the correction is applied to align the analysis with visual reality.
+
+/**
+ * Food attribute categories that vision can correct
+ */
+const VISION_CORRECTION_CATEGORIES = {
+  // Pasta types - what vision might see vs recipe variations
+  pasta: {
+    variants: [
+      "spaghetti", "penne", "rigatoni", "fettuccine", "linguine", "tagliatelle",
+      "fusilli", "farfalle", "rotini", "macaroni", "ziti", "bucatini",
+      "angel hair", "capellini", "orzo", "lasagna", "ravioli", "tortellini",
+      "gnocchi", "pappardelle", "orecchiette", "cavatappi"
+    ],
+    visual_cues: {
+      spaghetti: ["long thin round strands", "round cross-section noodles"],
+      penne: ["tube-shaped", "diagonal cut ends", "hollow tubes"],
+      rigatoni: ["large ridged tubes", "wide hollow cylinders"],
+      fettuccine: ["flat wide ribbons", "thick flat noodles"],
+      linguine: ["flat thin strands", "elliptical cross-section"],
+      fusilli: ["spiral shaped", "corkscrew pasta"],
+      farfalle: ["bow-tie shaped", "butterfly pasta"],
+      lasagna: ["wide flat sheets", "layered flat pasta"],
+      ravioli: ["filled square pillows", "stuffed pasta squares"],
+      tortellini: ["ring-shaped filled pasta", "belly button pasta"],
+      gnocchi: ["small dumplings", "pillowy potato pasta"]
+    }
+  },
+
+  // Rice types
+  rice: {
+    variants: [
+      "white rice", "brown rice", "fried rice", "jasmine rice", "basmati rice",
+      "wild rice", "risotto", "sushi rice", "sticky rice", "pilaf",
+      "yellow rice", "spanish rice", "coconut rice", "rice pilaf"
+    ],
+    visual_cues: {
+      "white rice": ["plain white grains", "steamed white"],
+      "brown rice": ["tan/brown grains", "darker grain color"],
+      "fried rice": ["mixed with vegetables/egg", "stir-fried appearance", "glossy oily grains"],
+      "yellow rice": ["yellow-tinted grains", "saffron/turmeric colored"],
+      "wild rice": ["dark brown/black grains", "long dark grains"]
+    }
+  },
+
+  // Bread types
+  bread: {
+    variants: [
+      "white bread", "whole wheat", "sourdough", "ciabatta", "baguette",
+      "brioche", "focaccia", "pita", "naan", "tortilla", "croissant",
+      "rye bread", "pumpernickel", "multigrain", "flatbread"
+    ],
+    visual_cues: {
+      sourdough: ["rustic crust", "open crumb structure", "artisan appearance"],
+      brioche: ["golden shiny top", "rich yellow crumb"],
+      ciabatta: ["flat rustic shape", "large holes in crumb"],
+      baguette: ["long thin loaf", "crusty exterior"],
+      "whole wheat": ["darker brown color", "visible grain specks"]
+    }
+  },
+
+  // Protein types
+  protein: {
+    variants: [
+      "chicken", "beef", "pork", "lamb", "turkey", "duck",
+      "salmon", "tuna", "cod", "tilapia", "shrimp", "lobster", "crab",
+      "tofu", "tempeh", "seitan"
+    ],
+    visual_cues: {
+      salmon: ["orange-pink flesh", "distinctive salmon color"],
+      tuna: ["deep red/pink flesh", "steak-like appearance"],
+      shrimp: ["curved pink bodies", "visible tail segments"],
+      chicken: ["white meat", "light colored flesh"],
+      beef: ["red/brown meat", "darker meat color"]
+    }
+  },
+
+  // Cooking methods
+  cooking_method: {
+    variants: [
+      "grilled", "fried", "deep-fried", "baked", "roasted", "steamed",
+      "boiled", "sautéed", "broiled", "poached", "braised", "smoked", "raw"
+    ],
+    visual_cues: {
+      grilled: ["char marks", "grill lines", "charred edges"],
+      fried: ["golden crispy coating", "oil sheen"],
+      "deep-fried": ["thick crispy batter", "golden brown all over"],
+      steamed: ["moist appearance", "no browning"],
+      roasted: ["caramelized surface", "browned exterior"]
+    }
+  },
+
+  // Cheese types
+  cheese: {
+    variants: [
+      "mozzarella", "cheddar", "parmesan", "swiss", "provolone",
+      "feta", "goat cheese", "blue cheese", "brie", "cream cheese",
+      "american cheese", "pepper jack", "ricotta", "gouda"
+    ],
+    visual_cues: {
+      mozzarella: ["white stretchy cheese", "melted stringy appearance"],
+      cheddar: ["orange/yellow color", "firm sliced"],
+      parmesan: ["shaved/grated", "hard aged appearance"],
+      feta: ["white crumbled chunks", "crumbly texture"],
+      "blue cheese": ["visible blue veins", "marbled blue-white"]
+    }
+  }
+};
+
+/**
+ * Apply vision corrections to recipe/ingredient data
+ * @param {Object} visionInsights - Output from vision analysis
+ * @param {Object} recipeData - Recipe/ingredient data to correct
+ * @returns {Object} - Corrected data with change log
+ */
+function applyVisionCorrections(visionInsights, recipeData) {
+  if (!visionInsights || !recipeData) {
+    return { corrected: recipeData, corrections: [], applied: false };
+  }
+
+  const corrections = [];
+  let correctedIngredients = [...(recipeData.ingredients || recipeData.ingredients_parsed || [])];
+  let correctedDescription = recipeData.description || recipeData.menuDescription || "";
+
+  // Helper: safely extract string from ingredient (handles both strings and objects)
+  const getIngredientText = (ing) => {
+    if (typeof ing === 'string') return ing;
+    if (ing && typeof ing === 'object') return ing.name || ing.ingredient || ing.text || ing.original || '';
+    return '';
+  };
+
+  // Extract visual evidence
+  const visualIngredients = visionInsights.visual_ingredients || [];
+  const visualCookingMethod = visionInsights.visual_cooking_method || {};
+  const plateComponents = visionInsights.plate_components || [];
+
+  // Helper: find visual evidence for a category
+  const findVisualEvidence = (category) => {
+    return visualIngredients.filter(vi =>
+      vi.category === category ||
+      vi.guess?.toLowerCase().includes(category)
+    );
+  };
+
+  // Helper: check if ingredient list mentions a food type
+  const ingredientMentions = (variants) => {
+    const ingredientStr = correctedIngredients.join(" ").toLowerCase();
+    const descStr = correctedDescription.toLowerCase();
+    const combined = ingredientStr + " " + descStr;
+
+    for (const variant of variants) {
+      if (combined.includes(variant.toLowerCase())) {
+        return variant;
+      }
+    }
+    return null;
+  };
+
+  // 1. PASTA TYPE CORRECTION
+  const pastaEvidence = plateComponents.find(pc =>
+    pc.category === "pasta" || pc.label?.toLowerCase().includes("pasta")
+  );
+
+  if (pastaEvidence && pastaEvidence.confidence >= 0.6) {
+    const visualPastaType = detectPastaTypeFromVisual(pastaEvidence, visualIngredients);
+    const recipePastaType = ingredientMentions(VISION_CORRECTION_CATEGORIES.pasta.variants);
+
+    if (visualPastaType && recipePastaType &&
+        visualPastaType.toLowerCase() !== recipePastaType.toLowerCase()) {
+      // Apply correction
+      const correction = {
+        category: "pasta_type",
+        visual_detected: visualPastaType,
+        recipe_claimed: recipePastaType,
+        confidence: pastaEvidence.confidence,
+        action: "replace",
+        reason: `Vision detected ${visualPastaType} but recipe mentions ${recipePastaType}`
+      };
+
+      correctedIngredients = correctedIngredients.map(ing => {
+        const text = getIngredientText(ing);
+        if (text.toLowerCase().includes(recipePastaType.toLowerCase())) {
+          const replaced = text.replace(new RegExp(recipePastaType, "gi"), visualPastaType);
+          return typeof ing === 'string' ? replaced : { ...ing, name: replaced };
+        }
+        return ing;
+      });
+
+      correctedDescription = correctedDescription.replace(
+        new RegExp(recipePastaType, "gi"),
+        visualPastaType
+      );
+
+      corrections.push(correction);
+    }
+  }
+
+  // 2. RICE TYPE CORRECTION
+  const riceEvidence = visualIngredients.find(vi =>
+    vi.category === "grain" && vi.guess?.toLowerCase().includes("rice")
+  );
+
+  if (riceEvidence && riceEvidence.confidence >= 0.6) {
+    const visualRiceType = detectRiceTypeFromVisual(riceEvidence);
+    const recipeRiceType = ingredientMentions(VISION_CORRECTION_CATEGORIES.rice.variants);
+
+    if (visualRiceType && recipeRiceType &&
+        !visualRiceType.toLowerCase().includes(recipeRiceType.toLowerCase()) &&
+        !recipeRiceType.toLowerCase().includes(visualRiceType.toLowerCase())) {
+
+      const correction = {
+        category: "rice_type",
+        visual_detected: visualRiceType,
+        recipe_claimed: recipeRiceType,
+        confidence: riceEvidence.confidence,
+        action: "replace",
+        reason: `Vision detected ${visualRiceType} but recipe mentions ${recipeRiceType}`
+      };
+
+      correctedIngredients = correctedIngredients.map(ing => {
+        const text = getIngredientText(ing);
+        if (text.toLowerCase().includes(recipeRiceType.toLowerCase())) {
+          const replaced = text.replace(new RegExp(recipeRiceType, "gi"), visualRiceType);
+          return typeof ing === 'string' ? replaced : { ...ing, name: replaced };
+        }
+        return ing;
+      });
+
+      corrections.push(correction);
+    }
+  }
+
+  // 3. COOKING METHOD CORRECTION
+  if (visualCookingMethod.primary &&
+      visualCookingMethod.confidence >= 0.7 &&
+      visualCookingMethod.primary !== "unknown") {
+
+    const visualMethod = visualCookingMethod.primary;
+    const recipeMethod = ingredientMentions(VISION_CORRECTION_CATEGORIES.cooking_method.variants);
+
+    if (recipeMethod && visualMethod.toLowerCase() !== recipeMethod.toLowerCase()) {
+      const correction = {
+        category: "cooking_method",
+        visual_detected: visualMethod,
+        recipe_claimed: recipeMethod,
+        confidence: visualCookingMethod.confidence,
+        action: "replace",
+        reason: `Vision shows ${visualMethod} preparation but recipe says ${recipeMethod}. ${visualCookingMethod.reason || ""}`
+      };
+
+      correctedDescription = correctedDescription.replace(
+        new RegExp(recipeMethod, "gi"),
+        visualMethod
+      );
+
+      corrections.push(correction);
+    }
+  }
+
+  // 4. PROTEIN TYPE CORRECTION (fish species, meat type)
+  const proteinEvidence = visualIngredients.filter(vi =>
+    ["fish", "shellfish", "red_meat", "poultry"].includes(vi.category)
+  );
+
+  for (const protein of proteinEvidence) {
+    if (protein.confidence >= 0.7) {
+      const visualProtein = protein.guess?.toLowerCase();
+      const recipeProtein = ingredientMentions(VISION_CORRECTION_CATEGORIES.protein.variants);
+
+      if (visualProtein && recipeProtein &&
+          !visualProtein.includes(recipeProtein.toLowerCase()) &&
+          !recipeProtein.toLowerCase().includes(visualProtein)) {
+
+        // Check if they're in the same category (e.g., both fish, both meat)
+        const sameCategory = areSameProteinCategory(visualProtein, recipeProtein);
+
+        if (sameCategory) {
+          const correction = {
+            category: "protein_type",
+            visual_detected: visualProtein,
+            recipe_claimed: recipeProtein,
+            confidence: protein.confidence,
+            action: "replace",
+            reason: `Vision detected ${visualProtein} but recipe mentions ${recipeProtein}. ${protein.evidence || ""}`
+          };
+
+          correctedIngredients = correctedIngredients.map(ing => {
+            const text = getIngredientText(ing);
+            if (text.toLowerCase().includes(recipeProtein.toLowerCase())) {
+              const replaced = text.replace(new RegExp(recipeProtein, "gi"), visualProtein);
+              return typeof ing === 'string' ? replaced : { ...ing, name: replaced };
+            }
+            return ing;
+          });
+
+          corrections.push(correction);
+          break; // Only apply first protein correction
+        }
+      }
+    }
+  }
+
+  // 5. ADD VISUAL-ONLY INGREDIENTS (seen but not in recipe)
+  const highConfidenceVisual = visualIngredients.filter(vi =>
+    vi.confidence >= 0.8 &&
+    ["egg", "dairy", "shellfish", "nut", "sesame", "processed_meat"].includes(vi.category)
+  );
+
+  for (const visual of highConfidenceVisual) {
+    const visualWord = visual.guess?.toLowerCase().split(" ")[0] || '';
+    const alreadyInRecipe = correctedIngredients.some(ing =>
+      getIngredientText(ing).toLowerCase().includes(visualWord)
+    );
+
+    if (!alreadyInRecipe) {
+      const correction = {
+        category: "missing_ingredient",
+        visual_detected: visual.guess,
+        recipe_claimed: null,
+        confidence: visual.confidence,
+        action: "add",
+        reason: `Vision clearly shows ${visual.guess} but not in recipe. ${visual.evidence || ""}`
+      };
+
+      // Add to ingredients with visual marker
+      correctedIngredients.push(`${visual.guess} (visible in image)`);
+      corrections.push(correction);
+    }
+  }
+
+  return {
+    corrected: {
+      ...recipeData,
+      ingredients: correctedIngredients,
+      ingredients_parsed: correctedIngredients,
+      description: correctedDescription,
+      vision_corrected: corrections.length > 0
+    },
+    corrections,
+    applied: corrections.length > 0,
+    correction_count: corrections.length
+  };
+}
+
+/**
+ * Detect pasta type from visual evidence
+ */
+function detectPastaTypeFromVisual(plateComponent, visualIngredients) {
+  const label = (plateComponent.label || "").toLowerCase();
+  const guess = visualIngredients.find(vi =>
+    vi.category === "grain" && vi.guess?.toLowerCase().includes("pasta")
+  )?.guess?.toLowerCase();
+
+  // Check for specific pasta mentions in label or guess
+  for (const pastaType of VISION_CORRECTION_CATEGORIES.pasta.variants) {
+    if (label.includes(pastaType) || (guess && guess.includes(pastaType))) {
+      return pastaType;
+    }
+  }
+
+  // Infer from visual description
+  if (label.includes("long") && label.includes("thin")) return "spaghetti";
+  if (label.includes("tube") || label.includes("hollow")) return "penne";
+  if (label.includes("spiral") || label.includes("twist")) return "fusilli";
+  if (label.includes("flat") && label.includes("wide")) return "fettuccine";
+  if (label.includes("bow") || label.includes("butterfly")) return "farfalle";
+  if (label.includes("shell")) return "shells";
+
+  return null;
+}
+
+/**
+ * Detect rice type from visual evidence
+ */
+function detectRiceTypeFromVisual(riceEvidence) {
+  const guess = (riceEvidence.guess || "").toLowerCase();
+  const evidence = (riceEvidence.evidence || "").toLowerCase();
+
+  if (guess.includes("fried") || evidence.includes("fried") || evidence.includes("wok")) {
+    return "fried rice";
+  }
+  if (guess.includes("brown") || evidence.includes("brown") || evidence.includes("tan")) {
+    return "brown rice";
+  }
+  if (guess.includes("yellow") || evidence.includes("yellow") || evidence.includes("saffron")) {
+    return "yellow rice";
+  }
+  if (guess.includes("wild") || evidence.includes("dark") || evidence.includes("black grains")) {
+    return "wild rice";
+  }
+
+  return guess || "white rice";
+}
+
+/**
+ * Check if two proteins are in the same category (for valid swaps)
+ */
+function areSameProteinCategory(protein1, protein2) {
+  const fishTypes = ["salmon", "tuna", "cod", "tilapia", "halibut", "trout", "bass", "snapper", "mahi"];
+  const shellfishTypes = ["shrimp", "lobster", "crab", "scallop", "mussel", "clam", "oyster"];
+  const poultryTypes = ["chicken", "turkey", "duck", "cornish"];
+  const redMeatTypes = ["beef", "steak", "lamb", "pork", "veal"];
+
+  const categories = [fishTypes, shellfishTypes, poultryTypes, redMeatTypes];
+
+  for (const category of categories) {
+    const p1InCategory = category.some(t => protein1.includes(t));
+    const p2InCategory = category.some(t => protein2.includes(t));
+
+    if (p1InCategory && p2InCategory) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Generate vision correction prompt enhancement for more detailed food identification
+ */
+function getVisionCorrectionPromptAddendum() {
+  return `
+ADDITIONAL FOOD IDENTIFICATION (for recipe correction):
+
+When analyzing the image, also identify these specific food attributes with HIGH PRECISION:
+
+1. PASTA TYPE (if pasta visible):
+   - Identify exact pasta shape: spaghetti, penne, rigatoni, fettuccine, linguine, fusilli, farfalle, etc.
+   - Look for: strand shape (round vs flat), tube vs solid, spiral vs straight, size
+   - Add to visual_ingredients with category "pasta_type" and high confidence if clear
+
+2. RICE TYPE (if rice visible):
+   - Identify: white rice, brown rice, fried rice, yellow rice, wild rice, sushi rice
+   - Look for: grain color, preparation style (plain vs mixed), glossiness
+   - Add to visual_ingredients with category "rice_type"
+
+3. BREAD TYPE (if bread visible):
+   - Identify: white, whole wheat, sourdough, brioche, ciabatta, baguette, pita, etc.
+   - Look for: crust color, crumb texture, shape
+
+4. SPECIFIC PROTEIN (be precise):
+   - Fish: salmon (orange-pink) vs tuna (red) vs white fish (cod, tilapia, halibut)
+   - Meat: beef vs pork vs lamb (look at color, fat marbling)
+   - Add specific type, not just "fish" or "meat"
+
+5. CHEESE TYPE (if cheese visible):
+   - Identify: mozzarella (white, stringy), cheddar (orange), parmesan (shaved), feta (crumbled white)
+
+For each identification, include in visual_ingredients:
+{
+  "guess": "spaghetti pasta" (be specific),
+  "category": "pasta_type" or "rice_type" or "bread_type" or "protein_specific" or "cheese_type",
+  "confidence": 0.0-1.0,
+  "evidence": "long thin round strands visible, clearly spaghetti not penne"
+}
+`.trim();
+}
+
+// ==========================================================================
+// === DAYPART SEEDING SYSTEM ================================================
+// Automatic time-zone aware daypart classification for franchise menus
+// CRITICAL: NO DELETIONS - only status updates and appends
+// ==========================================================================
+
+/**
+ * Canonical list of 50 franchises to seed (ordered by location count)
+ */
+const FRANCHISE_SEED_LIST = [
+  { name: "Subway", locations: 20576 },
+  { name: "Starbucks", locations: 15873 },
+  { name: "McDonald's", locations: 13444 },
+  { name: "Dunkin'", locations: 9370 },
+  { name: "Taco Bell", locations: 7198 },
+  { name: "Burger King", locations: 7043 },
+  { name: "Domino's", locations: 6686 },
+  { name: "Pizza Hut", locations: 6561 },
+  { name: "Wendy's", locations: 5994 },
+  { name: "Dairy Queen", locations: 4307 },
+  { name: "Little Caesars", locations: 4173 },
+  { name: "KFC", locations: 3918 },
+  { name: "Sonic Drive-In", locations: 3546 },
+  { name: "Arby's", locations: 3415 },
+  { name: "Papa Johns", locations: 3376 },
+  { name: "Chipotle", locations: 3129 },
+  { name: "Popeyes Louisiana Kitchen", locations: 2946 },
+  { name: "Chick-fil-A", locations: 2837 },
+  { name: "Jimmy John's", locations: 2637 },
+  { name: "Jersey Mike's", locations: 2397 },
+  { name: "Panda Express", locations: 2393 },
+  { name: "Baskin-Robbins", locations: 2253 },
+  { name: "Jack in the Box", locations: 2180 },
+  { name: "Panera Bread", locations: 2102 },
+  { name: "Wingstop", locations: 1721 },
+  { name: "Hardee's", locations: 1707 },
+  { name: "Five Guys", locations: 1409 },
+  { name: "Tropical Smoothie Café", locations: 1198 },
+  { name: "Firehouse Subs", locations: 1187 },
+  { name: "Papa Murphy's", locations: 1168 },
+  { name: "Carl's Jr.", locations: 1068 },
+  { name: "Marco's Pizza", locations: 1067 },
+  { name: "Whataburger", locations: 925 },
+  { name: "Zaxby's", locations: 922 },
+  { name: "Culver's", locations: 892 },
+  { name: "Church's Chicken", locations: 812 },
+  { name: "Checkers/Rally's", locations: 806 },
+  { name: "Bojangles", locations: 788 },
+  { name: "Qdoba", locations: 728 },
+  { name: "Crumbl Cookies", locations: 688 },
+  { name: "Dutch Bros", locations: 671 },
+  { name: "Raising Cane's", locations: 646 },
+  { name: "Moe's", locations: 637 },
+  { name: "Del Taco", locations: 591 },
+  { name: "McAlister's Deli", locations: 525 },
+  { name: "El Pollo Loco", locations: 490 },
+  { name: "Freddy's Frozen Custard & Steakburgers", locations: 456 },
+  { name: "In-N-Out Burger", locations: 379 },
+  { name: "Krispy Kreme", locations: 352 },
+  { name: "Shake Shack", locations: 287 }
+];
+
+/**
+ * Timezone configuration with reference coordinates for representative store search
+ */
+const DAYPART_TIMEZONES = {
+  "America/New_York": { lat: 40.7580, lng: -73.9855, label: "NYC", address: "New York, NY" },
+  "America/Chicago": { lat: 41.8781, lng: -87.6298, label: "Chicago", address: "Chicago, IL" },
+  "America/Denver": { lat: 39.7392, lng: -104.9903, label: "Denver", address: "Denver, CO" },
+  "America/Los_Angeles": { lat: 34.0522, lng: -118.2437, label: "LA", address: "Los Angeles, CA" }
+};
+
+/**
+ * Daypart definitions with local times (minutes from midnight)
+ */
+const DAYPART_CONFIG = {
+  BREAKFAST: { local_time_min: 510, label: "08:30" },
+  LUNCH: { local_time_min: 780, label: "13:00" },
+  DINNER: { local_time_min: 1140, label: "19:00" },
+  LATE_NIGHT: { local_time_min: 1410, label: "23:30" }
+};
+
+/**
+ * Generate a UUID for run tracking
+ */
+function generateSeedRunId() {
+  return 'seed-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+// --- Representative Store Selection ---
+
+/**
+ * Find a representative store for a brand in a specific timezone
+ */
+async function findRepresentativeStore(env, brandName, tzid) {
+  const tzConfig = DAYPART_TIMEZONES[tzid];
+  if (!tzConfig) return { ok: false, error: `Unknown timezone: ${tzid}` };
+
+  // Use proper city address for UberEats search (not just coordinates)
+  const address = tzConfig.address || `${tzConfig.label}, USA`;
+
+  try {
+    // Fetch up to 3 restaurant results to find a matching store, with full menu data
+    const menuResult = await fetchMenuFromUberEatsTiered(env, brandName, address, 3);
+    if (!menuResult?.ok || !menuResult?.restaurants?.length) {
+      return { ok: false, error: "No store found via provider search" };
+    }
+
+    const restaurant = menuResult.restaurants[0];
+    const brand = await detectBrand(env, { name: brandName });
+    if (!brand) return { ok: false, error: "Brand not found in database" };
+
+    const store = await upsertStore(env, {
+      place_id: restaurant.place_id || `uber-${restaurant.store_id || Date.now()}`,
+      uber_store_id: restaurant.store_id,
+      brand_id: brand.id,
+      name: restaurant.name || brandName,
+      address: restaurant.address || address,
+      city: restaurant.city || tzConfig.label,
+      state_province: restaurant.state,
+      country_code: "US",
+      latitude: tzConfig.lat,
+      longitude: tzConfig.lng,
+      source: "daypart_seed"
+    });
+
+    if (!store) return { ok: false, error: "Failed to upsert store" };
+
+    await upsertRepresentativeStore(env, {
+      brand_id: brand.id, store_id: store.id, tzid,
+      priority: 1, selection_method: "auto_search",
+      search_coords: JSON.stringify({ lat: tzConfig.lat, lng: tzConfig.lng })
+    });
+
+    return { ok: true, store, brand, menu: menuResult.menu || [], restaurant };
+  } catch (err) {
+    console.log(`[daypart-seed] Error finding rep store for ${brandName} in ${tzid}:`, err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Upsert a representative store record
+ */
+async function upsertRepresentativeStore(env, data) {
+  if (!env?.D1_DB) return null;
+  const { brand_id, store_id, tzid, priority, selection_method, search_coords } = data;
+  const now = new Date().toISOString();
+
+  try {
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM franchise_representative_stores WHERE brand_id = ? AND tzid = ? AND store_id = ?
+    `).bind(brand_id, tzid, store_id).first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE franchise_representative_stores SET status = 'ACTIVE', last_success_at = ?, updated_at = ? WHERE id = ?
+      `).bind(now, now, existing.id).run();
+      return { ...existing, status: 'ACTIVE', last_success_at: now };
+    }
+
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO franchise_representative_stores
+        (brand_id, store_id, tzid, priority, selection_method, search_coords, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+    `).bind(brand_id, store_id, tzid, priority || 1, selection_method, search_coords, now, now).run();
+
+    return { id: result.meta?.last_row_id, brand_id, store_id, tzid, status: 'ACTIVE' };
+  } catch (err) {
+    console.log("[daypart-seed] Upsert rep store error:", err?.message);
+    return null;
+  }
+}
+
+// --- Seed Run Management ---
+
+/**
+ * Start or resume a seeding run
+ */
+async function startOrResumeSeedRun(env, runType = 'INITIAL') {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+
+  try {
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM franchise_seed_runs WHERE status IN ('RUNNING', 'PAUSED') ORDER BY started_at DESC LIMIT 1
+    `).first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE franchise_seed_runs SET status = 'RUNNING', updated_at = ? WHERE run_id = ?
+      `).bind(new Date().toISOString(), existing.run_id).run();
+      return { ok: true, run_id: existing.run_id, resumed: true, current_index: existing.current_index };
+    }
+
+    const runId = generateSeedRunId();
+    const now = new Date().toISOString();
+
+    await env.D1_DB.prepare(`
+      INSERT INTO franchise_seed_runs (run_id, status, run_type, current_index, total_count, started_at, created_at, updated_at)
+      VALUES (?, 'RUNNING', ?, 0, ?, ?, ?, ?)
+    `).bind(runId, runType, FRANCHISE_SEED_LIST.length, now, now, now).run();
+
+    for (const brand of FRANCHISE_SEED_LIST) {
+      await env.D1_DB.prepare(`
+        INSERT OR IGNORE INTO franchise_seed_progress (run_id, brand_name, status, created_at, updated_at) VALUES (?, ?, 'PENDING', ?, ?)
+      `).bind(runId, brand.name, now, now).run();
+    }
+
+    return { ok: true, run_id: runId, resumed: false, current_index: 0 };
+  } catch (err) {
+    console.log("[daypart-seed] Start run error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Get current seed run status
+ */
+async function getSeedRunStatus(env, runId) {
+  if (!env?.D1_DB) return null;
+  try {
+    const run = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_runs WHERE run_id = ?`).bind(runId).first();
+    if (!run) return null;
+
+    const progress = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_progress WHERE run_id = ? ORDER BY id`).bind(runId).all();
+    const counts = { pending: 0, in_progress: 0, done: 0, failed: 0, skipped: 0 };
+    for (const p of (progress.results || [])) {
+      counts[p.status.toLowerCase()] = (counts[p.status.toLowerCase()] || 0) + 1;
+    }
+    return { ...run, progress: progress.results || [], counts };
+  } catch (err) {
+    console.log("[daypart-seed] Get run status error:", err?.message);
+    return null;
+  }
+}
+
+// --- Initial Seeding ---
+
+/**
+ * Seed one franchise
+ */
+async function seedOneFranchise(env, ctx, runId, brandName) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  const now = new Date().toISOString();
+  const warnings = [];
+
+  try {
+    await env.D1_DB.prepare(`
+      UPDATE franchise_seed_progress SET status = 'IN_PROGRESS', started_at = ?, updated_at = ? WHERE run_id = ? AND brand_name = ?
+    `).bind(now, now, runId, brandName).run();
+
+    let brand = await detectBrand(env, { name: brandName });
+    if (!brand) {
+      const normalized = normalizeBrandName(brandName);
+      await env.D1_DB.prepare(`INSERT OR IGNORE INTO brands (canonical_name, normalized_name, created_at, updated_at) VALUES (?, ?, ?, ?)`).bind(brandName, normalized, now, now).run();
+      brand = await detectBrand(env, { name: brandName });
+    }
+    if (!brand) throw new Error("Failed to create/find brand");
+
+    await env.D1_DB.prepare(`UPDATE franchise_seed_progress SET brand_id = ?, updated_at = ? WHERE run_id = ? AND brand_name = ?`).bind(brand.id, now, runId, brandName).run();
+
+    let repStoresFound = 0, primaryStore = null, menuItems = [];
+
+    for (const [tzid] of Object.entries(DAYPART_TIMEZONES)) {
+      console.log(`[daypart-seed] Finding rep store for ${brandName} in ${tzid}...`);
+      const result = await findRepresentativeStore(env, brandName, tzid);
+      if (result.ok) {
+        repStoresFound++;
+        if (!primaryStore) { primaryStore = result.store; menuItems = result.menu || []; }
+      } else {
+        warnings.push(`No store in ${tzid}: ${result.error}`);
+        await logSeedFailure(env, runId, brandName, null, 'REP_STORE', result.error);
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (!primaryStore) throw new Error("No representative stores found");
+
+    let menuItemCount = 0, analyzedCount = 0, qaPassedCount = 0, qaFailedCount = 0;
+
+    if (menuItems.length > 0) {
+      const deltaResult = await deltaMenuDiscovery(env, primaryStore.id, menuItems, "daypart_seed");
+      if (deltaResult.ok) menuItemCount = (deltaResult.results?.created || 0) + (deltaResult.results?.resolved || 0);
+    }
+
+    const brandItems = await env.D1_DB.prepare(`SELECT * FROM franchise_menu_items WHERE brand_id = ? AND status = 'ACTIVE'`).bind(brand.id).all();
+    const items = brandItems.results || [];
+    menuItemCount = items.length;
+
+    for (const item of items) {
+      try {
+        const analysisResult = await ensureItemAnalyzed(env, ctx, brand, item);
+        if (analysisResult.ok) {
+          analyzedCount++;
+          if (analysisResult.qa_passed) qaPassedCount++; else { qaFailedCount++; warnings.push(`QA failed for ${item.canonical_name}`); }
+        } else {
+          qaFailedCount++;
+          await logSeedFailure(env, runId, brandName, item.canonical_name, 'ANALYZE', analysisResult.error);
+        }
+      } catch (err) {
+        qaFailedCount++;
+        await logSeedFailure(env, runId, brandName, item.canonical_name, 'ANALYZE', err?.message);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    let daypartJobsCreated = 0;
+    for (const [tzid] of Object.entries(DAYPART_TIMEZONES)) {
+      for (const [daypart, config] of Object.entries(DAYPART_CONFIG)) {
+        if (await createDaypartJob(env, brand.id, tzid, daypart, config.local_time_min)) daypartJobsCreated++;
+      }
+    }
+
+    const finishedAt = new Date().toISOString();
+    await env.D1_DB.prepare(`
+      UPDATE franchise_seed_progress SET status = 'DONE', finished_at = ?, menu_item_count = ?, analyzed_count = ?,
+        qa_passed = ?, qa_failed_count = ?, rep_stores_found = ?, daypart_jobs_created = ?, warnings_json = ?, updated_at = ?
+      WHERE run_id = ? AND brand_name = ?
+    `).bind(finishedAt, menuItemCount, analyzedCount, qaPassedCount > 0 ? 1 : 0, qaFailedCount, repStoresFound, daypartJobsCreated,
+      warnings.length > 0 ? JSON.stringify(warnings) : null, finishedAt, runId, brandName).run();
+
+    return { ok: true, brand_id: brand.id, rep_stores_found: repStoresFound, menu_item_count: menuItemCount,
+      analyzed_count: analyzedCount, qa_passed: qaPassedCount, qa_failed: qaFailedCount, daypart_jobs_created: daypartJobsCreated, warnings };
+  } catch (err) {
+    console.log(`[daypart-seed] Error seeding ${brandName}:`, err?.message);
+    await env.D1_DB.prepare(`
+      UPDATE franchise_seed_progress SET status = 'FAILED', error = ?, warnings_json = ?, updated_at = ? WHERE run_id = ? AND brand_name = ?
+    `).bind(err?.message, warnings.length > 0 ? JSON.stringify(warnings) : null, new Date().toISOString(), runId, brandName).run();
+    await logSeedFailure(env, runId, brandName, null, 'ONBOARD', err?.message);
+    return { ok: false, error: err?.message, warnings };
+  }
+}
+
+/**
+ * Ensure a menu item has been analyzed
+ */
+async function ensureItemAnalyzed(env, ctx, brand, item) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  try {
+    const existing = await env.D1_DB.prepare(`SELECT * FROM franchise_analysis_cache WHERE brand_id = ? AND menu_item_id = ?`).bind(brand.id, item.id).first();
+    if (existing && existing.status === 'COMPLETE' && existing.qa_passed) return { ok: true, cached: true, qa_passed: true };
+
+    const { status, result } = await runDishAnalysis(env, {
+      dishName: item.canonical_name, restaurantName: brand.canonical_name,
+      menuDescription: item.description, brand_id: brand.id, menu_item_id: item.id, skipCache: false
+    }, ctx);
+
+    if (status !== 200 || !result?.ok) return { ok: false, error: result?.error || "Analysis failed" };
+
+    const qa = validateAnalysisQA(result);
+    const cacheKey = `franchise/${brand.id}/${item.id}`;
+    const now = new Date().toISOString();
+
+    await env.D1_DB.prepare(`
+      INSERT INTO franchise_analysis_cache (brand_id, menu_item_id, status, cache_key, qa_passed, qa_allergens, qa_organs, qa_nutrition, analyzed_at, last_validated_at, created_at, updated_at)
+      VALUES (?, ?, 'COMPLETE', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(brand_id, menu_item_id) DO UPDATE SET status = 'COMPLETE', cache_key = ?, qa_passed = ?, qa_allergens = ?, qa_organs = ?, qa_nutrition = ?, analyzed_at = ?, last_validated_at = ?, updated_at = ?
+    `).bind(brand.id, item.id, cacheKey, qa.passed ? 1 : 0, qa.allergens ? 1 : 0, qa.organs ? 1 : 0, qa.nutrition ? 1 : 0, now, now, now, now,
+      cacheKey, qa.passed ? 1 : 0, qa.allergens ? 1 : 0, qa.organs ? 1 : 0, qa.nutrition ? 1 : 0, now, now, now).run();
+
+    return { ok: true, qa_passed: qa.passed, qa_reason: qa.reason, cache_key: cacheKey };
+  } catch (err) {
+    console.log(`[daypart-seed] Analysis error for ${item.canonical_name}:`, err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Validate analysis result meets QA requirements
+ */
+function validateAnalysisQA(result) {
+  const qa = { passed: false, allergens: false, organs: false, nutrition: false, reason: null };
+  if (result.allergen_flags && Array.isArray(result.allergen_flags)) qa.allergens = true;
+  else if (result.allergen_summary) qa.allergens = true;
+  if (result.organs && typeof result.organs === 'object' && Object.keys(result.organs).length > 0) qa.organs = true;
+  if (result.nutrition_summary || result.normalized?.calories) qa.nutrition = true;
+  qa.passed = qa.allergens && qa.organs;
+  if (!qa.passed) {
+    const missing = [];
+    if (!qa.allergens) missing.push("allergens");
+    if (!qa.organs) missing.push("organs");
+    qa.reason = `Missing: ${missing.join(", ")}`;
+  }
+  return qa;
+}
+
+/**
+ * Log a seed failure (append-only)
+ */
+async function logSeedFailure(env, runId, brandName, menuItemName, stage, error) {
+  if (!env?.D1_DB) return;
+  try {
+    await env.D1_DB.prepare(`INSERT INTO franchise_seed_failures (run_id, brand_name, menu_item_name, stage, error, created_at) VALUES (?, ?, ?, ?, ?, ?)`).bind(runId, brandName, menuItemName, stage, error, new Date().toISOString()).run();
+  } catch (err) { console.log("[daypart-seed] Failed to log failure:", err?.message); }
+}
+
+// --- Daypart Job Management ---
+
+/**
+ * Create a daypart job
+ */
+async function createDaypartJob(env, brandId, tzid, daypart, localTimeMin) {
+  if (!env?.D1_DB) return false;
+  try {
+    const nextRunUtc = calculateNextRunUtc(tzid, localTimeMin);
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare(`
+      INSERT INTO franchise_daypart_jobs (brand_id, tzid, daypart, local_time_min, next_run_at_utc, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
+      ON CONFLICT(brand_id, tzid, daypart) DO UPDATE SET local_time_min = ?, next_run_at_utc = ?, status = 'ACTIVE', updated_at = ?
+    `).bind(brandId, tzid, daypart, localTimeMin, nextRunUtc, now, now, localTimeMin, nextRunUtc, now).run();
+    return true;
+  } catch (err) {
+    console.log("[daypart-seed] Create daypart job error:", err?.message);
+    return false;
+  }
+}
+
+/**
+ * Calculate next run time in UTC for a given local time
+ */
+function calculateNextRunUtc(tzid, localTimeMin) {
+  const tzOffsets = { "America/New_York": -5, "America/Chicago": -6, "America/Denver": -7, "America/Los_Angeles": -8 };
+  const offset = tzOffsets[tzid] || -5;
+  const now = new Date();
+  const utcHours = Math.floor(localTimeMin / 60) - offset;
+  const utcMinutes = localTimeMin % 60;
+  const nextRun = new Date(now);
+  nextRun.setUTCHours(utcHours, utcMinutes, 0, 0);
+  if (nextRun <= now) nextRun.setUTCDate(nextRun.getUTCDate() + 1);
+  return nextRun.toISOString();
+}
+
+/**
+ * Get due daypart jobs
+ */
+async function getDueDaypartJobs(env, limit = 5) {
+  if (!env?.D1_DB) return [];
+  try {
+    const now = new Date().toISOString();
+    const result = await env.D1_DB.prepare(`
+      SELECT dj.*, b.canonical_name as brand_name FROM franchise_daypart_jobs dj
+      JOIN brands b ON b.id = dj.brand_id WHERE dj.status = 'ACTIVE' AND dj.next_run_at_utc <= ?
+      ORDER BY dj.next_run_at_utc ASC LIMIT ?
+    `).bind(now, limit).all();
+    return result.results || [];
+  } catch (err) {
+    console.log("[daypart-seed] Get due jobs error:", err?.message);
+    return [];
+  }
+}
+
+/**
+ * Process one daypart job
+ */
+async function processDaypartJob(env, ctx, job) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  console.log(`[daypart-job] Processing ${job.brand_name} ${job.tzid} ${job.daypart}...`);
+
+  try {
+    const repStore = await env.D1_DB.prepare(`
+      SELECT rs.*, s.name as store_name FROM franchise_representative_stores rs
+      JOIN stores s ON s.id = rs.store_id WHERE rs.brand_id = ? AND rs.tzid = ? AND rs.status = 'ACTIVE'
+      ORDER BY rs.priority LIMIT 1
+    `).bind(job.brand_id, job.tzid).first();
+
+    if (!repStore) throw new Error(`No representative store for brand ${job.brand_id} in ${job.tzid}`);
+
+    const tzConfig = DAYPART_TIMEZONES[job.tzid];
+    const address = tzConfig.address || `${tzConfig.label}, USA`;
+    const menuResult = await fetchMenuFromUberEatsTiered(env, job.brand_name, address, 3);
+    if (!menuResult?.ok) throw new Error(`Menu fetch failed: ${menuResult?.error}`);
+
+    const menuItems = menuResult.menu || [];
+    let itemsSeen = 0, sightingsRecorded = 0;
+
+    for (const menuItem of menuItems) {
+      const observedName = menuItem.name || menuItem.title;
+      if (!observedName) continue;
+      itemsSeen++;
+
+      const resolved = await resolveMenuItem(env, job.brand_id, observedName, {
+        category: menuItem.section, description: menuItem.description, calories: menuItem.restaurantCalories || menuItem.calories
+      });
+      if (!resolved?.item) continue;
+
+      await recordSightingWithDaypart(env, {
+        menu_item_id: resolved.item.id, store_id: repStore.store_id, source_type: "daypart_sample",
+        observed_name: observedName, observed_description: menuItem.description,
+        observed_price_cents: menuItem.price, observed_calories: menuItem.restaurantCalories || menuItem.calories,
+        observed_section: menuItem.section, observed_image_url: menuItem.imageUrl,
+        confidence: resolved.isNew ? 0.55 : 0.75, match_method: resolved.matchMethod, daypart: job.daypart
+      });
+      sightingsRecorded++;
+
+      await upsertScopeWithDaypart(env, {
+        menu_item_id: resolved.item.id, scope_type: "STORE", scope_key: String(repStore.store_id),
+        status: "ACTIVE", confidence: resolved.isNew ? 0.55 : 0.75, price_cents: menuItem.price, daypart: job.daypart
+      });
+    }
+
+    const nextRunUtc = calculateNextRunUtc(job.tzid, job.local_time_min);
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare(`
+      UPDATE franchise_daypart_jobs SET last_run_at_utc = ?, next_run_at_utc = ?, total_runs = total_runs + 1,
+        total_items_seen = total_items_seen + ?, consecutive_failures = 0, updated_at = ? WHERE id = ?
+    `).bind(now, nextRunUtc, itemsSeen, now, job.id).run();
+
+    console.log(`[daypart-job] Completed ${job.brand_name} ${job.daypart}: ${sightingsRecorded} sightings`);
+    return { ok: true, items_seen: itemsSeen, sightings_recorded: sightingsRecorded, next_run_at_utc: nextRunUtc };
+  } catch (err) {
+    console.log(`[daypart-job] Error processing job ${job.id}:`, err?.message);
+    const nextRunUtc = calculateNextRunUtc(job.tzid, job.local_time_min);
+    await env.D1_DB.prepare(`
+      UPDATE franchise_daypart_jobs SET last_error = ?, consecutive_failures = consecutive_failures + 1, next_run_at_utc = ?, updated_at = ? WHERE id = ?
+    `).bind(err?.message, nextRunUtc, new Date().toISOString(), job.id).run();
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Record a sighting with daypart (append-only)
+ */
+async function recordSightingWithDaypart(env, data) {
+  if (!env?.D1_DB) return null;
+  const { menu_item_id, store_id, source_type, observed_name, observed_description, observed_price_cents, observed_calories, observed_section, observed_image_url, confidence, match_method, daypart } = data;
+  try {
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO menu_item_sightings (menu_item_id, store_id, source_type, observed_name, observed_description, observed_price_cents, observed_calories, observed_section, observed_image_url, confidence, match_method, daypart, observed_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `).bind(menu_item_id, store_id, source_type, observed_name, observed_description, observed_price_cents, observed_calories, observed_section, observed_image_url, confidence, match_method, daypart || 'UNKNOWN').run();
+    return result.meta?.last_row_id;
+  } catch (err) {
+    console.log("[daypart-seed] Record sighting error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Upsert a scope with daypart
+ */
+async function upsertScopeWithDaypart(env, data) {
+  if (!env?.D1_DB) return null;
+  const { menu_item_id, scope_type, scope_key, status, confidence, price_cents, daypart } = data;
+  const now = new Date().toISOString();
+  try {
+    const existing = await env.D1_DB.prepare(`
+      SELECT * FROM menu_item_scopes WHERE menu_item_id = ? AND scope_type = ? AND scope_key = ? AND daypart = ?
+    `).bind(menu_item_id, scope_type, scope_key || '', daypart || 'UNKNOWN').first();
+
+    if (existing) {
+      await env.D1_DB.prepare(`
+        UPDATE menu_item_scopes SET status = ?, confidence = MAX(confidence, ?), last_seen_at = ?, price_cents = COALESCE(?, price_cents), updated_at = ? WHERE id = ?
+      `).bind(status, confidence, now, price_cents, now, existing.id).run();
+      return existing.id;
+    }
+
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO menu_item_scopes (menu_item_id, scope_type, scope_key, status, confidence, price_cents, daypart, first_seen_at, last_seen_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(menu_item_id, scope_type, scope_key || '', status, confidence, price_cents, daypart || 'UNKNOWN', now, now, now, now).run();
+    return result.meta?.last_row_id;
+  } catch (err) {
+    console.log("[daypart-seed] Upsert scope error:", err?.message);
+    return null;
+  }
+}
+
+// --- Daypart Promotion ---
+
+/**
+ * Promote items to global daypart scopes based on sighting evidence
+ */
+async function promoteDayparts(env, brandId = null) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  console.log("[daypart-promote] Starting daypart promotion...");
+
+  try {
+    let brands;
+    if (brandId) brands = [{ id: brandId }];
+    else {
+      const result = await env.D1_DB.prepare(`SELECT DISTINCT brand_id as id FROM franchise_menu_items WHERE status = 'ACTIVE'`).all();
+      brands = result.results || [];
+    }
+
+    let promoted = 0, processed = 0;
+
+    for (const brand of brands) {
+      const items = await env.D1_DB.prepare(`SELECT * FROM franchise_menu_items WHERE brand_id = ? AND status = 'ACTIVE'`).bind(brand.id).all();
+
+      for (const item of (items.results || [])) {
+        processed++;
+        const sightingCounts = await env.D1_DB.prepare(`
+          SELECT daypart, COUNT(*) as count FROM menu_item_sightings WHERE menu_item_id = ? AND observed_at >= datetime('now', '-30 days') GROUP BY daypart
+        `).bind(item.id).all();
+
+        const counts = {};
+        for (const row of (sightingCounts.results || [])) counts[row.daypart] = row.count;
+
+        const promotions = determineDaypartPromotions(counts);
+        for (const promo of promotions) {
+          await upsertScopeWithDaypart(env, {
+            menu_item_id: item.id, scope_type: "GLOBAL", scope_key: null,
+            status: "ACTIVE", confidence: promo.confidence, daypart: promo.daypart
+          });
+          promoted++;
+        }
+      }
+    }
+
+    console.log(`[daypart-promote] Processed ${processed} items, promoted ${promoted} scopes`);
+    return { ok: true, processed, promoted };
+  } catch (err) {
+    console.log("[daypart-promote] Error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Determine daypart promotions based on sighting counts
+ */
+function determineDaypartPromotions(counts) {
+  const promotions = [];
+  const threshold = 3;
+  const breakfast = counts.BREAKFAST || 0, lunch = counts.LUNCH || 0, dinner = counts.DINNER || 0, lateNight = counts.LATE_NIGHT || 0;
+
+  if (breakfast >= threshold && lunch >= threshold && dinner >= threshold) {
+    promotions.push({ daypart: "ALL_DAY", confidence: 0.85 });
+    return promotions;
+  }
+  if (breakfast >= threshold && dinner < 2) promotions.push({ daypart: "BREAKFAST", confidence: 0.80 });
+  if (lunch >= threshold && dinner >= threshold && breakfast < 2) {
+    promotions.push({ daypart: "LUNCH", confidence: 0.75 });
+    promotions.push({ daypart: "DINNER", confidence: 0.75 });
+  } else {
+    if (lunch >= threshold) promotions.push({ daypart: "LUNCH", confidence: 0.75 });
+    if (dinner >= threshold) promotions.push({ daypart: "DINNER", confidence: 0.75 });
+  }
+  if (lateNight >= 2 && breakfast < 2 && lunch < 2) promotions.push({ daypart: "LATE_NIGHT", confidence: 0.70 });
+
+  return promotions;
+}
+
+// --- Daypart-Aware Menu Rendering ---
+
+/**
+ * Get current daypart based on local time (minutes from midnight)
+ */
+function getCurrentDaypart(localMinutes) {
+  if (localMinutes >= 240 && localMinutes < 660) return "BREAKFAST";
+  if (localMinutes >= 660 && localMinutes < 960) return "LUNCH";
+  if (localMinutes >= 960 && localMinutes < 1320) return "DINNER";
+  return "LATE_NIGHT";
+}
+
+/**
+ * Get effective menu for a store with daypart filtering
+ */
+async function getEffectiveMenuWithDaypart(env, storeId, options = {}) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  const { daypart, includeAllDayparts = false, tzid } = options;
+
+  try {
+    const store = await getStore(env, { store_id: storeId });
+    if (!store || !store.brand_id) return { ok: false, error: "Store not found or not a franchise" };
+
+    let targetDaypart = daypart;
+    if (!targetDaypart && tzid) {
+      const tzOffsets = { "America/New_York": -5, "America/Chicago": -6, "America/Denver": -7, "America/Los_Angeles": -8 };
+      const offset = tzOffsets[tzid] || -5;
+      const now = new Date();
+      const localHours = (now.getUTCHours() + offset + 24) % 24;
+      const localMinutes = localHours * 60 + now.getUTCMinutes();
+      targetDaypart = getCurrentDaypart(localMinutes);
+    }
+
+    let query, params;
+    if (includeAllDayparts) {
+      query = `SELECT DISTINCT fmi.id, fmi.canonical_name, fmi.category, fmi.description, fmi.calories,
+        mis.daypart, mis.status as scope_status, mis.confidence, mis.price_cents, mis.scope_type
+        FROM franchise_menu_items fmi LEFT JOIN menu_item_scopes mis ON fmi.id = mis.menu_item_id
+        WHERE fmi.brand_id = ? AND fmi.status = 'ACTIVE' AND mis.status = 'ACTIVE'
+        AND ((mis.scope_type = 'STORE' AND mis.scope_key = ?) OR (mis.scope_type = 'REGION' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'COUNTRY' AND mis.scope_key = ?) OR (mis.scope_type = 'GLOBAL' AND (mis.scope_key IS NULL OR mis.scope_key = '')))
+        ORDER BY fmi.category, fmi.canonical_name`;
+      params = [store.brand_id, String(storeId), store.region_code, store.country_code];
+    } else {
+      query = `SELECT DISTINCT fmi.id, fmi.canonical_name, fmi.category, fmi.description, fmi.calories,
+        mis.daypart, mis.status as scope_status, mis.confidence, mis.price_cents, mis.scope_type,
+        CASE WHEN mis.daypart = ? THEN 1 WHEN mis.daypart = 'ALL_DAY' THEN 2 WHEN mis.daypart = 'UNKNOWN' THEN 3 ELSE 4 END as daypart_priority
+        FROM franchise_menu_items fmi LEFT JOIN menu_item_scopes mis ON fmi.id = mis.menu_item_id
+        WHERE fmi.brand_id = ? AND fmi.status = 'ACTIVE' AND mis.status = 'ACTIVE' AND mis.daypart IN (?, 'ALL_DAY', 'UNKNOWN')
+        AND ((mis.scope_type = 'STORE' AND mis.scope_key = ?) OR (mis.scope_type = 'REGION' AND mis.scope_key = ?)
+          OR (mis.scope_type = 'COUNTRY' AND mis.scope_key = ?) OR (mis.scope_type = 'GLOBAL' AND (mis.scope_key IS NULL OR mis.scope_key = '')))
+        ORDER BY daypart_priority, fmi.category, fmi.canonical_name`;
+      params = [targetDaypart, store.brand_id, targetDaypart, String(storeId), store.region_code, store.country_code];
+    }
+
+    const result = await env.D1_DB.prepare(query).bind(...params).all();
+    const itemMap = new Map();
+    for (const row of (result.results || [])) {
+      if (!itemMap.has(row.id) || row.daypart_priority < itemMap.get(row.id).daypart_priority) itemMap.set(row.id, row);
+    }
+    const items = Array.from(itemMap.values());
+
+    return { ok: true, store_id: storeId, brand_id: store.brand_id, daypart: targetDaypart, items, item_count: items.length };
+  } catch (err) {
+    console.log("[daypart-menu] Error getting effective menu:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+// --- Cron Tick Handlers ---
+
+/**
+ * Process one tick of seeding
+ */
+async function seedingTick(env, ctx) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  try {
+    const run = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_runs WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1`).first();
+    if (!run) return { ok: true, message: "No running seed run" };
+
+    const nextBrand = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_progress WHERE run_id = ? AND status = 'PENDING' ORDER BY id LIMIT 1`).bind(run.run_id).first();
+    if (!nextBrand) {
+      await env.D1_DB.prepare(`UPDATE franchise_seed_runs SET status = 'DONE', finished_at = ?, updated_at = ? WHERE run_id = ?`).bind(new Date().toISOString(), new Date().toISOString(), run.run_id).run();
+      return { ok: true, message: "Seed run completed", run_id: run.run_id };
+    }
+
+    console.log(`[seeding-tick] Processing ${nextBrand.brand_name}...`);
+    const result = await seedOneFranchise(env, ctx, run.run_id, nextBrand.brand_name);
+    await env.D1_DB.prepare(`UPDATE franchise_seed_runs SET current_index = current_index + 1, updated_at = ? WHERE run_id = ?`).bind(new Date().toISOString(), run.run_id).run();
+
+    return { ok: true, brand: nextBrand.brand_name, result, run_id: run.run_id };
+  } catch (err) {
+    console.log("[seeding-tick] Error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Process daypart job tick
+ */
+async function daypartJobTick(env, ctx) {
+  if (!env?.D1_DB) return { ok: false, error: "No database" };
+  try {
+    const dueJobs = await getDueDaypartJobs(env, 3);
+    if (dueJobs.length === 0) return { ok: true, message: "No due daypart jobs" };
+
+    const results = [];
+    for (const job of dueJobs) {
+      const result = await processDaypartJob(env, ctx, job);
+      results.push({ job_id: job.id, brand: job.brand_name, daypart: job.daypart, ...result });
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    return { ok: true, processed: results.length, results };
+  } catch (err) {
+    console.log("[daypart-tick] Error:", err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Get completed franchises list
+ */
+async function getCompletedFranchisesList(env, runId) {
+  if (!env?.D1_DB) return null;
+  try {
+    const run = await env.D1_DB.prepare(`SELECT * FROM franchise_seed_runs WHERE run_id = ?`).bind(runId).first();
+    if (!run) return null;
+
+    const completed = await env.D1_DB.prepare(`SELECT brand_name, menu_item_count, analyzed_count, rep_stores_found, daypart_jobs_created, finished_at FROM franchise_seed_progress WHERE run_id = ? AND status = 'DONE' ORDER BY id`).bind(runId).all();
+    const failed = await env.D1_DB.prepare(`SELECT brand_name, error FROM franchise_seed_progress WHERE run_id = ? AND status = 'FAILED' ORDER BY id`).bind(runId).all();
+
+    let report = `COMPLETED_FRANCHISES (run_id=${runId})\nStarted: ${run.started_at}\nFinished: ${run.finished_at || "IN PROGRESS"}\nStatus: ${run.status}\n\n`;
+    let totalItems = 0, totalAnalyzed = 0;
+
+    const completedList = completed.results || [];
+    for (let i = 0; i < completedList.length; i++) {
+      const c = completedList[i];
+      report += `${i + 1}) ${c.brand_name} - ${c.menu_item_count} items, ${c.analyzed_count} analyzed, ${c.rep_stores_found} stores, ${c.daypart_jobs_created} jobs\n`;
+      totalItems += c.menu_item_count || 0;
+      totalAnalyzed += c.analyzed_count || 0;
+    }
+
+    const failedList = failed.results || [];
+    if (failedList.length > 0) {
+      report += `\nFAILED (${failedList.length}):\n`;
+      for (const f of failedList) report += `- ${f.brand_name}: ${f.error}\n`;
+    }
+
+    report += `\nTOTALS:\n- Completed: ${completedList.length}\n- Failed: ${failedList.length}\n- Total menu items: ${totalItems}\n- Total analyzed: ${totalAnalyzed}\n`;
+    return report;
+  } catch (err) {
+    console.log("[daypart-seed] Get completed list error:", err?.message);
+    return null;
+  }
+}
+
+/**
+ * Get daypart coverage status
+ */
+async function getDaypartStatus(env) {
+  if (!env?.D1_DB) return null;
+  try {
+    const jobs = await env.D1_DB.prepare(`SELECT daypart, status, COUNT(*) as count FROM franchise_daypart_jobs GROUP BY daypart, status`).all();
+    const scopes = await env.D1_DB.prepare(`SELECT daypart, scope_type, COUNT(DISTINCT menu_item_id) as item_count FROM menu_item_scopes WHERE status = 'ACTIVE' GROUP BY daypart, scope_type`).all();
+    const analysis = await env.D1_DB.prepare(`SELECT brand_id, COUNT(*) as total, SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) as complete FROM franchise_analysis_cache GROUP BY brand_id`).all();
+    return { jobs: jobs.results || [], scopes: scopes.results || [], analysis: analysis.results || [] };
+  } catch (err) {
+    console.log("[daypart-status] Error:", err?.message);
+    return null;
+  }
+}
+
 // ==========================================================================
 
 // ---- Network helpers ----
@@ -20318,6 +24957,11 @@ async function runDishAnalysis(env, body, ctx) {
 
   // Full recipe generation flag
   const wantFullRecipe = body.fullRecipe === true || body.full_recipe === true;
+
+  // LATENCY OPTIMIZATION: Skip organs LLM by default for faster initial response
+  // Frontend can lazy-load organs when user expands that section
+  // Set skip_organs=false explicitly to include organs in the response
+  const skipOrgans = body.skip_organs !== false && body.skipOrgans !== false;
 
   // basic validation
   if (!dishName) {
@@ -20429,8 +25073,8 @@ async function runDishAnalysis(env, body, ctx) {
   let d1CachedRecipe = null;
   let usedD1RecipeCache = false;
 
-  // ========== LATENCY OPTIMIZATION: Run recipe + combo in parallel ==========
-  // Combo detection only needs dishName/restaurantName, not recipe result
+  // ========== LATENCY OPTIMIZATION: Run recipe + combo + image ops in parallel ==========
+  // All three operations are independent and can start immediately
   const tParallelStart = Date.now();
 
   const recipePromise = (async () => {
@@ -20504,9 +25148,42 @@ async function runDishAnalysis(env, body, ctx) {
     }
   })();
 
-  // Wait for both in parallel
-  const [recipeResult, comboSettled] = await Promise.all([recipePromise, comboPromise]);
+  // LATENCY OPTIMIZATION: Start image operations in parallel with recipe + combo
+  // Saves 500-1500ms by not waiting for recipe/combo to complete first
+  const imageOpsPromise = dishImageUrl ? (async () => {
+    const t0 = Date.now();
+    try {
+      const [fsImageSettled, portionVisionSettled] = await Promise.allSettled([
+        callFatSecretImageRecognition(env, dishImageUrl),
+        runPortionVisionLLM(env, {
+          dishName,
+          restaurantName,
+          menuDescription,
+          menuSection,
+          imageUrl: dishImageUrl
+        })
+      ]);
+      return {
+        ok: true,
+        fsImageSettled,
+        portionVisionSettled,
+        ms: Date.now() - t0
+      };
+    } catch (e) {
+      return { ok: false, error: String(e), ms: Date.now() - t0 };
+    }
+  })() : Promise.resolve(null);
+
+  // Wait for all three in parallel
+  const [recipeResult, comboSettled, imageOpsResult] = await Promise.all([
+    recipePromise,
+    comboPromise,
+    imageOpsPromise
+  ]);
   debug.t_parallel_recipe_combo_ms = Date.now() - tParallelStart;
+  if (imageOpsResult?.ms) {
+    debug.t_image_ops_early_ms = imageOpsResult.ms;
+  }
 
   // Process combo result
   let comboResult = null;
@@ -20653,7 +25330,7 @@ async function runDishAnalysis(env, body, ctx) {
       const usdaSummary = await resolveNutritionFromUSDA(
         env,
         dishName,
-        menuDescription || description || ""
+        menuDescription || ""
       );
       if (usdaSummary) {
         finalNutritionSummary = usdaSummary;
@@ -21117,12 +25794,43 @@ async function runDishAnalysis(env, body, ctx) {
       return res;
     })();
 
-    const organsPromise = (async () => {
-      const t0 = Date.now();
-      const res = await runOrgansLLM(env, llmPayload);
-      debug.t_llm_organs_ms = Date.now() - t0;
-      return res;
-    })();
+    // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
+    // Organs will run in background via waitUntil and be cached separately
+    let organsPromise;
+    let organsCacheKey = null;
+
+    if (skipOrgans) {
+      // Build cache key for organs-only storage
+      organsCacheKey = `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+
+      // Start organs in BACKGROUND via waitUntil - doesn't block response
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const res = await runOrgansLLM(env, llmPayload);
+            if (res.ok && env?.MENUS_CACHE) {
+              // Cache organs result separately for polling
+              await env.MENUS_CACHE.put(organsCacheKey, JSON.stringify({
+                ok: true,
+                data: res.data,
+                timestamp: Date.now()
+              }));
+            }
+          } catch (e) {
+            console.error("Background organs LLM failed:", e);
+          }
+        })());
+      }
+
+      organsPromise = Promise.resolve({ ok: true, skipped: true, data: null });
+    } else {
+      organsPromise = (async () => {
+        const t0 = Date.now();
+        const res = await runOrgansLLM(env, llmPayload);
+        debug.t_llm_organs_ms = Date.now() - t0;
+        return res;
+      })();
+    }
 
     const nutritionPromise = nutritionInput
       ? (async () => {
@@ -21180,12 +25888,35 @@ async function runDishAnalysis(env, body, ctx) {
       debug.allergen_llm_tier = res.tier || null;
       return res;
     })();
-    organsLLMResult = await (async () => {
-      const t0 = Date.now();
-      const res = await runOrgansLLM(env, llmPayload);
-      debug.t_llm_organs_ms = Date.now() - t0;
-      return res;
-    })();
+    // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
+    // Run in background via waitUntil if skipping
+    if (skipOrgans) {
+      const organsCacheKey = `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const res = await runOrgansLLM(env, llmPayload);
+            if (res.ok && env?.MENUS_CACHE) {
+              await env.MENUS_CACHE.put(organsCacheKey, JSON.stringify({
+                ok: true,
+                data: res.data,
+                timestamp: Date.now()
+              }));
+            }
+          } catch (e) {
+            console.error("Background organs LLM failed:", e);
+          }
+        })());
+      }
+      organsLLMResult = { ok: true, skipped: true, data: null };
+    } else {
+      organsLLMResult = await (async () => {
+        const t0 = Date.now();
+        const res = await runOrgansLLM(env, llmPayload);
+        debug.t_llm_organs_ms = Date.now() - t0;
+        return res;
+      })();
+    }
 
     if (finalNutritionSummary) {
       const nutritionInput = {
@@ -21228,6 +25959,7 @@ async function runDishAnalysis(env, body, ctx) {
     organsLLMResult && typeof organsLLMResult.ok === "boolean"
       ? organsLLMResult.ok
       : null;
+  debug.organs_llm_skipped = skipOrgans;
   debug.organs_llm_error =
     organsLLMResult && organsLLMResult.ok === false
       ? String(organsLLMResult.error || "")
@@ -21250,6 +25982,15 @@ async function runDishAnalysis(env, body, ctx) {
   lifestyle_tags = [];
   lifestyle_checks = null;
   let allergen_breakdown = null;
+
+  // Debug: capture the shape of allergenMiniResult before processing
+  debug.allergen_result_shape = allergenMiniResult ? {
+    ok: allergenMiniResult.ok,
+    hasData: !!allergenMiniResult.data,
+    dataType: typeof allergenMiniResult.data,
+    keys: allergenMiniResult.data ? Object.keys(allergenMiniResult.data).slice(0, 10) : null,
+    hasComponentAllergens: allergenMiniResult.data && Array.isArray(allergenMiniResult.data.component_allergens)
+  } : null;
 
   if (
     allergenMiniResult &&
@@ -21294,14 +26035,15 @@ async function runDishAnalysis(env, body, ctx) {
 
     try {
       const componentAllergensRaw = a.component_allergens;
+      // Process component_allergens even when plateComponents is empty (no image)
+      // The LLM provides component_label, role, and category directly
       if (
         Array.isArray(componentAllergensRaw) &&
-        componentAllergensRaw.length > 0 &&
-        plateComponents &&
-        plateComponents.length > 0
+        componentAllergensRaw.length > 0
       ) {
         allergen_breakdown = componentAllergensRaw.map((compEntry, idx) => {
-          const pc = plateComponents[idx] || {};
+          // Use plateComponents if available, otherwise rely on LLM's component data
+          const pc = (plateComponents && plateComponents[idx]) || {};
           const label =
             compEntry?.component_label ||
             pc.label ||
@@ -21371,6 +26113,20 @@ async function runDishAnalysis(env, body, ctx) {
           };
         });
         debug.allergen_component_raw = componentAllergensRaw;
+
+        // If plateComponents is empty but we have LLM-derived components, populate plateComponents
+        // This ensures plate_components is available for nutrition breakdown and UI display
+        if (!plateComponents || plateComponents.length === 0) {
+          plateComponents = allergen_breakdown.map((comp, idx) => ({
+            component_id: comp.component_id || `c${idx}`,
+            role: comp.role || "unknown",
+            category: comp.category || "other",
+            label: comp.component,
+            confidence: 0.8,
+            area_ratio: 1 / allergen_breakdown.length
+          }));
+          debug.plate_components_source = "llm-component-allergens";
+        }
       }
     } catch (err) {
       allergen_breakdown = null;
@@ -21491,6 +26247,102 @@ async function runDishAnalysis(env, body, ctx) {
     debug.allergen_all_tiers_failed = true;
     debug.allergen_error = allergenMiniResult?.error || "all-tiers-failed";
     console.error("CRITICAL: All allergen LLM tiers failed:", allergenMiniResult?.error);
+  }
+
+  // --- Aggregate component allergens to dish-level if allergen_flags is empty ---
+  // This ensures dish-level allergen_flags are populated even when LLM only returns component_allergens
+  if (
+    (!Array.isArray(allergen_flags) || allergen_flags.length === 0) &&
+    Array.isArray(allergen_breakdown) &&
+    allergen_breakdown.length > 0
+  ) {
+    const aggregatedAllergens = new Map(); // kind -> {present, messages[], sources[]}
+    const aggregatedFodmap = { level: null, reasons: [] };
+    const aggregatedLactose = { level: null, reasons: [] };
+
+    const fodmapOrder = { high: 3, medium: 2, low: 1, none: 0 };
+    const lactoseOrder = { high: 3, medium: 2, low: 1, trace: 0.5, none: 0 };
+
+    for (const comp of allergen_breakdown) {
+      if (!comp) continue;
+
+      // Aggregate allergen flags
+      if (Array.isArray(comp.allergen_flags)) {
+        for (const flag of comp.allergen_flags) {
+          if (!flag || !flag.kind) continue;
+          const kind = flag.kind;
+          const present = flag.present;
+          if (present !== "yes" && present !== "maybe") continue;
+
+          if (!aggregatedAllergens.has(kind)) {
+            aggregatedAllergens.set(kind, { present: "maybe", messages: [], sources: new Set() });
+          }
+          const entry = aggregatedAllergens.get(kind);
+          // Upgrade to "yes" if any component says "yes"
+          if (present === "yes") entry.present = "yes";
+          if (flag.message) entry.messages.push(`${comp.component}: ${flag.message}`);
+          if (flag.source) entry.sources.add(flag.source);
+        }
+      }
+
+      // Aggregate FODMAP flags (take highest level)
+      if (comp.fodmap_flags && comp.fodmap_flags.level) {
+        const level = comp.fodmap_flags.level.toLowerCase();
+        const currentOrder = fodmapOrder[aggregatedFodmap.level] || -1;
+        const newOrder = fodmapOrder[level] || 0;
+        if (newOrder > currentOrder) {
+          aggregatedFodmap.level = level;
+        }
+        if (comp.fodmap_flags.reason) {
+          aggregatedFodmap.reasons.push(`${comp.component}: ${comp.fodmap_flags.reason}`);
+        }
+      }
+
+      // Aggregate lactose flags (take highest level)
+      if (comp.lactose_flags && comp.lactose_flags.level) {
+        const level = comp.lactose_flags.level.toLowerCase();
+        const currentOrder = lactoseOrder[aggregatedLactose.level] || -1;
+        const newOrder = lactoseOrder[level] || 0;
+        if (newOrder > currentOrder) {
+          aggregatedLactose.level = level;
+        }
+        if (comp.lactose_flags.reason) {
+          aggregatedLactose.reasons.push(`${comp.component}: ${comp.lactose_flags.reason}`);
+        }
+      }
+    }
+
+    // Populate allergen_flags from aggregation
+    for (const [kind, entry] of aggregatedAllergens) {
+      allergen_flags.push({
+        kind,
+        present: entry.present,
+        message: entry.messages.length > 0 ? entry.messages[0] : `Detected in dish components.`,
+        source: entry.sources.size > 0 ? Array.from(entry.sources).join(",") : "aggregated-from-components"
+      });
+    }
+
+    // Populate fodmap_flags from aggregation if still null
+    if (!fodmap_flags && aggregatedFodmap.level) {
+      fodmap_flags = {
+        level: aggregatedFodmap.level,
+        reason: aggregatedFodmap.reasons.length > 0 ? aggregatedFodmap.reasons.join("; ") : "Aggregated from dish components.",
+        source: "aggregated-from-components"
+      };
+    }
+
+    // Populate lactose_flags from aggregation if still null
+    if (!lactose_flags && aggregatedLactose.level) {
+      lactose_flags = {
+        level: aggregatedLactose.level,
+        reason: aggregatedLactose.reasons.length > 0 ? aggregatedLactose.reasons.join("; ") : "Aggregated from dish components.",
+        source: "aggregated-from-components"
+      };
+    }
+
+    if (allergen_flags.length > 0) {
+      debug.allergen_flags_aggregated_from_breakdown = true;
+    }
   }
 
   // --- D1 Recipe Cache Allergen Fallback ---
@@ -21788,53 +26640,87 @@ async function runDishAnalysis(env, body, ctx) {
     fodmap_edamam: edamamFodmap || null,
     edamam_healthLabels: edamamHealthLabels,
     organs_llm_raw: organsLLMDebug || null,
-    allergen_llm_raw: allergenMiniDebug || null,
+    // allergen_llm_raw is already set earlier at line 16815 - don't overwrite it
     dish_image_url: dishImageUrl
   };
 
-  // FatSecret image recognition (dev-only) for debug purposes
-  if (devFlag && dishImageUrl) {
-    try {
-      const fsImageResult = await callFatSecretImageRecognition(
-        env,
-        dishImageUrl
-      );
+  // Process image operations results (already started in parallel with recipe + combo)
+  let portionVisionDebug = null;
+
+  if (dishImageUrl && imageOpsResult && imageOpsResult.ok) {
+    // Use results from early parallel execution
+    const { fsImageSettled, portionVisionSettled } = imageOpsResult;
+
+    // Process FatSecret result (shared for debug + production)
+    if (fsImageSettled && fsImageSettled.status === "fulfilled") {
+      const fsImageResult = fsImageSettled.value;
+      fatsecretImageResult = fsImageResult;
+      debug.fatsecret_image_result = fsImageResult;
+
       if (fsImageResult && fsImageResult.ok && fsImageResult.raw) {
-        debug.fatsecret_image_raw = fsImageResult.raw;
+        if (devFlag) {
+          debug.fatsecret_image_raw = fsImageResult.raw;
+        }
+
         try {
           const normalized = normalizeFatSecretImageResult(fsImageResult.raw);
+          fatsecretNormalized = normalized;
           debug.fatsecret_image_normalized = normalized;
+
+          if (
+            normalized &&
+            Array.isArray(normalized.nutrition_breakdown) &&
+            normalized.nutrition_breakdown.length > 0
+          ) {
+            fatsecretNutritionBreakdown = normalized.nutrition_breakdown;
+
+            // Sum FatSecret component nutrition for the final summary
+            const fsSum = normalized.nutrition_breakdown.reduce(
+              (acc, comp) => {
+                acc.energyKcal += comp.energyKcal || 0;
+                acc.protein_g += comp.protein_g || 0;
+                acc.fat_g += comp.fat_g || 0;
+                acc.carbs_g += comp.carbs_g || 0;
+                acc.sugar_g += comp.sugar_g || 0;
+                acc.fiber_g += comp.fiber_g || 0;
+                acc.sodium_mg += comp.sodium_mg || 0;
+                return acc;
+              },
+              { energyKcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, sugar_g: 0, fiber_g: 0, sodium_mg: 0 }
+            );
+
+            // Use FatSecret image nutrition as finalNutritionSummary
+            if (fsSum.energyKcal > 0) {
+              finalNutritionSummary = fsSum;
+              nutrition_source = "fatsecret_image";
+              debug.fatsecret_nutrition_sum = fsSum;
+            }
+          }
+
+          if (normalized && normalized.component_allergens) {
+            debug.fatsecret_component_allergens = normalized.component_allergens;
+            fsComponentAllergens = normalized.component_allergens;
+          }
         } catch (e) {
-          debug.fatsecret_image_normalized_error = String(
-            e && e.message ? e.message : e
-          );
+          debug.fatsecret_image_normalized_error = String(e && e.message ? e.message : e);
         }
       } else if (fsImageResult && !fsImageResult.ok) {
         debug.fatsecret_image_error = fsImageResult.error || "unknown_error";
       }
-    } catch (e) {
-      debug.fatsecret_image_error =
-        "exception:" + String(e && e.message ? e.message : e);
+    } else if (fsImageSettled) {
+      debug.fatsecret_image_error = "exception:" + String(fsImageSettled.reason);
     }
-  }
 
-  let portionVisionDebug = null;
-  try {
-    if (dishImageUrl) {
-      portionVisionDebug = await runPortionVisionLLM(env, {
-        dishName,
-        restaurantName,
-        menuDescription,
-        menuSection,
-        imageUrl: dishImageUrl
-      });
+    // Process portion vision result
+    if (portionVisionSettled && portionVisionSettled.status === "fulfilled") {
+      portionVisionDebug = portionVisionSettled.value;
+    } else if (portionVisionSettled) {
+      portionVisionDebug = {
+        ok: false,
+        source: "portion_vision_stub",
+        error: String(portionVisionSettled.reason)
+      };
     }
-  } catch (err) {
-    portionVisionDebug = {
-      ok: false,
-      source: "portion_vision_stub",
-      error: err && err.message ? String(err.message) : String(err)
-    };
   }
 
   debug.portion_vision = portionVisionDebug;
@@ -21844,65 +26730,6 @@ async function runDishAnalysis(env, body, ctx) {
     portionVisionDebug.insights
   ) {
     debug.vision_insights = portionVisionDebug.insights;
-  }
-
-  // FatSecret image recognition (vision) for components + nutrition
-  try {
-    if (dishImageUrl) {
-      const fsImageResult = await callFatSecretImageRecognition(
-        env,
-        dishImageUrl
-      );
-      fatsecretImageResult = fsImageResult;
-      debug.fatsecret_image_result = fsImageResult;
-
-      if (fsImageResult && fsImageResult.ok && fsImageResult.raw) {
-        const normalized = normalizeFatSecretImageResult(fsImageResult.raw);
-        fatsecretNormalized = normalized;
-        debug.fatsecret_image_normalized = normalized;
-
-        if (
-          normalized &&
-          Array.isArray(normalized.nutrition_breakdown) &&
-          normalized.nutrition_breakdown.length > 0
-        ) {
-          fatsecretNutritionBreakdown = normalized.nutrition_breakdown;
-
-          // Sum FatSecret component nutrition for the final summary
-          // This gives accurate per-plate nutrition from vision when available
-          const fsSum = normalized.nutrition_breakdown.reduce(
-            (acc, comp) => {
-              acc.energyKcal += comp.energyKcal || 0;
-              acc.protein_g += comp.protein_g || 0;
-              acc.fat_g += comp.fat_g || 0;
-              acc.carbs_g += comp.carbs_g || 0;
-              acc.sugar_g += comp.sugar_g || 0;
-              acc.fiber_g += comp.fiber_g || 0;
-              acc.sodium_mg += comp.sodium_mg || 0;
-              return acc;
-            },
-            { energyKcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, sugar_g: 0, fiber_g: 0, sodium_mg: 0 }
-          );
-
-          // Use FatSecret image nutrition as finalNutritionSummary
-          // This is more accurate for photo-based analysis than recipe search
-          if (fsSum.energyKcal > 0) {
-            finalNutritionSummary = fsSum;
-            nutrition_source = "fatsecret_image";
-            debug.fatsecret_nutrition_sum = fsSum;
-          }
-        }
-
-        if (normalized && normalized.component_allergens) {
-          debug.fatsecret_component_allergens = normalized.component_allergens;
-          fsComponentAllergens = normalized.component_allergens;
-        }
-      }
-    }
-  } catch (err) {
-    debug.fatsecret_image_error = String(
-      (err && (err.stack || err.message)) || err
-    );
   }
 
   try {
@@ -22017,6 +26844,95 @@ async function runDishAnalysis(env, body, ctx) {
         ...comp
       }))
     : [];
+
+  // Vision-augmented recipe merging:
+  // If vision detected ingredients not in the original recipe, classify them
+  // and merge their allergen/FODMAP hits into the analysis
+  try {
+    const visualIngredients = debug.vision_insights?.visual_ingredients || [];
+    if (visualIngredients.length > 0) {
+      // Extract ingredient names from vision (high confidence only)
+      const visionIngredientNames = visualIngredients
+        .filter((vi) => vi && vi.confidence >= 0.6)
+        .map((vi) => vi.guess || vi.label || vi.category)
+        .filter(Boolean);
+
+      if (visionIngredientNames.length > 0) {
+        // Get existing ingredient names (normalized) for deduplication
+        const existingIngredients = new Set(
+          (ingredientsForLex || []).map((n) => n.toLowerCase().trim())
+        );
+
+        // Filter to only NEW ingredients not already in recipe
+        const newVisionIngredients = visionIngredientNames.filter(
+          (name) => !existingIngredients.has(name.toLowerCase().trim())
+        );
+
+        if (newVisionIngredients.length > 0) {
+          debug.vision_new_ingredients = newVisionIngredients;
+
+          // Classify these new ingredients (uses cache if available)
+          const visionFatsecretResult = await classifyIngredientsWithFatSecret(
+            env,
+            newVisionIngredients,
+            "en"
+          );
+
+          if (visionFatsecretResult.ok && visionFatsecretResult.allIngredientHits?.length > 0) {
+            debug.vision_allergen_hits = visionFatsecretResult.allIngredientHits;
+            debug.vision_fatsecret_cache_stats = visionFatsecretResult._cacheStats;
+            debug.vision_augmented_analysis = true;
+
+            // Merge vision-detected allergens into allergen_flags (avoiding duplicates)
+            const existingAllergenKinds = new Set(
+              (allergen_flags || []).map((f) => (f.kind || "").toLowerCase())
+            );
+
+            for (const hit of visionFatsecretResult.allIngredientHits) {
+              if (!hit.allergens || !Array.isArray(hit.allergens)) continue;
+              for (const allergen of hit.allergens) {
+                const kind = (allergen || "").toLowerCase();
+                if (kind && !existingAllergenKinds.has(kind)) {
+                  allergen_flags.push({
+                    kind: allergen,
+                    present: "yes",
+                    message: `Detected via vision: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  });
+                  existingAllergenKinds.add(kind);
+                }
+              }
+
+              // Also check lactose from vision
+              if (hit.lactose_band && hit.lactose_band !== "none") {
+                if (!lactose_flags || lactose_flags.level === "none") {
+                  lactose_flags = {
+                    level: hit.lactose_band,
+                    reason: `Vision detected dairy: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  };
+                }
+              }
+
+              // Check FODMAP from vision
+              if (hit.fodmap && (!fodmap_flags || fodmap_flags.level === "low")) {
+                const visionFodmapLevel = hit.fodmap.level || hit.fodmap;
+                if (visionFodmapLevel === "high" || visionFodmapLevel === "medium") {
+                  fodmap_flags = {
+                    level: visionFodmapLevel,
+                    reason: `Vision detected: ${hit.term || "ingredient"}`,
+                    source: "vision-fatsecret"
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    debug.vision_merge_error = String((err && (err.stack || err.message)) || err);
+  }
 
   // Normalize nutrition to per-serving values using recipe yield
   // SKIP this divisor when restaurantCalories is provided (already per-serving)
@@ -22586,7 +27502,23 @@ async function runDishAnalysis(env, body, ctx) {
 
   // Build Likely Recipe (merges recipe + vision ingredients + adjusted cooking method)
   const visionInsightsForRecipe = debug.vision_insights || null;
-  const likely_recipe = buildLikelyRecipe(recipeResult, visionInsightsForRecipe, nutritionBreakdown);
+
+  // Apply vision corrections to recipe (e.g., image shows spaghetti but recipe says penne)
+  let correctedRecipeResult = recipeResult;
+  let visionCorrections = null;
+  if (visionInsightsForRecipe && recipeResult) {
+    visionCorrections = applyVisionCorrections(visionInsightsForRecipe, recipeResult);
+    if (visionCorrections && visionCorrections.applied && visionCorrections.corrections.length > 0) {
+      correctedRecipeResult = visionCorrections.corrected;
+      debug.vision_corrections = {
+        applied: visionCorrections.corrections,
+        count: visionCorrections.correction_count,
+        original_recipe_source: recipeResult?.source || recipeResult?.responseSource || "unknown"
+      };
+    }
+  }
+
+  const likely_recipe = buildLikelyRecipe(correctedRecipeResult, visionInsightsForRecipe, nutritionBreakdown);
 
   // Build Full Recipe if requested (cookbook-style with LLM)
   let full_recipe = null;
@@ -22789,11 +27721,14 @@ async function runDishAnalysis(env, body, ctx) {
     imageUrl: dishImageUrl,
     recipe_image: recipeImage,
     summary,
-    recipe: recipeResult,
+    recipe: correctedRecipeResult,
     likely_recipe,
     full_recipe,
+    vision_corrections: visionCorrections?.corrections?.length > 0 ? visionCorrections.corrections : null,
     normalized,
     organs,
+    organs_pending: skipOrgans, // Flag for frontend to poll for organs
+    organs_poll_key: skipOrgans ? `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}` : null,
     allergen_flags,
     allergen_summary,
     allergen_breakdown,
@@ -22990,9 +27925,37 @@ function mapFatSecretFoodAttributesToLexHits(ingredientName, foodAttributes) {
   return [hit];
 }
 
+// LATENCY OPTIMIZATION: FatSecret ingredient-level KV cache
+// Ingredient allergen data is PERMANENT - milk will always contain lactose
+// Version prefix allows bulk invalidation if FatSecret schema changes
+const FATSECRET_CACHE_VERSION = "v1";
+
+async function getFatSecretCached(env, ingredientName) {
+  if (!env?.MENUS_CACHE || !ingredientName) return null;
+  const key = `fatsecret:${FATSECRET_CACHE_VERSION}:${ingredientName.toLowerCase().trim()}`;
+  try {
+    return await env.MENUS_CACHE.get(key, "json");
+  } catch {
+    return null;
+  }
+}
+
+async function putFatSecretCached(env, ingredientName, data) {
+  if (!env?.MENUS_CACHE || !ingredientName) return;
+  const key = `fatsecret:${FATSECRET_CACHE_VERSION}:${ingredientName.toLowerCase().trim()}`;
+  try {
+    // NO TTL - ingredient allergen data is permanent knowledge
+    // "Milk contains lactose" doesn't expire
+    await env.MENUS_CACHE.put(key, JSON.stringify(data));
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 // classifyIngredientsWithFatSecret:
 // Uses our FatSecret proxy (Render) to turn ingredient names into
 // lex-style hits focused on allergens + lactose.
+// LATENCY OPTIMIZATION: Now with ingredient-level KV caching
 async function classifyIngredientsWithFatSecret(
   env,
   ingredientsForLex,
@@ -23004,34 +27967,76 @@ async function classifyIngredientsWithFatSecret(
     )
     .filter(Boolean);
 
-  const result = await fetchFatSecretAllergensViaProxy(
-    env,
-    ingredientNames,
-    lang
-  );
-  if (!result.ok) {
-    return {
-      ok: false,
-      reason: result.reason || "fatsecret-proxy-error",
-      perIngredient: [],
-      allIngredientHits: []
-    };
+  if (!ingredientNames.length) {
+    return { ok: true, perIngredient: [], allIngredientHits: [] };
   }
 
+  // LATENCY OPTIMIZATION: Check KV cache for each ingredient in parallel
+  const cacheResults = await Promise.all(
+    ingredientNames.map(async (name) => {
+      const cached = await getFatSecretCached(env, name);
+      return { name, cached };
+    })
+  );
+
+  const cachedIngredients = [];
+  const uncachedNames = [];
+
+  for (const { name, cached } of cacheResults) {
+    if (cached) {
+      cachedIngredients.push({ ingredient: name, ...cached });
+    } else {
+      uncachedNames.push(name);
+    }
+  }
+
+  // Only call proxy for uncached ingredients
+  let proxyResults = [];
+  if (uncachedNames.length > 0) {
+    const result = await fetchFatSecretAllergensViaProxy(
+      env,
+      uncachedNames,
+      lang
+    );
+    if (result.ok && result.results) {
+      proxyResults = result.results;
+      // Cache the new results (non-blocking)
+      for (const row of proxyResults) {
+        if (row?.ingredient) {
+          putFatSecretCached(env, row.ingredient, {
+            food_attributes: row.food_attributes || {},
+            _cachedAt: new Date().toISOString()
+          });
+        }
+      }
+    }
+  }
+
+  // Combine cached + fresh results
   const perIngredient = [];
   const allIngredientHits = [];
 
-  for (const row of result.results || []) {
+  // Process cached ingredients
+  for (const cached of cachedIngredients) {
+    const name = cached.ingredient;
+    const hits = mapFatSecretFoodAttributesToLexHits(
+      name,
+      cached.food_attributes || {}
+    );
+    perIngredient.push({ ingredient: name, ok: true, hits, cached: true });
+    if (hits && hits.length) {
+      for (const h of hits) allIngredientHits.push(h);
+    }
+  }
+
+  // Process fresh results
+  for (const row of proxyResults) {
     const name = row?.ingredient || "";
     const hits = mapFatSecretFoodAttributesToLexHits(
       name,
       row?.food_attributes || {}
     );
-    perIngredient.push({
-      ingredient: name,
-      ok: true,
-      hits
-    });
+    perIngredient.push({ ingredient: name, ok: true, hits, cached: false });
     if (hits && hits.length) {
       for (const h of hits) allIngredientHits.push(h);
     }
@@ -23040,7 +28045,12 @@ async function classifyIngredientsWithFatSecret(
   return {
     ok: true,
     perIngredient,
-    allIngredientHits
+    allIngredientHits,
+    _cacheStats: {
+      cached: cachedIngredients.length,
+      fetched: proxyResults.length,
+      total: ingredientNames.length
+    }
   };
 }
 // ---- Response helpers ----

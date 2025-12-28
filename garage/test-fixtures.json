@@ -1,0 +1,62 @@
+[
+  {
+    "restaurant_id": "chipotle-mexican-grill",
+    "uber_url": "https://www.ubereats.com/store/chipotle-mexican-grill-2001-k-st-nw/sHvkP4eQSoatfK0HNqNPew",
+    "name": "Chipotle Mexican Grill"
+  },
+  {
+    "restaurant_id": "mcdonalds",
+    "uber_url": "https://www.ubereats.com/store/mcdonalds-1250-u-st-nw/sBzzAJ7wSvOPzyf2lOv8Ag",
+    "name": "McDonald's"
+  },
+  {
+    "restaurant_id": "sweetgreen",
+    "uber_url": "https://www.ubereats.com/store/sweetgreen-1512-connecticut-ave-nw/XK6BLwFHQHKFGH9EKA6_Pg",
+    "name": "Sweetgreen"
+  },
+  {
+    "restaurant_id": "subway",
+    "uber_url": "https://www.ubereats.com/store/subway-1156-18th-st-nw/WBXwvJTpSjS7B0e_6NJg0A",
+    "name": "Subway"
+  },
+  {
+    "restaurant_id": "starbucks",
+    "uber_url": "https://www.ubereats.com/store/starbucks-1301-k-st-nw/RFP9VNE_QHiEVxXpVfK9eg",
+    "name": "Starbucks"
+  },
+  {
+    "restaurant_id": "chick-fil-a",
+    "uber_url": "https://www.ubereats.com/store/chick-fil-a-1134-19th-st-nw/q8kL1VLSTBuIUgNxPAiCLg",
+    "name": "Chick-fil-A"
+  },
+  {
+    "restaurant_id": "panera-bread",
+    "uber_url": "https://www.ubereats.com/store/panera-bread/Bf-3zq4iRCKCPdJz0fJz3Q",
+    "name": "Panera Bread"
+  },
+  {
+    "restaurant_id": "five-guys",
+    "uber_url": "https://www.ubereats.com/store/five-guys-1400-i-st-nw/RnfXaJ9XQSmZ2z_lhXxA1w",
+    "name": "Five Guys"
+  },
+  {
+    "restaurant_id": "wendys",
+    "uber_url": "https://www.ubereats.com/store/wendys-1-dupont-circle-nw/IKRgLfaAQaKz3xFRqFxfVw",
+    "name": "Wendy's"
+  },
+  {
+    "restaurant_id": "popeyes",
+    "uber_url": "https://www.ubereats.com/store/popeyes-louisiana-kitchen-1206-h-st-ne/OGJ7IrfdT--j6aZ9R0x1pA",
+    "name": "Popeyes"
+  },
+  {
+    "restaurant_id": "taco-bell",
+    "uber_url": "https://www.ubereats.com/store/taco-bell-1726-l-st-nw/i9J0Y1hERrmW3u4VQHxdIQ",
+    "name": "Taco Bell"
+  },
+  {
+    "restaurant_id": "cava",
+    "uber_url": "https://www.ubereats.com/store/cava-1330-connecticut-ave-nw/aNQ3vCJmQbqGdmGlOXtFpQ",
+    "name": "CAVA"
+  }
+]

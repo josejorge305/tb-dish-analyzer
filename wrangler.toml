@@ -61,8 +61,9 @@ queue = "tb-dish-analysis-queue"
 
 [[queues.consumers]]
 queue = "tb-dish-analysis-queue"
-max_batch_size = 1
+max_batch_size = 10
 max_batch_timeout = 30
+max_retries = 3
 
 
 
@@ -162,6 +163,11 @@ bucket_name = "tb-analysis-cache"
 binding = "ANALYSIS_QUEUE"
 queue = "tb-dish-analysis-queue"
 
+# --- CRON TRIGGERS (production) ---
+# Every 5 minutes: process seeding ticks and daypart sampling jobs
+# Daily at 3 AM UTC: menu cache refresh and daypart promotions
+[env.production.triggers]
+crons = ["*/5 * * * *", "0 3 * * *"]
 
 # --- SERVICE BINDING (production) ---
 # If you self-call this Worker (fetch to SELF), this binding matches prod name above.

@@ -5,4 +5,22 @@ compatibility_date = "2024-10-01"
 
 [[queues.consumers]]
 queue = "tb-dish-analysis-queue"
-binding = "ANALYSIS_QUEUE"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "tb-dish-analysis-dlq"
+
+# Service binding to main dish processor
+[[services]]
+binding = "DISH_PROCESSOR"
+service = "tb-dish-processor"
+
+# R2 for storing results
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "tb-analysis-cache"
+
+# KV for dish analysis cache
+[[kv_namespaces]]
+binding = "DISH_ANALYSIS_CACHE"
+id = "e7dc29dabe404495af66b04897527607"
