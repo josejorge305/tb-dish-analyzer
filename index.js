@@ -16301,18 +16301,240 @@ const _worker_impl = {
           console.error(`[Apify Webhook] No datasetId available to fetch results`);
         }
 
-        // Update job status in KV with results
+        // ======= VALIDATE & TRANSFORM DATA =======
+        // Find the best matching restaurant and transform to frontend format
+        let validationResult = null;
+        let transformedData = null;
+        let jobStatus = "completed";
+
+        if (Array.isArray(data) && data.length > 0 && existing?.query) {
+          const expectedName = existing.query;
+          const expectedAddress = existing.address || "";
+
+          // Score each result based on name similarity
+          const scored = data.map((restaurant, idx) => {
+            const restName = restaurant.title || restaurant.sanitizedTitle || restaurant.name || "";
+            const restAddr = restaurant.location?.address || restaurant.location?.streetAddress || "";
+
+            // Normalize names for comparison (remove ®, ™, apostrophes, and extract core name)
+            // Include all types of apostrophes and quotes: ', ', `, ʼ, ʻ
+            const normQuery = expectedName.toLowerCase().replace(/[®™''`ʼʻ'\-]/g, "").replace(/\s+/g, " ").trim();
+            // For result: extract everything before the first parenthesis (removes location suffix)
+            let normResult = restName.toLowerCase();
+            const parenIdx = normResult.indexOf('(');
+            if (parenIdx > 0) {
+              normResult = normResult.substring(0, parenIdx);
+            }
+            normResult = normResult.replace(/[®™''`ʼʻ'\-]/g, "").replace(/\s+/g, " ").trim();
+
+            // Match if:
+            // 1. Exact match after normalization
+            // 2. Query is contained in result (chain restaurant with location suffix)
+            // 3. Result starts with query (e.g., "McDonalds" matches "McDonalds Sunset Blvd")
+            // 4. strictNameMatch passes (token-based)
+            const exactMatch = normQuery === normResult;
+            const queryContained = normResult.includes(normQuery) || normQuery.includes(normResult);
+            const startsWithQuery = normResult.startsWith(normQuery);
+            const strictMatch = strictNameMatch(expectedName, restName);
+
+            const nameMatch = exactMatch || queryContained || startsWithQuery || strictMatch;
+
+            // Calculate similarity score for ranking (higher is better)
+            // For chain restaurants, if query is fully contained in result, that's a strong match
+            let nameSim;
+            if (exactMatch) {
+              nameSim = 1.0;
+            } else if (queryContained) {
+              // Query fully contained: high confidence (0.90-0.98 based on length ratio)
+              const lengthRatio = normQuery.length / normResult.length;
+              nameSim = 0.90 + (lengthRatio * 0.08); // e.g., "starbucks" in "starbucks (580 california)" = 0.93
+            } else if (startsWithQuery) {
+              nameSim = 0.85;
+            } else {
+              nameSim = normalizedSimilarity(expectedName, restName);
+            }
+            const addrSim = normalizedSimilarity(expectedAddress, restAddr);
+            const combinedScore = nameSim * 0.8 + addrSim * 0.2; // Weight name match more heavily
+
+            return {
+              index: idx,
+              restaurant,
+              nameMatch,
+              nameSim, // Used for confidence reporting
+              scores: { name: nameSim, address: addrSim, combined: combinedScore },
+              restName,
+              restAddr,
+            };
+          });
+
+          // Sort by combined score
+          scored.sort((a, b) => b.scores.combined - a.scores.combined);
+
+          // Find best match (must pass name check)
+          const bestMatch = scored.find(s => s.nameMatch);
+          const rejected = scored.filter(s => !s.nameMatch);
+
+          console.log(`[Apify Webhook] Validation: ${scored.length} results, best match: ${bestMatch?.restName || 'none'}`);
+
+          if (bestMatch) {
+            // Transform the matched restaurant to frontend format
+            const r = bestMatch.restaurant;
+            const sections = [];
+            let totalItems = 0;
+            let availableItems = 0;
+
+            // Transform menu - Uber Eats format has menu as array of catalog sections
+            // Structure: r.menu = [{ catalogName, catalogItems: [...] }, ...]
+            const menuData = Array.isArray(r.menu) ? r.menu : (r.menu?.categories || []);
+
+            menuData.forEach((cat, catIdx) => {
+              // Handle both formats: catalogItems (Uber) or items (legacy)
+              const items = cat.catalogItems || cat.items || [];
+              const sectionName = cat.catalogName || cat.name || cat.title || "Menu";
+
+              const sectionItems = items.map((item, itemIdx) => {
+                totalItems++;
+                const isAvailable = item.isAvailable !== false && !item.isSoldOut;
+                if (isAvailable) availableItems++;
+
+                // Price handling - Uber returns price in cents
+                let priceText = item.priceTagline || item.priceString || item.priceFormatted || "";
+                if (!priceText && item.price) {
+                  // Price is in cents, convert to dollars
+                  priceText = `$${(item.price / 100).toFixed(2)}`;
+                }
+
+                return {
+                  id: item.uuid || item.id || `item-${catIdx}-${itemIdx}`,
+                  name: item.title || item.name || item.labelPrimary || "",
+                  description: item.description || item.labelPrimary || "",
+                  menuDescription: item.description || item.labelPrimary || "",
+                  priceText: priceText,
+                  priceCents: item.price || 0,
+                  imageUrl: item.imageUrl || item.image || null,
+                  available: isAvailable,
+                  soldOut: !!item.isSoldOut,
+                  popular: !!item.titleBadge || !!item.popular,
+                  rating: null,
+                  hasCustomizations: !!item.hasCustomizations,
+                };
+              });
+
+              if (sectionItems.length > 0) {
+                sections.push({
+                  id: cat.catalogSectionUUID || cat.sectionUUID || cat.id || `section-${catIdx}`,
+                  name: sectionName,
+                  items: sectionItems,
+                  itemCount: sectionItems.length,
+                });
+              }
+            });
+
+            // Build transformed data in ValidatedMenuData format
+            transformedData = {
+              restaurant: {
+                id: r.id || r.uuid || "",
+                name: r.title || r.sanitizedTitle || r.name || "",
+                address: r.location?.address || r.location?.streetAddress || "",
+                city: r.location?.city || "",
+                state: r.location?.state || "",
+                postalCode: r.location?.postalCode || r.location?.zipCode || "",
+                phone: r.phoneNumber || "",
+                imageUrl: r.heroImageUrl || r.imageUrl || null,
+                rating: r.rating?.ratingValue || null,
+                reviewCount: r.rating?.reviewCount || "0",
+                cuisines: r.categories || [],
+                isOpen: r.isOpen !== false,
+                hours: [],
+                deliveryEta: r.etaRange?.text || "",
+                deliveryFee: r.deliveryFee?.text || "",
+                url: r.url || "",
+              },
+              sections,
+              meta: {
+                totalSections: sections.length,
+                totalItems,
+                availableItems,
+                source: "apify",
+                scrapedAt: new Date().toISOString(),
+              },
+            };
+
+            validationResult = {
+              confidence: bestMatch.nameSim, // Use name similarity for confidence (not combined)
+              matchedName: bestMatch.restName,
+              requestedName: expectedName,
+              matchCount: scored.filter(s => s.nameMatch).length,
+              rejectedCount: rejected.length,
+              rejectedReasons: rejected.slice(0, 5).map(r => ({
+                name: r.restName,
+                reason: `Name similarity too low (${(r.scores.name * 100).toFixed(0)}%)`,
+              })),
+            };
+
+            console.log(`[Apify Webhook] Match found: "${bestMatch.restName}" with ${sections.length} sections, ${totalItems} items`);
+          } else {
+            // No match found
+            jobStatus = "completed_no_match";
+            validationResult = {
+              confidence: 0,
+              matchedName: "",
+              requestedName: expectedName,
+              matchCount: 0,
+              rejectedCount: scored.length,
+              reason: `No matching restaurant found for "${expectedName}"`,
+              rejectedReasons: scored.slice(0, 5).map(r => ({
+                name: r.restName,
+                reason: `Name similarity too low (${(r.scores.name * 100).toFixed(0)}%)`,
+              })),
+            };
+            console.log(`[Apify Webhook] No match found for "${expectedName}"`);
+          }
+        } else if (Array.isArray(data) && data.length === 0) {
+          jobStatus = "completed_no_match";
+          validationResult = {
+            confidence: 0,
+            matchedName: "",
+            requestedName: existing?.query || "",
+            matchCount: 0,
+            rejectedCount: 0,
+            reason: "No results returned from scraper",
+          };
+        }
+
+        // Helper: normalized string similarity (Levenshtein-based)
+        function normalizedSimilarity(str1, str2) {
+          if (!str1 || !str2) return 0;
+          const s1 = str1.toLowerCase().trim();
+          const s2 = str2.toLowerCase().trim();
+          if (s1 === s2) return 1;
+          const maxLen = Math.max(s1.length, s2.length);
+          if (maxLen === 0) return 1;
+          // Simple char-based similarity for speed
+          let matches = 0;
+          const shorter = s1.length < s2.length ? s1 : s2;
+          const longer = s1.length < s2.length ? s2 : s1;
+          for (const char of shorter) {
+            if (longer.includes(char)) matches++;
+          }
+          return matches / maxLen;
+        }
+
+        // Update job status in KV with validated/transformed results
         if (env.MENUS_CACHE) {
           await env.MENUS_CACHE.put(
             `apify-job:${jobId}`,
             JSON.stringify({
               ...(existing || {}),
-              status: "completed",
+              status: jobStatus,
               datasetId: datasetId,
-              runId: runId, // Keep the real runId
+              runId: runId,
               completedAt: new Date().toISOString(),
               resultCount: Array.isArray(data) ? data.length : 0,
-              data: data // Store the actual results
+              _rawResultCount: Array.isArray(data) ? data.length : 0,
+              validation: validationResult,
+              transformedData: transformedData,
+              data: data // Keep raw data for debugging
             }),
             { expirationTtl: 3600 }
           );
@@ -16379,9 +16601,59 @@ const _worker_impl = {
         });
       }
 
+      // Format response for frontend consumption
+      // Frontend expects: { ok, status, data: ValidatedMenuData, validation: MenuValidation }
+      const isCompleted = job.status === "completed" || job.status === "completed_no_match";
+      const hasValidData = job.status === "completed" && !!job.transformedData;
+
+      // Build validation object in frontend-expected format
+      const validationInfo = job.validation ? {
+        confidence: job.validation.confidence || 0,
+        matchedName: job.validation.matchedName || "",
+        requestedName: job.validation.requestedName || job.query || "",
+        alternativeMatches: job.validation.matchCount || 0,
+        rejectedCount: job.validation.rejectedCount || 0,
+      } : null;
+
+      // Build debug info for troubleshooting (only if there were rejections)
+      const debugInfo = job.validation?.rejectedCount > 0 ? {
+        query: job.query || job.expectedRestaurantName || "",
+        resultsCount: job._rawResultCount || 0,
+        rejected: (job.validation.rejectedReasons || []).slice(0, 5).map(r => ({
+          name: r.name,
+          reason: r.reason,
+        })),
+      } : undefined;
+
+      // If validation failed (completed_no_match), return error response
+      if (job.status === "completed_no_match") {
+        return new Response(JSON.stringify({
+          ok: false,
+          status: "completed",
+          error: job.validation?.reason || "No matching restaurant found",
+          validation: validationInfo,
+          debug: debugInfo,
+          jobId,
+        }, null, 2), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      // Return formatted response with transformed data
       return new Response(JSON.stringify({
-        ok: true,
-        ...job
+        ok: hasValidData,
+        status: job.status || "pending",
+        jobId,
+        runId: job.runId,
+        datasetId: job.datasetId,
+        resultCount: job.resultCount,
+        // Return transformed data in frontend-expected format (ValidatedMenuData)
+        data: hasValidData ? job.transformedData : undefined,
+        // Include validation info when job is completed
+        validation: isCompleted ? validationInfo : undefined,
+        debug: debugInfo,
+        // Include error message if completed but no valid data
+        error: !hasValidData && isCompleted ? (job.validation?.reason || "No data available") : undefined,
       }, null, 2), {
         headers: { "content-type": "application/json" }
       });
@@ -16987,9 +17259,23 @@ const _worker_impl = {
     if (pathname === "/api/apify-start" && request.method === "POST") {
       try {
         const body = await request.json().catch(() => ({}));
-        const query = body.query || searchParams.get("query") || "pizza";
-        const address = body.address || searchParams.get("address") || "Miami, FL, USA";
-        const maxRows = Number(body.maxRows || searchParams.get("maxRows") || 15);
+        // Support both 'restaurantName' (frontend) and 'query' (legacy) parameters
+        const query = body.restaurantName || body.query || searchParams.get("query") || searchParams.get("restaurantName");
+        const address = body.address || searchParams.get("address");
+        const maxRows = Number(body.maxRows || searchParams.get("maxRows") || 3);
+
+        if (!query) {
+          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: restaurantName or query" }), {
+            status: 400,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        if (!address) {
+          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: address" }), {
+            status: 400,
+            headers: { "content-type": "application/json" }
+          });
+        }
 
         const result = await startApifyRunAsync(env, query, address, maxRows);
 
@@ -17011,9 +17297,22 @@ const _worker_impl = {
     // GET /api/apify-start - Start via GET for easy testing
     if (pathname === "/api/apify-start" && request.method === "GET") {
       try {
-        const query = searchParams.get("query") || "pizza";
-        const address = searchParams.get("address") || "Miami, FL, USA";
-        const maxRows = Number(searchParams.get("maxRows") || 15);
+        const query = searchParams.get("restaurantName") || searchParams.get("query");
+        const address = searchParams.get("address");
+        const maxRows = Number(searchParams.get("maxRows") || 3);
+
+        if (!query) {
+          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: restaurantName or query" }), {
+            status: 400,
+            headers: { "content-type": "application/json" }
+          });
+        }
+        if (!address) {
+          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: address" }), {
+            status: 400,
+            headers: { "content-type": "application/json" }
+          });
+        }
 
         const result = await startApifyRunAsync(env, query, address, maxRows);
 
