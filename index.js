@@ -8062,7 +8062,7 @@ async function runAllergenMiniLLM(env, input) {
     return { ok: false, error: "missing-openai-api-key" };
   }
 
-  const model = env.OPENAI_MODEL_ALLERGEN || "gpt-4.1-mini";
+  const model = env.OPENAI_MODEL_ALLERGEN || "gpt-4o-mini";
 
   const systemPrompt = `
 You are an expert allergen, FODMAP, and lactose analyst for restaurant dishes.
@@ -8739,7 +8739,7 @@ async function runNutritionMiniLLM(env, input) {
     throw new Error("missing-openai-api-key");
   }
 
-  const model = env.OPENAI_MODEL_NUTRITION || "gpt-4.1-mini";
+  const model = env.OPENAI_MODEL_NUTRITION || "gpt-4o-mini";
 
   const systemPrompt = `
 You are a nutrition coach analyzing a single restaurant dish.
@@ -8879,7 +8879,7 @@ async function runPortionVisionLLM(env, input) {
     env.OPENAI_MODEL_PORTION ||
     env.OPENAI_MODEL_ALLERGEN ||
     env.OPENAI_MODEL_NUTRITION ||
-    "gpt-4.1-mini";
+    "gpt-4o-mini";
 
   const systemPrompt = `
 You are a vision assistant for a food-health app.

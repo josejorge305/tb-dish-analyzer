@@ -21,8 +21,8 @@ service = "tb-metrics-core"
 # and expose a simple JSON API for allergens/lactose per ingredient.
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
-OPENAI_MODEL_ALLERGEN = "gpt-4.1-mini"
-OPENAI_MODEL_NUTRITION = "gpt-4.1-mini"
+OPENAI_MODEL_ALLERGEN = "gpt-4o-mini"
+OPENAI_MODEL_NUTRITION = "gpt-4o-mini"
 PARALLEL_LLM = "true"
 
 
@@ -115,8 +115,8 @@ USDA_FDC_HOST      = "api.nal.usda.gov"
 # === Internal services / URLs ===
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
-OPENAI_MODEL_ALLERGEN = "gpt-4.1-mini"
-OPENAI_MODEL_NUTRITION = "gpt-4.1-mini"
+OPENAI_MODEL_ALLERGEN = "gpt-4o-mini"
+OPENAI_MODEL_NUTRITION = "gpt-4o-mini"
 PARALLEL_LLM = "true"
 FATSECRET_SCOPES = "image-recognition"
 

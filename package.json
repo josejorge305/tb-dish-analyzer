@@ -17,5 +17,8 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@sentry/cloudflare": "^10.32.1"
+  }
 }
