@@ -26064,7 +26064,9 @@ async function runDishAnalysis(env, body, ctx) {
     userFlags: user_flags,
     locale: lang,
     vision_insights: debug.vision_insights || null,
-    plate_components: plateComponents
+    plate_components: plateComponents,
+    // CRITICAL: Include nutrition_summary for organs LLM - this is the primary signal for organ scoring
+    nutrition_summary: finalNutritionSummary || null
   };
 
   let organsLLMResult = null;
