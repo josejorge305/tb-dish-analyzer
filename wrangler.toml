@@ -16,14 +16,35 @@ binding = "metrics_core"
 service = "tb-metrics-core"
 
 [vars]
-# Base URL for our FatSecret proxy running on Render.
-# The proxy will handle OAuth2 token + calls to foods.search / food.get.v5
-# and expose a simple JSON API for allergens/lactose per ingredient.
+ENV = "development"
+WORKER_NAME = "tb-dish-processor"
+GIT_SHA = "manual"
+BUILT_AT = "2025-11-11T00:00:00Z"
+
+# === Tuning / feature flags ===
+FALLBACK_TRIGGER_UNDER = "50"
+HITS_LIMIT = "25"
+
+# === Providers ===
+PROVIDERS = "edamam,spoonacular,openai"
+PROVIDERS_PARSE = "zestful,openai"
+
+# === External hosts ===
+APIFY_UBER_ACTOR_ID = "borderline~ubereats-scraper"
+UBER_RAPID_HOST = "uber-eats-scraper-api.p.rapidapi.com"
+RAPIDAPI_BASE_URL = "https://uber-eats-scraper-api.p.rapidapi.com"
+RAPIDAPI_HOST = "uber-eats-scraper-api.p.rapidapi.com"
+ZESTFUL_RAPID_HOST = "zestful.p.rapidapi.com"
+ZESTFUL_DAILY_CAP = "5500"
+USDA_FDC_HOST = "api.nal.usda.gov"
+
+# === Internal services / URLs ===
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
 PROXY_API_KEY = "supersecret123"
 OPENAI_MODEL_ALLERGEN = "gpt-4o-mini"
 OPENAI_MODEL_NUTRITION = "gpt-4o-mini"
 PARALLEL_LLM = "true"
+FATSECRET_SCOPES = "image-recognition"
 
 
 # --- D1 (default env) ---
@@ -55,15 +76,11 @@ binding = "R2_BUCKET"
 bucket_name = "tb-analysis-cache"
 
 # --- QUEUE PRODUCER (default env) ---
+# Note: Queue consumer is only in production to avoid conflicts
+# (a queue can only have one consumer at a time)
 [[queues.producers]]
 binding = "ANALYSIS_QUEUE"
 queue = "tb-dish-analysis-queue"
-
-[[queues.consumers]]
-queue = "tb-dish-analysis-queue"
-max_batch_size = 10
-max_batch_timeout = 30
-max_retries = 3
 
 
 
@@ -162,6 +179,13 @@ bucket_name = "tb-analysis-cache"
 [[env.production.queues.producers]]
 binding = "ANALYSIS_QUEUE"
 queue = "tb-dish-analysis-queue"
+
+# --- QUEUE CONSUMER (production only) ---
+[[env.production.queues.consumers]]
+queue = "tb-dish-analysis-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
 
 # --- CRON TRIGGERS (production) ---
 # Every 5 minutes: process seeding ticks and daypart sampling jobs

@@ -1752,6 +1752,7 @@ function isBannedSectionName(sectionName) {
   if (!s) return false;
 
   const bannedExact = [
+    // Drink sections
     "drinks",
     "beverages",
     "soft drinks",
@@ -1761,6 +1762,31 @@ function isBannedSectionName(sectionName) {
     "wine",
     "bar",
     "alcohol",
+    "water",
+    "waters",
+    "bottled water",
+    "sparkling water",
+    "coke",
+    "coca-cola",
+    "coca cola",
+    "pepsi",
+    "sprite",
+    "fanta",
+    "dr pepper",
+    "dr. pepper",
+    "red bull",
+    "redbull",
+    "energy drinks",
+    "juice",
+    "juices",
+    "coffee",
+    "tea",
+    "iced tea",
+    "lemonade",
+    "smoothies",
+    "shakes",
+    "milkshakes",
+    // Utensil/packaging sections
     "utensils",
     "cutlery",
     "plasticware",
@@ -1768,6 +1794,7 @@ function isBannedSectionName(sectionName) {
     "silverware",
     "napkins",
     "packaging",
+    // Add-on/extra sections
     "extras",
     "extra sauces",
     "add-ons",
@@ -1777,8 +1804,14 @@ function isBannedSectionName(sectionName) {
     "sauces & dressings",
     "dressings",
     "condiments",
+    "toppings",
+    "modifications",
+    // Fee sections
     "fees",
-    "charges"
+    "charges",
+    // Merch
+    "merch",
+    "merchandise"
   ];
 
   const bannedContains = [
@@ -1799,7 +1832,19 @@ function isBannedSectionName(sectionName) {
     "charge",
     "packaging",
     "service fee",
-    "delivery fee"
+    "delivery fee",
+    // Drink keywords in section names
+    "beverage",
+    "soda",
+    "drink",
+    "coffee",
+    "tea",
+    "juice",
+    "water",
+    "energy",
+    "smoothie",
+    "shake",
+    "lemonade"
   ];
 
   if (bannedExact.includes(s)) return true;
@@ -4807,17 +4852,20 @@ async function getDailySummary(env, userId, date) {
   const targetDate = date || getTodayISO();
 
   try {
-    const row = await env.D1_DB.prepare(
+    let row = await env.D1_DB.prepare(
       'SELECT * FROM daily_summaries WHERE user_id = ? AND summary_date = ?'
     ).bind(userId, targetDate).first();
 
     if (!row) {
       // Generate fresh summary
       await updateDailySummary(env, userId, targetDate);
-      return await env.D1_DB.prepare(
+      row = await env.D1_DB.prepare(
         'SELECT * FROM daily_summaries WHERE user_id = ? AND summary_date = ?'
       ).bind(userId, targetDate).first();
     }
+
+    // Always parse JSON fields (handles both fresh and existing summaries)
+    if (!row) return null;
 
     return {
       ...row,
@@ -4925,6 +4973,1054 @@ async function removeSavedDish(env, userId, dishId) {
     return { ok: false, error: String(e?.message || e) };
   }
 }
+
+// ---- Water Tracking ----
+
+/**
+ * Get water intake for a specific date
+ * Returns total glasses, target, hydration score, and organ impacts
+ */
+async function getWaterForDate(env, userId, date) {
+  if (!env?.D1_DB || !userId) {
+    return {
+      ok: false,
+      total_glasses: 0,
+      total_ml: 0,
+      target_glasses: 8,
+      hydration_score: 0,
+      organ_impacts: {}
+    };
+  }
+
+  const targetDate = date || getTodayISO();
+
+  try {
+    // Check if user has a custom water target from daily_water_summaries
+    const targetRow = await env.D1_DB.prepare(`
+      SELECT target_glasses FROM daily_water_summaries
+      WHERE user_id = ? AND summary_date = ?
+    `).bind(userId, targetDate).first();
+    const targetGlasses = targetRow?.target_glasses || 8;
+
+    // Get today's water summary
+    const row = await env.D1_DB.prepare(`
+      SELECT total_glasses, total_ml, hydration_score, organ_impacts
+      FROM daily_water_summaries
+      WHERE user_id = ? AND summary_date = ?
+    `).bind(userId, targetDate).first();
+
+    const totalGlasses = row?.total_glasses || 0;
+    const totalMl = row?.total_ml || (totalGlasses * 240); // 240ml per glass
+
+    // Calculate hydration score (0-100)
+    const hydrationScore = row?.hydration_score ?? Math.min(100, Math.round((totalGlasses / targetGlasses) * 100));
+
+    // Parse or calculate organ impacts
+    let organImpacts = {};
+    if (row?.organ_impacts) {
+      try {
+        organImpacts = JSON.parse(row.organ_impacts);
+      } catch {
+        organImpacts = calculateWaterOrganImpacts(hydrationScore);
+      }
+    } else {
+      organImpacts = calculateWaterOrganImpacts(hydrationScore);
+    }
+
+    return {
+      ok: true,
+      date: targetDate,
+      total_glasses: totalGlasses,
+      total_ml: totalMl,
+      target_glasses: targetGlasses,
+      hydration_score: hydrationScore,
+      organ_impacts: organImpacts
+    };
+  } catch (e) {
+    console.error('getWaterForDate error:', e);
+    return {
+      ok: false,
+      total_glasses: 0,
+      total_ml: 0,
+      target_glasses: 8,
+      hydration_score: 0,
+      organ_impacts: {},
+      error: String(e?.message || e)
+    };
+  }
+}
+
+/**
+ * Calculate organ impacts based on hydration score
+ * Dehydration negatively affects kidneys, brain, skin, heart
+ */
+function calculateWaterOrganImpacts(hydrationScore) {
+  const impacts = {};
+
+  if (hydrationScore >= 100) {
+    // Well hydrated - positive impacts
+    impacts.kidney = 10;
+    impacts.brain = 8;
+    impacts.skin = 6;
+    impacts.heart = 5;
+    impacts.liver = 3;
+  } else if (hydrationScore >= 75) {
+    // Adequately hydrated
+    impacts.kidney = 5;
+    impacts.brain = 4;
+    impacts.skin = 3;
+    impacts.heart = 2;
+  } else if (hydrationScore >= 50) {
+    // Mildly dehydrated - neutral to slight negative
+    impacts.kidney = 0;
+    impacts.brain = -2;
+    impacts.skin = -1;
+  } else if (hydrationScore >= 25) {
+    // Moderately dehydrated - negative impacts
+    impacts.kidney = -5;
+    impacts.brain = -5;
+    impacts.skin = -3;
+    impacts.heart = -2;
+  } else {
+    // Severely dehydrated - significant negative impacts
+    impacts.kidney = -10;
+    impacts.brain = -8;
+    impacts.skin = -5;
+    impacts.heart = -4;
+    impacts.liver = -2;
+  }
+
+  return impacts;
+}
+
+/**
+ * Set total water glasses for a date (replaces existing value)
+ */
+async function setWaterForDate(env, userId, glasses, date) {
+  if (!env?.D1_DB || !userId || glasses < 0) {
+    return { ok: false, error: 'invalid_params' };
+  }
+
+  const targetDate = date || getTodayISO();
+  const totalMl = glasses * 240; // 240ml per glass
+  const now = Math.floor(Date.now() / 1000);
+
+  // Calculate hydration score and organ impacts
+  const targetGlasses = 8; // Default target
+  const hydrationScore = Math.min(100, Math.round((glasses / targetGlasses) * 100));
+  const organImpacts = calculateWaterOrganImpacts(hydrationScore);
+
+  try {
+    // Upsert daily_water_summaries
+    await env.D1_DB.prepare(`
+      INSERT INTO daily_water_summaries (user_id, summary_date, total_glasses, total_ml, hydration_score, organ_impacts, last_updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (user_id, summary_date) DO UPDATE SET
+        total_glasses = excluded.total_glasses,
+        total_ml = excluded.total_ml,
+        hydration_score = excluded.hydration_score,
+        organ_impacts = excluded.organ_impacts,
+        last_updated_at = excluded.last_updated_at
+    `).bind(userId, targetDate, glasses, totalMl, hydrationScore, JSON.stringify(organImpacts), now).run();
+
+    return { ok: true, total_glasses: glasses, total_ml: totalMl, hydration_score: hydrationScore, organ_impacts: organImpacts };
+  } catch (e) {
+    console.error('setWaterForDate error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * Log additional water intake (adds to existing)
+ */
+async function logWaterIntake(env, userId, glasses = 1, source = 'manual') {
+  if (!env?.D1_DB || !userId || glasses < 0) {
+    return { ok: false, error: 'invalid_params' };
+  }
+
+  const targetDate = getTodayISO();
+  const mlAmount = glasses * 240;
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    // Get current water summary
+    const current = await env.D1_DB.prepare(`
+      SELECT total_glasses, total_ml, target_glasses FROM daily_water_summaries
+      WHERE user_id = ? AND summary_date = ?
+    `).bind(userId, targetDate).first();
+
+    const newTotal = (current?.total_glasses || 0) + glasses;
+    const newMl = (current?.total_ml || 0) + mlAmount;
+    const targetGlasses = current?.target_glasses || 8;
+
+    // Calculate updated hydration score and organ impacts
+    const hydrationScore = Math.min(100, Math.round((newTotal / targetGlasses) * 100));
+    const organImpacts = calculateWaterOrganImpacts(hydrationScore);
+
+    // Insert into water_logs for history tracking (skip if foreign key fails)
+    try {
+      await env.D1_DB.prepare(`
+        INSERT INTO water_logs (user_id, glasses, ml_amount, log_date, source, logged_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(userId, glasses, mlAmount, targetDate, source, now).run();
+    } catch (logErr) {
+      // Foreign key constraint may fail for new users - continue with summary update
+      console.log('Water log insert skipped (user may not exist in profiles):', logErr?.message);
+    }
+
+    // Upsert daily_water_summaries
+    await env.D1_DB.prepare(`
+      INSERT INTO daily_water_summaries (user_id, summary_date, total_glasses, total_ml, hydration_score, organ_impacts, last_updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (user_id, summary_date) DO UPDATE SET
+        total_glasses = excluded.total_glasses,
+        total_ml = excluded.total_ml,
+        hydration_score = excluded.hydration_score,
+        organ_impacts = excluded.organ_impacts,
+        last_updated_at = excluded.last_updated_at
+    `).bind(userId, targetDate, newTotal, newMl, hydrationScore, JSON.stringify(organImpacts), now).run();
+
+    return { ok: true, glasses: newTotal, ml_amount: newMl, hydration_score: hydrationScore };
+  } catch (e) {
+    console.error('logWaterIntake error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+// ============================
+// AI ASSISTANT SERVICE LAYER
+// ============================
+
+// ---- Superbrain Knowledge Queries ----
+
+/**
+ * Get beneficial compounds for a specific organ
+ */
+async function getOrganBeneficialCompounds(env, organ, limit = 10) {
+  if (!env?.D1_DB || !organ) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT c.name, c.common_name, coe.effect, coe.strength, coe.notes
+      FROM compound_organ_effects coe
+      JOIN compounds c ON c.id = coe.compound_id
+      WHERE coe.organ = ? AND coe.effect = 'benefit' AND c.is_deleted = 0
+      ORDER BY coe.strength DESC
+      LIMIT ?
+    `).bind(organ.toLowerCase(), limit).all();
+    return results || [];
+  } catch (e) {
+    console.error('getOrganBeneficialCompounds error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get ingredients good for specific organs based on compound effects
+ */
+async function getIngredientsForOrgan(env, organ, limit = 15) {
+  if (!env?.D1_DB || !organ) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT DISTINCT i.canonical_name, i.category,
+             GROUP_CONCAT(DISTINCT ib.compound_name) as beneficial_compounds
+      FROM ingredients i
+      JOIN ingredient_bioactives ib ON i.id = ib.ingredient_id
+      WHERE ib.target_organs LIKE ? AND i.is_deleted = 0
+      GROUP BY i.id
+      ORDER BY COUNT(DISTINCT ib.compound_name) DESC
+      LIMIT ?
+    `).bind(`%"${organ.toLowerCase()}"%`, limit).all();
+    return results || [];
+  } catch (e) {
+    // Try alternative query without target_organs
+    try {
+      const { results } = await env.D1_DB.prepare(`
+        SELECT DISTINCT i.canonical_name, i.category,
+               GROUP_CONCAT(DISTINCT c.common_name) as beneficial_compounds
+        FROM ingredients i
+        JOIN ingredient_bioactives ib ON i.id = ib.ingredient_id
+        JOIN compounds c ON LOWER(c.name) = LOWER(ib.compound_name)
+        JOIN compound_organ_effects coe ON coe.compound_id = c.id
+        WHERE coe.organ = ? AND coe.effect = 'benefit' AND i.is_deleted = 0
+        GROUP BY i.id
+        ORDER BY COUNT(DISTINCT coe.compound_id) DESC
+        LIMIT ?
+      `).bind(organ.toLowerCase(), limit).all();
+      return results || [];
+    } catch (e2) {
+      console.error('getIngredientsForOrgan error:', e2);
+      return [];
+    }
+  }
+}
+
+/**
+ * Get foods to avoid for user's allergens
+ */
+async function getAllergenFoods(env, allergenCodes) {
+  if (!env?.D1_DB || !allergenCodes?.length) return [];
+
+  try {
+    const placeholders = allergenCodes.map(() => '?').join(',');
+    const { results } = await env.D1_DB.prepare(`
+      SELECT DISTINCT i.canonical_name, ad.display_name as allergen
+      FROM ingredient_allergen_flags iaf
+      JOIN ingredients i ON i.id = iaf.ingredient_id
+      JOIN allergen_definitions ad ON ad.allergen_code IN (${placeholders})
+      WHERE iaf.confidence IN ('definite', 'likely') AND i.is_deleted = 0
+      LIMIT 30
+    `).bind(...allergenCodes).all();
+    return results || [];
+  } catch (e) {
+    console.error('getAllergenFoods error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get low FODMAP alternatives for common foods
+ */
+async function getLowFodmapAlternatives(env, limit = 15) {
+  if (!env?.D1_DB) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT i.canonical_name, i.category,
+             (ifp.fructose + ifp.lactose + ifp.fructan + ifp.gos + ifp.polyol) as fodmap_score
+      FROM ingredient_fodmap_profile ifp
+      JOIN ingredients i ON i.id = ifp.ingredient_id
+      WHERE (ifp.fructose + ifp.lactose + ifp.fructan + ifp.gos + ifp.polyol) <= 3
+        AND i.is_deleted = 0
+      ORDER BY fodmap_score ASC
+      LIMIT ?
+    `).bind(limit).all();
+    return results || [];
+  } catch (e) {
+    console.error('getLowFodmapAlternatives error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get high protein foods
+ */
+async function getHighProteinFoods(env, limit = 15) {
+  if (!env?.D1_DB) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT i.canonical_name, i.category, ins.protein_g
+      FROM ingredient_nutrients_sources ins
+      JOIN ingredients i ON i.id = ins.ingredient_id
+      WHERE ins.protein_g > 15 AND i.is_deleted = 0
+      ORDER BY ins.protein_g DESC
+      LIMIT ?
+    `).bind(limit).all();
+    return results || [];
+  } catch (e) {
+    console.error('getHighProteinFoods error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get high fiber foods
+ */
+async function getHighFiberFoods(env, limit = 15) {
+  if (!env?.D1_DB) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT i.canonical_name, i.category, ins.fiber_g
+      FROM ingredient_nutrients_sources ins
+      JOIN ingredients i ON i.id = ins.ingredient_id
+      WHERE ins.fiber_g > 5 AND i.is_deleted = 0
+      ORDER BY ins.fiber_g DESC
+      LIMIT ?
+    `).bind(limit).all();
+    return results || [];
+  } catch (e) {
+    console.error('getHighFiberFoods error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get organ systems and their descriptions
+ */
+async function getOrganSystems(env) {
+  if (!env?.D1_DB) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT organ, system, description FROM organ_systems
+    `).all();
+    return results || [];
+  } catch (e) {
+    console.error('getOrganSystems error:', e);
+    return [];
+  }
+}
+
+/**
+ * Search for specific ingredients/foods
+ */
+async function searchIngredients(env, query, limit = 10) {
+  if (!env?.D1_DB || !query) return [];
+
+  try {
+    // Try FTS first
+    const { results } = await env.D1_DB.prepare(`
+      SELECT i.canonical_name, i.category, i.subcategory
+      FROM ingredients i
+      WHERE i.canonical_name LIKE ? AND i.is_deleted = 0
+      ORDER BY i.canonical_name
+      LIMIT ?
+    `).bind(`%${query}%`, limit).all();
+    return results || [];
+  } catch (e) {
+    console.error('searchIngredients error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get additives to watch out for
+ */
+async function getAdditiveWarnings(env) {
+  if (!env?.D1_DB) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT additive_code, additive_name, additive_class, risk_level, concerns
+      FROM additive_definitions
+      WHERE risk_level IN ('caution', 'limit', 'avoid')
+      ORDER BY
+        CASE risk_level
+          WHEN 'avoid' THEN 1
+          WHEN 'limit' THEN 2
+          WHEN 'caution' THEN 3
+        END
+      LIMIT 20
+    `).all();
+    return (results || []).map(r => ({
+      ...r,
+      concerns: r.concerns ? JSON.parse(r.concerns) : []
+    }));
+  } catch (e) {
+    console.error('getAdditiveWarnings error:', e);
+    return [];
+  }
+}
+
+/**
+ * Build context for AI Assistant from user data
+ * Gathers profile, today's meals, summary, allergens, organ priorities
+ * NOW INCLUDES: Superbrain knowledge for personalized recommendations
+ */
+async function buildAssistantContext(env, userId) {
+  if (!env?.D1_DB || !userId) {
+    return { ok: false, error: 'missing_db_or_user' };
+  }
+
+  const today = getTodayISO();
+
+  try {
+    // Gather all user context in parallel
+    const [profile, allergens, organPriorities, meals, summary, targets, water] = await Promise.all([
+      getUserProfile(env, userId),
+      getUserAllergens(env, userId),
+      getUserOrganPriorities(env, userId),
+      getMealsForDate(env, userId, today),
+      getDailySummary(env, userId, today),
+      getUserDailyTargets(env, userId),
+      getWaterForDate(env, userId, today)
+    ]);
+
+    // Get prioritized organs for superbrain queries
+    const prioritizedOrgans = organPriorities
+      .filter(o => o.is_starred || o.priority_rank)
+      .sort((a, b) => (a.priority_rank || 999) - (b.priority_rank || 999))
+      .map(o => o.organ_code);
+
+    // Query superbrain knowledge based on user's priorities
+    const superbrainPromises = [];
+
+    // Get beneficial foods for top 3 priority organs
+    const topOrgans = prioritizedOrgans.slice(0, 3);
+    for (const organ of topOrgans) {
+      superbrainPromises.push(
+        getOrganBeneficialCompounds(env, organ, 5).then(r => ({ organ, compounds: r }))
+      );
+      superbrainPromises.push(
+        getIngredientsForOrgan(env, organ, 8).then(r => ({ organ, foods: r }))
+      );
+    }
+
+    // Get allergen-related foods to avoid
+    const allergenCodes = allergens.map(a => a.allergen_code);
+    if (allergenCodes.length > 0) {
+      superbrainPromises.push(getAllergenFoods(env, allergenCodes).then(r => ({ allergenFoods: r })));
+    }
+
+    // Check if user has FODMAP sensitivity
+    const hasFodmap = allergenCodes.includes('fodmap') || allergenCodes.includes('ibs');
+    if (hasFodmap) {
+      superbrainPromises.push(getLowFodmapAlternatives(env, 10).then(r => ({ lowFodmapFoods: r })));
+    }
+
+    // Get general nutrition helpers
+    superbrainPromises.push(getHighProteinFoods(env, 10).then(r => ({ highProteinFoods: r })));
+    superbrainPromises.push(getHighFiberFoods(env, 10).then(r => ({ highFiberFoods: r })));
+    superbrainPromises.push(getAdditiveWarnings(env).then(r => ({ additiveWarnings: r })));
+    superbrainPromises.push(getOrganSystems(env).then(r => ({ organSystems: r })));
+
+    const superbrainResults = await Promise.all(superbrainPromises);
+
+    // Organize superbrain data
+    const superbrain = {
+      organCompounds: {},
+      organFoods: {},
+      allergenFoods: [],
+      lowFodmapFoods: [],
+      highProteinFoods: [],
+      highFiberFoods: [],
+      additiveWarnings: [],
+      organSystems: []
+    };
+
+    for (const result of superbrainResults) {
+      if (result.organ && result.compounds) {
+        superbrain.organCompounds[result.organ] = result.compounds;
+      } else if (result.organ && result.foods) {
+        superbrain.organFoods[result.organ] = result.foods;
+      } else if (result.allergenFoods) {
+        superbrain.allergenFoods = result.allergenFoods;
+      } else if (result.lowFodmapFoods) {
+        superbrain.lowFodmapFoods = result.lowFodmapFoods;
+      } else if (result.highProteinFoods) {
+        superbrain.highProteinFoods = result.highProteinFoods;
+      } else if (result.highFiberFoods) {
+        superbrain.highFiberFoods = result.highFiberFoods;
+      } else if (result.additiveWarnings) {
+        superbrain.additiveWarnings = result.additiveWarnings;
+      } else if (result.organSystems) {
+        superbrain.organSystems = result.organSystems;
+      }
+    }
+
+    // Calculate age from date_of_birth
+    let age = null;
+    if (profile?.date_of_birth) {
+      const birthDate = new Date(profile.date_of_birth);
+      const today = new Date();
+      age = today.getFullYear() - birthDate.getFullYear();
+      const m = today.getMonth() - birthDate.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+    }
+
+    // Format meals for context
+    const formattedMeals = meals.map(m => ({
+      name: m.dish_name,
+      time: m.meal_type,
+      calories: m.calories,
+      protein_g: m.protein_g,
+      carbs_g: m.carbs_g,
+      fat_g: m.fat_g,
+      organ_impacts: m.organ_impacts,
+      risk_flags: m.risk_flags
+    }));
+
+    // Build allergen list
+    const allergenList = allergens.map(a => ({
+      name: a.allergen_code,
+      severity: a.severity
+    }));
+
+    return {
+      ok: true,
+      context: {
+        user: {
+          sex: profile?.biological_sex || null,
+          age,
+          weight_kg: profile?.current_weight_kg || null,
+          height_cm: profile?.height_cm || null,
+          activity_level: profile?.activity_level || 'moderate',
+          goals: profile?.goals ? JSON.parse(profile.goals) : [profile?.primary_goal || 'maintain']
+        },
+        allergens: allergenList,
+        prioritized_organs: prioritizedOrgans,
+        today: {
+          date: today,
+          meals: formattedMeals,
+          meal_count: formattedMeals.length,
+          totals: summary ? {
+            calories: summary.total_calories || 0,
+            protein_g: summary.total_protein_g || 0,
+            carbs_g: summary.total_carbs_g || 0,
+            fat_g: summary.total_fat_g || 0,
+            fiber_g: summary.total_fiber_g || 0,
+            sugar_g: summary.total_sugar_g || 0,
+            sodium_mg: summary.total_sodium_mg || 0
+          } : null,
+          targets: targets ? {
+            calories: targets.calories_target || 2000,
+            protein_g: targets.protein_target_g || 50,
+            fiber_g: targets.fiber_target_g || 25,
+            sugar_limit_g: targets.sugar_limit_g || 50,
+            sodium_limit_mg: targets.sodium_limit_mg || 2300
+          } : null,
+          organ_impacts: summary?.organ_impacts_net || {},
+          water_glasses: water?.total_glasses || 0,
+          water_target: water?.target_glasses || 8
+        },
+        // Superbrain knowledge for recommendations
+        superbrain
+      }
+    };
+  } catch (e) {
+    console.error('buildAssistantContext error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * Build the system prompt for the AI Assistant
+ * Includes superbrain knowledge for personalized food recommendations
+ */
+function buildAssistantSystemPrompt(context) {
+  const { user, allergens, prioritized_organs, today, superbrain } = context;
+
+  let systemPrompt = `You are a friendly, knowledgeable nutrition coach for the Tummy Buddy app. Your role is to help users make better food choices based on their personal health profile, today's eating, and scientific knowledge about foods and their effects on the body.
+
+IMPORTANT RULES:
+- Be conversational but concise (2-3 sentences when possible)
+- Always consider the user's allergens and sensitivities - NEVER suggest foods they should avoid
+- Focus on their prioritized organs when making suggestions
+- Use the SUPERBRAIN KNOWLEDGE below to make specific, science-backed food recommendations
+- Reference their actual meals and progress from today
+- Provide actionable, specific advice
+- If discussing medical conditions, add a brief disclaimer about consulting healthcare providers
+- Be encouraging and supportive, not judgmental
+
+USER PROFILE:
+`;
+
+  if (user.sex) systemPrompt += `- Sex: ${user.sex}\n`;
+  if (user.age) systemPrompt += `- Age: ${user.age} years\n`;
+  if (user.weight_kg) systemPrompt += `- Weight: ${user.weight_kg} kg\n`;
+  if (user.activity_level) systemPrompt += `- Activity level: ${user.activity_level}\n`;
+  if (user.goals?.length) systemPrompt += `- Goals: ${user.goals.join(', ')}\n`;
+
+  if (allergens.length > 0) {
+    systemPrompt += `\nALLERGENS/SENSITIVITIES (MUST AVOID):\n`;
+    for (const a of allergens) {
+      systemPrompt += `- ${a.name} (${a.severity})\n`;
+    }
+  }
+
+  if (prioritized_organs.length > 0) {
+    systemPrompt += `\nPRIORITY ORGANS (user cares about these most):\n`;
+    systemPrompt += prioritized_organs.join(', ') + '\n';
+  }
+
+  // ========================================
+  // SUPERBRAIN KNOWLEDGE SECTION
+  // ========================================
+  if (superbrain) {
+    systemPrompt += `\n========================================\nSUPERBRAIN KNOWLEDGE (use this for recommendations):\n========================================\n`;
+
+    // Organ-specific beneficial compounds and foods
+    if (Object.keys(superbrain.organCompounds || {}).length > 0) {
+      systemPrompt += `\nBENEFICIAL COMPOUNDS FOR USER'S PRIORITY ORGANS:\n`;
+      for (const [organ, compounds] of Object.entries(superbrain.organCompounds)) {
+        if (compounds && compounds.length > 0) {
+          systemPrompt += `\n${organ.toUpperCase()}:\n`;
+          for (const c of compounds.slice(0, 5)) {
+            systemPrompt += `  • ${c.name}: ${c.effect_type} effect (strength: ${c.effect_strength}/10)\n`;
+            if (c.mechanism) systemPrompt += `    Mechanism: ${c.mechanism}\n`;
+          }
+        }
+      }
+    }
+
+    if (Object.keys(superbrain.organFoods || {}).length > 0) {
+      systemPrompt += `\nRECOMMENDED FOODS FOR USER'S PRIORITY ORGANS:\n`;
+      for (const [organ, foods] of Object.entries(superbrain.organFoods)) {
+        if (foods && foods.length > 0) {
+          const foodNames = foods.map(f => f.name || f.ingredient_name).filter(Boolean).slice(0, 8);
+          systemPrompt += `${organ}: ${foodNames.join(', ')}\n`;
+        }
+      }
+    }
+
+    // Foods to avoid based on allergens
+    if (superbrain.allergenFoods && superbrain.allergenFoods.length > 0) {
+      systemPrompt += `\nFOODS TO AVOID (based on user's allergens):\n`;
+      for (const food of superbrain.allergenFoods.slice(0, 15)) {
+        const allergenFlags = food.allergen_flags || food.allergen_code;
+        systemPrompt += `  • ${food.name || food.ingredient_name}: contains ${allergenFlags}\n`;
+      }
+    }
+
+    // Low FODMAP alternatives if applicable
+    if (superbrain.lowFodmapFoods && superbrain.lowFodmapFoods.length > 0) {
+      systemPrompt += `\nLOW FODMAP ALTERNATIVES:\n`;
+      const fodmapNames = superbrain.lowFodmapFoods.map(f => f.name || f.ingredient_name).filter(Boolean);
+      systemPrompt += fodmapNames.join(', ') + '\n';
+    }
+
+    // High protein options
+    if (superbrain.highProteinFoods && superbrain.highProteinFoods.length > 0) {
+      systemPrompt += `\nHIGH PROTEIN FOODS:\n`;
+      for (const food of superbrain.highProteinFoods.slice(0, 8)) {
+        const protein = food.protein_per_100g || food.protein_g;
+        systemPrompt += `  • ${food.name || food.ingredient_name}: ${protein}g protein per 100g\n`;
+      }
+    }
+
+    // High fiber options
+    if (superbrain.highFiberFoods && superbrain.highFiberFoods.length > 0) {
+      systemPrompt += `\nHIGH FIBER FOODS:\n`;
+      for (const food of superbrain.highFiberFoods.slice(0, 8)) {
+        const fiber = food.fiber_per_100g || food.fiber_g;
+        systemPrompt += `  • ${food.name || food.ingredient_name}: ${fiber}g fiber per 100g\n`;
+      }
+    }
+
+    // Additive warnings
+    if (superbrain.additiveWarnings && superbrain.additiveWarnings.length > 0) {
+      systemPrompt += `\nADDITIVES TO WATCH FOR:\n`;
+      for (const additive of superbrain.additiveWarnings.slice(0, 8)) {
+        systemPrompt += `  • ${additive.name}: ${additive.concern_level} concern - ${additive.description || 'may affect sensitive individuals'}\n`;
+      }
+    }
+
+    // Available organ systems for context
+    if (superbrain.organSystems && superbrain.organSystems.length > 0) {
+      systemPrompt += `\nORGAN SYSTEMS IN DATABASE:\n`;
+      const organs = superbrain.organSystems.map(o => o.name || o.organ_code).filter(Boolean);
+      systemPrompt += organs.join(', ') + '\n';
+    }
+
+    systemPrompt += `========================================\n`;
+  }
+
+  systemPrompt += `\nTODAY'S PROGRESS (${today.date}):\n`;
+  systemPrompt += `- Meals logged: ${today.meal_count}\n`;
+
+  if (today.meals.length > 0) {
+    systemPrompt += `- Meals: ${today.meals.map(m => m.name).join(', ')}\n`;
+  }
+
+  if (today.totals && today.targets) {
+    const calPct = Math.round((today.totals.calories / today.targets.calories) * 100);
+    systemPrompt += `- Calories: ${today.totals.calories}/${today.targets.calories} (${calPct}%)\n`;
+    systemPrompt += `- Protein: ${Math.round(today.totals.protein_g)}g of ${today.targets.protein_g}g target\n`;
+    systemPrompt += `- Fiber: ${Math.round(today.totals.fiber_g)}g of ${today.targets.fiber_g}g target\n`;
+  }
+
+  systemPrompt += `- Water: ${today.water_glasses}/${today.water_target} glasses\n`;
+
+  if (Object.keys(today.organ_impacts).length > 0) {
+    systemPrompt += `\nORGAN IMPACTS TODAY:\n`;
+    for (const [organ, impact] of Object.entries(today.organ_impacts)) {
+      const sign = impact >= 0 ? '+' : '';
+      systemPrompt += `- ${organ}: ${sign}${impact}\n`;
+    }
+  }
+
+  systemPrompt += `\nWhen the user asks about food recommendations, USE THE SUPERBRAIN KNOWLEDGE above to suggest specific foods that benefit their priority organs while avoiding their allergens.`;
+
+  return systemPrompt;
+}
+
+/**
+ * Call OpenAI or Cloudflare AI for chat completion
+ */
+async function callAssistantLLM(env, systemPrompt, messages, options = {}) {
+  const startTime = Date.now();
+  let modelUsed = null;
+  let tokensUsed = null;
+
+  // Try OpenAI first if available
+  if (env.OPENAI_API_KEY) {
+    try {
+      const model = options.model || env.OPENAI_MODEL || 'gpt-4o-mini';
+      modelUsed = model;
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages
+          ],
+          max_tokens: options.max_tokens || 500,
+          temperature: options.temperature || 0.7
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content || '';
+        tokensUsed = data.usage?.total_tokens || null;
+
+        return {
+          ok: true,
+          content,
+          model_used: modelUsed,
+          tokens_used: tokensUsed,
+          response_time_ms: Date.now() - startTime
+        };
+      }
+    } catch (e) {
+      console.error('OpenAI chat error:', e);
+    }
+  }
+
+  // Fallback to Cloudflare AI (Llama)
+  if (env.AI) {
+    try {
+      modelUsed = '@cf/meta/llama-3.1-8b-instruct';
+
+      const result = await env.AI.run(modelUsed, {
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...messages
+        ],
+        max_tokens: options.max_tokens || 500
+      });
+
+      const content = result?.response || '';
+
+      return {
+        ok: true,
+        content,
+        model_used: modelUsed,
+        tokens_used: null,
+        response_time_ms: Date.now() - startTime
+      };
+    } catch (e) {
+      console.error('Cloudflare AI chat error:', e);
+    }
+  }
+
+  return {
+    ok: false,
+    error: 'No AI provider available',
+    response_time_ms: Date.now() - startTime
+  };
+}
+
+/**
+ * Create a new conversation
+ */
+async function createConversation(env, userId, title = null) {
+  if (!env?.D1_DB || !userId) {
+    return { ok: false, error: 'missing_db_or_user' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO ai_conversations (user_id, title, started_at, last_message_at)
+      VALUES (?, ?, ?, ?)
+    `).bind(userId, title, now, now).run();
+
+    return {
+      ok: true,
+      conversation_id: result.meta?.last_row_id
+    };
+  } catch (e) {
+    console.error('createConversation error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * Save a message to the conversation
+ */
+async function saveMessage(env, conversationId, userId, role, content, metadata = {}) {
+  if (!env?.D1_DB || !conversationId) {
+    return { ok: false, error: 'missing_params' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    // Insert message
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO ai_messages (
+        conversation_id, user_id, role, content,
+        context_snapshot, model_used, tokens_used, response_time_ms, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      conversationId,
+      userId,
+      role,
+      content,
+      metadata.context_snapshot ? JSON.stringify(metadata.context_snapshot) : null,
+      metadata.model_used || null,
+      metadata.tokens_used || null,
+      metadata.response_time_ms || null,
+      now
+    ).run();
+
+    // Update conversation last_message_at
+    await env.D1_DB.prepare(`
+      UPDATE ai_conversations SET last_message_at = ? WHERE id = ?
+    `).bind(now, conversationId).run();
+
+    // Auto-generate title from first user message if not set
+    if (role === 'user') {
+      await env.D1_DB.prepare(`
+        UPDATE ai_conversations
+        SET title = ?
+        WHERE id = ? AND title IS NULL
+      `).bind(content.slice(0, 50), conversationId).run();
+    }
+
+    return {
+      ok: true,
+      message_id: result.meta?.last_row_id
+    };
+  } catch (e) {
+    console.error('saveMessage error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/**
+ * Get conversation history
+ */
+async function getConversationMessages(env, conversationId, limit = 20) {
+  if (!env?.D1_DB || !conversationId) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT id, role, content, model_used, created_at
+      FROM ai_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).bind(conversationId, limit).all();
+
+    return results || [];
+  } catch (e) {
+    console.error('getConversationMessages error:', e);
+    return [];
+  }
+}
+
+/**
+ * Get user's recent conversations
+ */
+async function getUserConversations(env, userId, limit = 10) {
+  if (!env?.D1_DB || !userId) return [];
+
+  try {
+    const { results } = await env.D1_DB.prepare(`
+      SELECT id, title, started_at, last_message_at
+      FROM ai_conversations
+      WHERE user_id = ? AND is_active = 1
+      ORDER BY last_message_at DESC
+      LIMIT ?
+    `).bind(userId, limit).all();
+
+    return results || [];
+  } catch (e) {
+    console.error('getUserConversations error:', e);
+    return [];
+  }
+}
+
+/**
+ * Main chat handler - processes a user message and returns AI response
+ */
+async function handleAssistantChat(env, userId, message, conversationId = null) {
+  if (!env?.D1_DB || !userId || !message) {
+    return { ok: false, error: 'missing_params' };
+  }
+
+  try {
+    // Build user context
+    const contextResult = await buildAssistantContext(env, userId);
+    if (!contextResult.ok) {
+      return { ok: false, error: contextResult.error };
+    }
+
+    // Create or use existing conversation
+    let convId = conversationId;
+    if (!convId) {
+      const convResult = await createConversation(env, userId);
+      if (!convResult.ok) {
+        return { ok: false, error: convResult.error };
+      }
+      convId = convResult.conversation_id;
+    }
+
+    // Get conversation history for context
+    const history = await getConversationMessages(env, convId, 10);
+    const historyMessages = history.map(m => ({
+      role: m.role,
+      content: m.content
+    }));
+
+    // Save user message
+    await saveMessage(env, convId, userId, 'user', message);
+
+    // Build system prompt
+    const systemPrompt = buildAssistantSystemPrompt(contextResult.context);
+
+    // Add current message to history
+    historyMessages.push({ role: 'user', content: message });
+
+    // Call LLM
+    const llmResult = await callAssistantLLM(env, systemPrompt, historyMessages);
+
+    if (!llmResult.ok) {
+      return {
+        ok: false,
+        error: llmResult.error,
+        conversation_id: convId
+      };
+    }
+
+    // Save assistant response
+    await saveMessage(env, convId, userId, 'assistant', llmResult.content, {
+      context_snapshot: contextResult.context,
+      model_used: llmResult.model_used,
+      tokens_used: llmResult.tokens_used,
+      response_time_ms: llmResult.response_time_ms
+    });
+
+    return {
+      ok: true,
+      conversation_id: convId,
+      response: llmResult.content,
+      model_used: llmResult.model_used,
+      response_time_ms: llmResult.response_time_ms
+    };
+  } catch (e) {
+    console.error('handleAssistantChat error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+// ============================
+// END AI ASSISTANT SERVICE LAYER
+// ============================
 
 // ---- Allergen Definitions ----
 
@@ -6767,6 +7863,193 @@ async function lookupCachedBaseRecipe(env, dishName) {
   } catch (e) {
     console.error('lookupCachedBaseRecipe error:', e);
     return null;
+  }
+}
+
+/**
+ * Save a new or update an existing recipe in the D1 cached_recipes table.
+ * This builds up the "universal super brain" knowledge base over time.
+ *
+ * @param {Object} env - Environment with D1_DB binding
+ * @param {Object} recipeData - Recipe data to save
+ * @param {string} recipeData.dishName - Display name of the dish
+ * @param {Array} recipeData.ingredients - List of ingredients with names, quantities, units
+ * @param {Object} recipeData.nutrition - Nutrition summary (energyKcal, protein_g, etc.)
+ * @param {Array} recipeData.allergenFlags - Allergen flags array
+ * @param {Object} recipeData.fodmapFlags - FODMAP flags object
+ * @param {Array} recipeData.dietTags - Diet tags (vegetarian, vegan, etc.)
+ * @param {string} recipeData.source - Data source (edamam, spoonacular, llm, etc.)
+ * @param {number} recipeData.confidence - Confidence score (0-1)
+ * @param {number} recipeData.servings - Number of servings
+ * @returns {Object} - { ok, id, isNew } or { ok: false, error }
+ */
+async function saveRecipeToD1Cache(env, recipeData) {
+  if (!env?.D1_DB || !recipeData?.dishName) {
+    return { ok: false, error: 'Missing D1_DB or dishName' };
+  }
+
+  const normalized = normalizeDishNameForCache(recipeData.dishName);
+  if (!normalized) {
+    return { ok: false, error: 'Failed to normalize dish name' };
+  }
+
+  try {
+    // Check if recipe already exists
+    const existing = await env.D1_DB.prepare(`
+      SELECT id, times_used, confidence FROM cached_recipes
+      WHERE dish_name_normalized = ?
+    `).bind(normalized).first();
+
+    const nutrition = recipeData.nutrition || {};
+    const ingredientsJson = JSON.stringify(recipeData.ingredients || []);
+    const allergenFlagsJson = JSON.stringify(recipeData.allergenFlags || []);
+    const fodmapFlagsJson = JSON.stringify(recipeData.fodmapFlags || null);
+    const dietTagsJson = JSON.stringify(recipeData.dietTags || []);
+    const confidence = recipeData.confidence || 0.8;
+    const servings = recipeData.servings || 1;
+    const source = recipeData.source || 'analysis';
+
+    if (existing) {
+      // Update existing recipe only if new data has higher confidence
+      // or if it's been used many times (community validation)
+      const shouldUpdate = confidence > (existing.confidence || 0) || existing.times_used < 3;
+
+      if (shouldUpdate) {
+        await env.D1_DB.prepare(`
+          UPDATE cached_recipes SET
+            ingredients_json = ?,
+            servings = ?,
+            calories_kcal = ?,
+            protein_g = ?,
+            carbs_g = ?,
+            fat_g = ?,
+            fiber_g = ?,
+            sugar_g = ?,
+            sodium_mg = ?,
+            allergen_flags_json = ?,
+            fodmap_flags_json = ?,
+            diet_tags_json = ?,
+            source = ?,
+            confidence = ?,
+            updated_at = datetime('now')
+          WHERE id = ?
+        `).bind(
+          ingredientsJson,
+          servings,
+          nutrition.energyKcal || null,
+          nutrition.protein_g || null,
+          nutrition.carbs_g || null,
+          nutrition.fat_g || null,
+          nutrition.fiber_g || null,
+          nutrition.sugar_g || null,
+          nutrition.sodium_mg || null,
+          allergenFlagsJson,
+          fodmapFlagsJson,
+          dietTagsJson,
+          source,
+          confidence,
+          existing.id
+        ).run();
+
+        return { ok: true, id: existing.id, isNew: false, updated: true };
+      }
+
+      return { ok: true, id: existing.id, isNew: false, updated: false };
+    }
+
+    // Insert new recipe
+    const result = await env.D1_DB.prepare(`
+      INSERT INTO cached_recipes (
+        dish_name_normalized,
+        dish_name_display,
+        ingredients_json,
+        servings,
+        calories_kcal,
+        protein_g,
+        carbs_g,
+        fat_g,
+        fiber_g,
+        sugar_g,
+        sodium_mg,
+        allergen_flags_json,
+        fodmap_flags_json,
+        diet_tags_json,
+        source,
+        confidence,
+        times_used,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+    `).bind(
+      normalized,
+      recipeData.dishName,
+      ingredientsJson,
+      servings,
+      nutrition.energyKcal || null,
+      nutrition.protein_g || null,
+      nutrition.carbs_g || null,
+      nutrition.fat_g || null,
+      nutrition.fiber_g || null,
+      nutrition.sugar_g || null,
+      nutrition.sodium_mg || null,
+      allergenFlagsJson,
+      fodmapFlagsJson,
+      dietTagsJson,
+      source,
+      confidence
+    ).run();
+
+    console.log(`[D1 Cache] Saved new recipe: ${recipeData.dishName} (normalized: ${normalized})`);
+
+    return { ok: true, id: result.meta?.last_row_id, isNew: true };
+  } catch (e) {
+    console.error('saveRecipeToD1Cache error:', e);
+    return { ok: false, error: String(e) };
+  }
+}
+
+/**
+ * Save recipe ingredients to the cached_recipe_ingredients table.
+ * This enables per-ingredient nutrition and allergen lookups.
+ */
+async function saveRecipeIngredientsToD1(env, recipeId, ingredients) {
+  if (!env?.D1_DB || !recipeId || !ingredients?.length) return;
+
+  try {
+    // Delete existing ingredients for this recipe
+    await env.D1_DB.prepare(`
+      DELETE FROM cached_recipe_ingredients WHERE recipe_id = ?
+    `).bind(recipeId).run();
+
+    // Insert new ingredients
+    for (const ing of ingredients) {
+      const name = typeof ing === 'string' ? ing : (ing.name || ing.ingredient || ing.item || '');
+      if (!name) continue;
+
+      await env.D1_DB.prepare(`
+        INSERT INTO cached_recipe_ingredients (
+          recipe_id, ingredient_name, quantity, unit, preparation,
+          calories_kcal, protein_g, carbs_g, fat_g,
+          allergen_codes, fodmap_category, is_optional, is_garnish
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        recipeId,
+        name,
+        ing.quantity || ing.amount || null,
+        ing.unit || null,
+        ing.preparation || ing.prep_note || null,
+        ing.calories_kcal || null,
+        ing.protein_g || null,
+        ing.carbs_g || null,
+        ing.fat_g || null,
+        ing.allergen_codes ? JSON.stringify(ing.allergen_codes) : null,
+        ing.fodmap_category || null,
+        ing.is_optional ? 1 : 0,
+        ing.is_garnish ? 1 : 0
+      ).run();
+    }
+  } catch (e) {
+    console.error('saveRecipeIngredientsToD1 error:', e);
   }
 }
 
@@ -10596,12 +11879,14 @@ async function processAndCacheDish(env, jobId, dishPayload) {
     });
 
     // Run the actual dish analysis
-    // In background batch mode, we run FULL analysis (including organs)
-    // since user isn't waiting - no need to skip organs and lazy-load
+    // In background batch mode, we run FULL analysis (including organs and full recipe)
+    // since user isn't waiting - no need to skip anything and lazy-load
     const { status, result } = await runDishAnalysis(env, {
       ...dishPayload,
       // Include organs in background processing - we have time
-      skip_organs: false
+      skip_organs: false,
+      // Include full recipe for wine pairing, storage tips, etc.
+      fullRecipe: true
     }, null);
 
     const processingMs = Date.now() - startTime;
@@ -15484,6 +16769,197 @@ const _worker_impl = {
         }, 500);
       }
     }
+
+    // Lightweight endpoint for polling allergens status (used with skip_allergens flow)
+    if (pathname === "/pipeline/allergens-status" && request.method === "GET") {
+      try {
+        const pollKey = url.searchParams.get("key");
+        if (!pollKey) {
+          return okJson({ ok: false, error: "missing_key_param" }, 400);
+        }
+
+        if (!env?.MENUS_CACHE) {
+          return okJson({ ok: false, error: "cache_unavailable" }, 500);
+        }
+
+        const cached = await env.MENUS_CACHE.get(pollKey, "json");
+        if (cached && cached.ok && cached.data) {
+          // Process the cached allergen data to build allergen_flags, fodmap_flags, lactose_flags
+          const a = cached.data;
+          const allergen_flags = [];
+          let fodmap_flags = null;
+          let lactose_flags = null;
+          let lifestyle_tags = [];
+          let lifestyle_checks = null;
+          let allergen_breakdown = null;
+
+          if (a.allergens && typeof a.allergens === "object") {
+            for (const [kind, info] of Object.entries(a.allergens)) {
+              if (!info || typeof info !== "object") continue;
+              const present = info.present || "no";
+              const reason = info.reason || "";
+              if (present === "yes" || present === "maybe") {
+                allergen_flags.push({
+                  kind,
+                  present,
+                  message: reason,
+                  source: "llm-mini"
+                });
+              }
+            }
+          }
+
+          if (a.fodmap && typeof a.fodmap === "object") {
+            fodmap_flags = {
+              level: a.fodmap.level || "unknown",
+              reason: a.fodmap.reason || "",
+              source: "llm-mini"
+            };
+          }
+
+          if (a.lactose && typeof a.lactose === "object") {
+            lactose_flags = {
+              level: a.lactose.level || "unknown",
+              reason: a.lactose.reason || "",
+              source: "llm-mini"
+            };
+          }
+
+          if (Array.isArray(a.lifestyle_tags)) {
+            lifestyle_tags = a.lifestyle_tags;
+          }
+
+          if (a.lifestyle_checks && typeof a.lifestyle_checks === "object") {
+            lifestyle_checks = a.lifestyle_checks;
+          }
+
+          // Process component_allergens if present
+          if (Array.isArray(a.component_allergens) && a.component_allergens.length > 0) {
+            allergen_breakdown = a.component_allergens.map((compEntry, idx) => {
+              const label = compEntry?.component_label || `Component ${idx + 1}`;
+              const role = compEntry?.role || "unknown";
+              const category = compEntry?.category || "other";
+              const componentAllergens = compEntry?.allergens || {};
+              const componentFodmap = compEntry?.fodmap || null;
+              const componentLactose = compEntry?.lactose || null;
+
+              const componentFlags = [];
+              if (componentAllergens && typeof componentAllergens === "object") {
+                for (const key of Object.keys(componentAllergens)) {
+                  const v = componentAllergens[key];
+                  if (!v || typeof v !== "object") continue;
+                  const present = v.present;
+                  const reason = v.reason;
+                  if (present === "yes" || present === "maybe") {
+                    componentFlags.push({
+                      kind: key,
+                      present,
+                      message: reason || "",
+                      source: "llm-mini-component"
+                    });
+                  }
+                }
+              }
+
+              let componentFodmapFlags = null;
+              if (componentFodmap && typeof componentFodmap === "object" && componentFodmap.level) {
+                componentFodmapFlags = {
+                  level: componentFodmap.level,
+                  reason: componentFodmap.reason || "",
+                  source: "llm-mini-component"
+                };
+              }
+
+              let componentLactoseFlags = null;
+              if (componentLactose && typeof componentLactose === "object" && componentLactose.level) {
+                componentLactoseFlags = {
+                  level: componentLactose.level,
+                  reason: componentLactose.reason || "",
+                  source: "llm-mini-component"
+                };
+              }
+
+              return {
+                component_id: `c${idx}`,
+                component: label,
+                role,
+                category,
+                allergen_flags: componentFlags,
+                fodmap_flags: componentFodmapFlags,
+                lactose_flags: componentLactoseFlags
+              };
+            });
+          }
+
+          return okJson({
+            ok: true,
+            ready: true,
+            allergen_flags,
+            fodmap_flags,
+            lactose_flags,
+            lifestyle_tags,
+            lifestyle_checks,
+            allergen_breakdown,
+            provider: cached.provider,
+            tier: cached.tier,
+            timestamp: cached.timestamp,
+            elapsed_ms: cached.elapsed_ms
+          });
+        }
+
+        // Not ready yet
+        return okJson({
+          ok: true,
+          ready: false,
+          message: "Allergens analysis still processing"
+        });
+      } catch (err) {
+        return okJson({
+          ok: false,
+          error: "allergens_status_exception",
+          details: String(err?.message || err)
+        }, 500);
+      }
+    }
+
+    // Lightweight endpoint for polling full recipe status (used with skip_full_recipe flow)
+    if (pathname === "/pipeline/full-recipe-status" && request.method === "GET") {
+      try {
+        const pollKey = url.searchParams.get("key");
+        if (!pollKey) {
+          return okJson({ ok: false, error: "missing_key_param" }, 400);
+        }
+
+        if (!env?.MENUS_CACHE) {
+          return okJson({ ok: false, error: "cache_unavailable" }, 500);
+        }
+
+        const cached = await env.MENUS_CACHE.get(pollKey, "json");
+        if (cached && cached.ok && cached.full_recipe) {
+          return okJson({
+            ok: true,
+            ready: true,
+            full_recipe: cached.full_recipe,
+            timestamp: cached.timestamp,
+            elapsed_ms: cached.elapsed_ms
+          });
+        }
+
+        // Not ready yet
+        return okJson({
+          ok: true,
+          ready: false,
+          message: "Full recipe generation still processing"
+        });
+      } catch (err) {
+        return okJson({
+          ok: false,
+          error: "full_recipe_status_exception",
+          details: String(err?.message || err)
+        }, 500);
+      }
+    }
+
     if (
       pathname === "/pipeline/analyze-dish/card" &&
       request.method === "POST"
@@ -16379,20 +17855,48 @@ const _worker_impl = {
           if (bestMatch) {
             // Transform the matched restaurant to frontend format
             const r = bestMatch.restaurant;
-            const sections = [];
+            let sections = [];
             let totalItems = 0;
             let availableItems = 0;
 
             // Transform menu - Uber Eats format has menu as array of catalog sections
             // Structure: r.menu = [{ catalogName, catalogItems: [...] }, ...]
+            // NOW: Filter noise items and reorganize by canonical categories
             const menuData = Array.isArray(r.menu) ? r.menu : (r.menu?.categories || []);
 
+            // Collect all valid items with their canonical categories
+            const allValidItems = [];
+            let filteredCount = 0;
+
             menuData.forEach((cat, catIdx) => {
-              // Handle both formats: catalogItems (Uber) or items (legacy)
               const items = cat.catalogItems || cat.items || [];
               const sectionName = cat.catalogName || cat.name || cat.title || "Menu";
 
-              const sectionItems = items.map((item, itemIdx) => {
+              // Skip entire banned sections (drinks, utensils, fees, etc.)
+              if (isBannedSectionName(sectionName)) {
+                console.log(`[Apify Webhook] Skipping banned section: "${sectionName}"`);
+                filteredCount += items.length;
+                return;
+              }
+
+              items.forEach((item, itemIdx) => {
+                const itemName = item.title || item.name || item.labelPrimary || "";
+                const itemDescription = item.description || "";
+
+                // Filter out noise items: drinks, utensils, sides, add-ons
+                if (isLikelyDrink(itemName, sectionName)) {
+                  filteredCount++;
+                  return;
+                }
+                if (isLikelyUtensilOrPackaging(itemName, sectionName)) {
+                  filteredCount++;
+                  return;
+                }
+                if (hardBlockItem(itemName, itemDescription)) {
+                  filteredCount++;
+                  return;
+                }
+
                 totalItems++;
                 const isAvailable = item.isAvailable !== false && !item.isSoldOut;
                 if (isAvailable) availableItems++;
@@ -16400,15 +17904,29 @@ const _worker_impl = {
                 // Price handling - Uber returns price in cents
                 let priceText = item.priceTagline || item.priceString || item.priceFormatted || "";
                 if (!priceText && item.price) {
-                  // Price is in cents, convert to dollars
                   priceText = `$${(item.price / 100).toFixed(2)}`;
                 }
 
-                return {
+                // Classify item into canonical category
+                const itemObj = {
+                  name: itemName,
+                  section: sectionName,
+                  description: itemDescription,
+                };
+
+                // Try multiple classifiers in order of specificity
+                let canonicalCategory = classifyWingPlatter(itemObj)
+                  || classifyBowl(itemObj)
+                  || classifyWrapQuesadilla(itemObj)
+                  || classifyBySectionFallback(itemObj)
+                  || classifyCanonicalCategory(itemObj)
+                  || "Other";
+
+                allValidItems.push({
                   id: item.uuid || item.id || `item-${catIdx}-${itemIdx}`,
-                  name: item.title || item.name || item.labelPrimary || "",
-                  description: item.description || item.labelPrimary || "",
-                  menuDescription: item.description || item.labelPrimary || "",
+                  name: itemName,
+                  description: itemDescription,
+                  menuDescription: itemDescription,
                   priceText: priceText,
                   priceCents: item.price || 0,
                   imageUrl: item.imageUrl || item.image || null,
@@ -16417,18 +17935,16 @@ const _worker_impl = {
                   popular: !!item.titleBadge || !!item.popular,
                   rating: null,
                   hasCustomizations: !!item.hasCustomizations,
-                };
-              });
-
-              if (sectionItems.length > 0) {
-                sections.push({
-                  id: cat.catalogSectionUUID || cat.sectionUUID || cat.id || `section-${catIdx}`,
-                  name: sectionName,
-                  items: sectionItems,
-                  itemCount: sectionItems.length,
+                  canonicalCategory: canonicalCategory,
+                  originalSection: sectionName,
                 });
-              }
+              });
             });
+
+            console.log(`[Apify Webhook] Filtered ${filteredCount} noise items, kept ${allValidItems.length} valid items`);
+
+            // Group items by canonical category in proper order
+            sections = groupItemsIntoSections(allValidItems);
 
             // Build transformed data in ValidatedMenuData format
             transformedData = {
@@ -17194,6 +18710,88 @@ const _worker_impl = {
       });
     }
 
+    // OPTIONS preflight for /api/water/* (CORS)
+    if (pathname.startsWith("/api/water") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // GET /api/water - Get water intake for a date
+    if (pathname === "/api/water" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      const date = url.searchParams.get("date") || getTodayISO();
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await getWaterForDate(env, userId, date);
+
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // POST /api/water/log - Log additional water intake (adds to existing)
+    if (pathname === "/api/water/log" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+      const glasses = body?.glasses ?? 1;
+      const source = body?.source || 'manual';
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await logWaterIntake(env, userId, glasses, source);
+
+      return new Response(JSON.stringify(result, null, 2), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // PUT /api/water/set - Set total water glasses for today (replaces existing)
+    if (pathname === "/api/water/set" && request.method === "PUT") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+      const glasses = body?.glasses ?? 0;
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      if (typeof glasses !== 'number' || glasses < 0) {
+        return new Response(JSON.stringify({ ok: false, error: "invalid_glasses_value" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await setWaterForDate(env, userId, glasses);
+
+      return new Response(JSON.stringify(result, null, 2), {
+        status: result.ok ? 200 : 400,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
     // POST /api/dishes/save - Save a dish to favorites
     if (pathname === "/api/dishes/save" && request.method === "POST") {
       const body = await readJsonSafe(request);
@@ -17251,6 +18849,101 @@ const _worker_impl = {
         headers: { "content-type": "application/json", ...CORS_ALL }
       });
     }
+
+    // ========== AI ASSISTANT API ENDPOINTS ==========
+
+    // OPTIONS preflight for /api/assistant/* (CORS)
+    if (pathname.startsWith("/api/assistant") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // POST /api/assistant/chat - Send a message to the AI assistant
+    if (pathname === "/api/assistant/chat" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const userId = body?.user_id || url.searchParams.get("user_id");
+      const message = body?.message;
+      const conversationId = body?.conversation_id || null;
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      if (!message || typeof message !== 'string' || message.trim().length === 0) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_or_empty_message" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await handleAssistantChat(env, userId, message.trim(), conversationId);
+
+      return new Response(JSON.stringify(result, null, 2), {
+        status: result.ok ? 200 : 500,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/assistant/conversations - Get user's conversation history
+    if (pathname === "/api/assistant/conversations" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+      const limit = parseInt(url.searchParams.get("limit") || "10", 10);
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const conversations = await getUserConversations(env, userId, limit);
+
+      return new Response(JSON.stringify({ ok: true, conversations }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/assistant/conversation/:id - Get messages for a specific conversation
+    if (pathname.match(/^\/api\/assistant\/conversation\/\d+$/) && request.method === "GET") {
+      const conversationId = parseInt(pathname.split("/").pop(), 10);
+      const limit = parseInt(url.searchParams.get("limit") || "50", 10);
+
+      const messages = await getConversationMessages(env, conversationId, limit);
+
+      return new Response(JSON.stringify({ ok: true, conversation_id: conversationId, messages }, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // GET /api/assistant/context - Get current user context (for debugging/preview)
+    if (pathname === "/api/assistant/context" && request.method === "GET") {
+      const userId = url.searchParams.get("user_id");
+
+      if (!userId) {
+        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const result = await buildAssistantContext(env, userId);
+
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // ========== END AI ASSISTANT API ENDPOINTS ==========
 
     // ========== END USER TRACKING API ENDPOINTS ==========
 
@@ -21965,17 +23658,22 @@ OUTPUT FORMAT:
 Return a JSON object with this exact structure:
 {
   "title": "Recipe title",
-  "description": "2-3 sentence appetizing description of the dish",
+  "introduction": "2-3 sentence appetizing description or anecdote about the dish",
   "difficulty": "Easy" | "Medium" | "Hard",
   "prep_time_minutes": number,
   "cook_time_minutes": number,
   "total_time_minutes": number,
   "servings": number,
-  "ingredients": [
+  "ingredient_groups": [
     {
-      "amount": "1 cup",
-      "item": "ingredient name",
-      "prep_note": "diced" | null
+      "group_name": "For the main dish" | "For the sauce" | null,
+      "ingredients": [
+        {
+          "amount": "1 cup",
+          "item": "ingredient name",
+          "prep_note": "diced" | null
+        }
+      ]
     }
   ],
   "equipment": ["list of required equipment"],
@@ -21983,16 +23681,18 @@ Return a JSON object with this exact structure:
     {
       "step": 1,
       "phase": "prep" | "cook" | "assemble" | "serve",
+      "action": "Chop" | "Sauté" | "Mix" | "Bake" | etc,
       "title": "Brief step title",
-      "detail": "Full detailed instruction paragraph",
+      "detail": "Full detailed instruction paragraph with sensory cues",
       "time_minutes": number | null,
-      "tip": "Optional chef's tip" | null
+      "tip": "Optional chef's tip for this step" | null
     }
   ],
   "chef_notes": ["Array of helpful notes, substitutions, or variations"],
   "allergen_warnings": ["List of allergens present"],
-  "storage": "How to store leftovers" | null,
-  "wine_pairing": "Suggested wine or beverage pairing" | null
+  "storage": "How to store leftovers with timing (e.g., 'Refrigerate in airtight container for up to 3 days')",
+  "make_ahead": "Make-ahead tips if applicable (e.g., 'Sauce can be made 2 days ahead')" | null,
+  "wine_pairing": "Suggested wine or beverage pairing with specific recommendation"
 }`;
 
   const userPrompt = `Create a complete cookbook-style recipe for: "${dishName}"
@@ -25262,6 +26962,16 @@ async function runDishAnalysis(env, body, ctx) {
   // Set skip_organs=false explicitly to include organs in the response
   const skipOrgans = body.skip_organs !== false && body.skipOrgans !== false;
 
+  // LATENCY OPTIMIZATION: Skip detailed allergen LLM by default for faster initial response
+  // Basic allergen flags are computed from D1/ingredient data immediately
+  // Detailed component breakdown runs in background and can be polled
+  // Set skip_allergens=false explicitly to include full allergen analysis in the response
+  const skipAllergens = body.skip_allergens !== false && body.skipAllergens !== false;
+
+  // Full recipe runs synchronously by default (provides complete data immediately)
+  // Set skip_full_recipe=true explicitly to run full recipe in background
+  const skipFullRecipe = body.skip_full_recipe === true || body.skipFullRecipe === true;
+
   // basic validation
   if (!dishName) {
     return {
@@ -25319,11 +27029,18 @@ async function runDishAnalysis(env, body, ctx) {
       cacheKey = buildDishCacheKey(body);
       const cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
       if (cached && cached.ok) {
-        cached.debug = cached.debug || {};
-        cached.debug.cache_hit_dish_analysis = true;
-        cached.debug.pipeline_version = PIPELINE_VERSION;
-        cached.debug.total_ms = Date.now() - tStart;
-        return { status: 200, result: cached };
+        // If fullRecipe is requested but cached result doesn't have it, skip cache
+        // and regenerate to include the full_recipe data
+        const wantFullRecipeEarly = body.fullRecipe === true || body.full_recipe === true;
+        if (wantFullRecipeEarly && !cached.full_recipe?.full_recipe) {
+          debug.cache_skip_missing_full_recipe = true;
+        } else {
+          cached.debug = cached.debug || {};
+          cached.debug.cache_hit_dish_analysis = true;
+          cached.debug.pipeline_version = PIPELINE_VERSION;
+          cached.debug.total_ms = Date.now() - tStart;
+          return { status: 200, result: cached };
+        }
       }
     } catch (e) {
       // cache read failure should not break analysis
@@ -26070,6 +27787,7 @@ async function runDishAnalysis(env, body, ctx) {
   };
 
   let organsLLMResult = null;
+  let finalAllergensCacheKey = null; // Cache key for async allergen polling
 
   const tLLMsStart = Date.now();
   let combinedHits = []; // Will be populated after FatSecret completes
@@ -26086,14 +27804,70 @@ async function runDishAnalysis(env, body, ctx) {
         }
       : null;
 
-    const allergenPromise = (async () => {
-      const t0 = Date.now();
-      const res = await runAllergenTieredLLM(env, allergenInput);
-      debug.t_llm_allergen_ms = Date.now() - t0;
-      debug.allergen_llm_provider = res.provider || null;
-      debug.allergen_llm_tier = res.tier || null;
-      return res;
-    })();
+    // LATENCY OPTIMIZATION: Skip detailed allergen LLM if skipAllergens=true
+    // Basic allergen flags are computed from ingredient text immediately
+    // Detailed LLM runs in background and can be polled
+    let allergenPromise;
+    let allergensCacheKey = null;
+
+    if (skipAllergens) {
+      // Build cache key for allergens-only storage
+      allergensCacheKey = `allergens:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+      finalAllergensCacheKey = allergensCacheKey; // Store for response
+
+      // Build basic allergen flags from ingredient text detection (no LLM needed)
+      const basicAllergenFlags = [];
+      const allergenTypes = ["gluten", "milk", "egg", "soy", "peanut", "tree_nut", "fish", "shellfish", "sesame"];
+      for (const kind of allergenTypes) {
+        if (hasEvidenceForAllergen(kind, allergenEvidenceText)) {
+          basicAllergenFlags.push({
+            kind,
+            present: "maybe",
+            message: "Detected from ingredient text (detailed analysis pending)",
+            source: "text-detection"
+          });
+        }
+      }
+
+      // Start detailed allergen LLM in BACKGROUND via waitUntil - doesn't block response
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const t0 = Date.now();
+            const res = await runAllergenTieredLLM(env, allergenInput);
+            const elapsed = Date.now() - t0;
+            if (res.ok && env?.MENUS_CACHE) {
+              // Cache allergen result separately for polling
+              await env.MENUS_CACHE.put(allergensCacheKey, JSON.stringify({
+                ok: true,
+                data: res.data,
+                provider: res.provider || null,
+                tier: res.tier || null,
+                timestamp: Date.now(),
+                elapsed_ms: elapsed
+              }));
+            }
+          } catch (e) {
+            console.error("Background allergen LLM failed:", e);
+          }
+        })());
+      }
+
+      allergenPromise = Promise.resolve({
+        ok: true,
+        skipped: true,
+        data: { allergens: {}, basic_flags: basicAllergenFlags }
+      });
+    } else {
+      allergenPromise = (async () => {
+        const t0 = Date.now();
+        const res = await runAllergenTieredLLM(env, allergenInput);
+        debug.t_llm_allergen_ms = Date.now() - t0;
+        debug.allergen_llm_provider = res.provider || null;
+        debug.allergen_llm_tier = res.tier || null;
+        return res;
+      })();
+    }
 
     // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
     // Organs will run in background via waitUntil and be cached separately
@@ -26181,14 +27955,67 @@ async function runDishAnalysis(env, body, ctx) {
       ...(Array.isArray(inferredIngredientHits) ? inferredIngredientHits : [])
     ];
   } else {
-    allergenMiniResult = await (async () => {
-      const t0 = Date.now();
-      const res = await runAllergenTieredLLM(env, allergenInput);
-      debug.t_llm_allergen_ms = Date.now() - t0;
-      debug.allergen_llm_provider = res.provider || null;
-      debug.allergen_llm_tier = res.tier || null;
-      return res;
-    })();
+    // Non-parallel path: sequential execution
+    let allergensCacheKeySeq = null;
+
+    if (skipAllergens) {
+      // Build cache key for allergens-only storage
+      allergensCacheKeySeq = `allergens:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+      finalAllergensCacheKey = allergensCacheKeySeq; // Store for response
+
+      // Build basic allergen flags from ingredient text detection (no LLM needed)
+      const basicAllergenFlags = [];
+      const allergenTypes = ["gluten", "milk", "egg", "soy", "peanut", "tree_nut", "fish", "shellfish", "sesame"];
+      for (const kind of allergenTypes) {
+        if (hasEvidenceForAllergen(kind, allergenEvidenceText)) {
+          basicAllergenFlags.push({
+            kind,
+            present: "maybe",
+            message: "Detected from ingredient text (detailed analysis pending)",
+            source: "text-detection"
+          });
+        }
+      }
+
+      // Start detailed allergen LLM in BACKGROUND via waitUntil
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const t0 = Date.now();
+            const res = await runAllergenTieredLLM(env, allergenInput);
+            const elapsed = Date.now() - t0;
+            if (res.ok && env?.MENUS_CACHE) {
+              await env.MENUS_CACHE.put(allergensCacheKeySeq, JSON.stringify({
+                ok: true,
+                data: res.data,
+                provider: res.provider || null,
+                tier: res.tier || null,
+                timestamp: Date.now(),
+                elapsed_ms: elapsed
+              }));
+            }
+          } catch (e) {
+            console.error("Background allergen LLM failed:", e);
+          }
+        })());
+      }
+
+      allergenMiniResult = {
+        ok: true,
+        skipped: true,
+        data: { allergens: {}, basic_flags: basicAllergenFlags }
+      };
+    } else {
+      allergenMiniResult = await (async () => {
+        const t0 = Date.now();
+        const res = await runAllergenTieredLLM(env, allergenInput);
+        debug.t_llm_allergen_ms = Date.now() - t0;
+        debug.allergen_llm_provider = res.provider || null;
+        debug.allergen_llm_tier = res.tier || null;
+        return res;
+      })();
+    }
+
     // LATENCY OPTIMIZATION: Skip organs LLM if skip_organs=true
     // Run in background via waitUntil if skipping
     if (skipOrgans) {
@@ -26290,10 +28117,16 @@ async function runDishAnalysis(env, body, ctx) {
     hasData: !!allergenMiniResult.data,
     dataType: typeof allergenMiniResult.data,
     keys: allergenMiniResult.data ? Object.keys(allergenMiniResult.data).slice(0, 10) : null,
-    hasComponentAllergens: allergenMiniResult.data && Array.isArray(allergenMiniResult.data.component_allergens)
+    hasComponentAllergens: allergenMiniResult.data && Array.isArray(allergenMiniResult.data.component_allergens),
+    skipped: allergenMiniResult.skipped || false
   } : null;
 
-  if (
+  // Handle skipped allergen LLM case - use basic flags from text detection
+  if (allergenMiniResult && allergenMiniResult.skipped && allergenMiniResult.data?.basic_flags) {
+    allergen_flags = allergenMiniResult.data.basic_flags;
+    debug.allergen_llm_skipped = true;
+    debug.allergen_basic_flags_count = allergen_flags.length;
+  } else if (
     allergenMiniResult &&
     allergenMiniResult.ok &&
     allergenMiniResult.data &&
@@ -27823,24 +29656,66 @@ async function runDishAnalysis(env, body, ctx) {
 
   // Build Full Recipe if requested (cookbook-style with LLM)
   let full_recipe = null;
+  let fullRecipeCacheKey = null;
+
   if (wantFullRecipe) {
-    const tFullRecipeStart = Date.now();
-    try {
-      full_recipe = await buildFullRecipe(env, {
-        dishName,
-        likelyRecipe: likely_recipe,
-        visionInsights: visionInsightsForRecipe,
-        plateComponents,
-        nutritionSummary: finalNutritionSummary,
-        allergenFlags: allergen_flags,
-        fodmapFlags: fodmap_flags,
-        menuDescription
-      });
-      debug.full_recipe_ms = Date.now() - tFullRecipeStart;
-      debug.full_recipe_method = full_recipe?.generation_method || "unknown";
-    } catch (e) {
-      debug.full_recipe_error = String(e?.message || e);
-      debug.full_recipe_ms = Date.now() - tFullRecipeStart;
+    // Build cache key for full_recipe polling
+    fullRecipeCacheKey = `full_recipe:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}`;
+
+    if (skipFullRecipe) {
+      // LATENCY OPTIMIZATION: Run full recipe LLM in background via waitUntil
+      debug.full_recipe_skipped = true;
+
+      if (ctx && typeof ctx.waitUntil === "function") {
+        ctx.waitUntil((async () => {
+          try {
+            const tFullRecipeStart = Date.now();
+            const result = await buildFullRecipe(env, {
+              dishName,
+              likelyRecipe: likely_recipe,
+              visionInsights: visionInsightsForRecipe,
+              plateComponents,
+              nutritionSummary: finalNutritionSummary,
+              allergenFlags: allergen_flags,
+              fodmapFlags: fodmap_flags,
+              menuDescription
+            });
+            const elapsed = Date.now() - tFullRecipeStart;
+
+            if (result && env?.MENUS_CACHE) {
+              // Cache full_recipe result for polling
+              await env.MENUS_CACHE.put(fullRecipeCacheKey, JSON.stringify({
+                ok: true,
+                full_recipe: result,
+                timestamp: Date.now(),
+                elapsed_ms: elapsed
+              }));
+            }
+          } catch (e) {
+            console.error("Background full recipe LLM failed:", e);
+          }
+        })());
+      }
+    } else {
+      // Synchronous: wait for full recipe
+      const tFullRecipeStart = Date.now();
+      try {
+        full_recipe = await buildFullRecipe(env, {
+          dishName,
+          likelyRecipe: likely_recipe,
+          visionInsights: visionInsightsForRecipe,
+          plateComponents,
+          nutritionSummary: finalNutritionSummary,
+          allergenFlags: allergen_flags,
+          fodmapFlags: fodmap_flags,
+          menuDescription
+        });
+        debug.full_recipe_ms = Date.now() - tFullRecipeStart;
+        debug.full_recipe_method = full_recipe?.generation_method || "unknown";
+      } catch (e) {
+        debug.full_recipe_error = String(e?.message || e);
+        debug.full_recipe_ms = Date.now() - tFullRecipeStart;
+      }
     }
   }
 
@@ -27897,17 +29772,72 @@ async function runDishAnalysis(env, body, ctx) {
       const personalRiskFlags = [];
       const userAllergenCodes = userAllergens.map(a => a.allergen_code);
 
+      // Map allergen variations to canonical codes
+      // e.g., "milk" -> "dairy", "wheat" -> "gluten", etc.
+      const allergenMapping = {
+        'milk': 'dairy',
+        'cheese': 'dairy',
+        'cream': 'dairy',
+        'butter': 'dairy',
+        'yogurt': 'dairy',
+        'whey': 'dairy',
+        'casein': 'dairy',
+        'wheat': 'gluten',
+        'barley': 'gluten',
+        'rye': 'gluten',
+        'spelt': 'gluten',
+        'peanuts': 'peanuts',
+        'peanut': 'peanuts',
+        'tree nuts': 'tree_nuts',
+        'treenut': 'tree_nuts',
+        'trenut': 'tree_nuts',
+        'almonds': 'tree_nuts',
+        'cashews': 'tree_nuts',
+        'walnuts': 'tree_nuts',
+        'shellfish': 'shellfish',
+        'shrimp': 'shellfish',
+        'crab': 'shellfish',
+        'lobster': 'shellfish',
+        'soy': 'soy',
+        'soya': 'soy',
+        'soybeans': 'soy',
+        'egg': 'eggs',
+        'sesame': 'sesame',
+        'fish': 'fish'
+      };
+
       // Check allergen flags against user's allergens
       if (Array.isArray(allergen_flags)) {
         for (const flag of allergen_flags) {
           const flagKind = (flag.kind || flag.allergen || '').toLowerCase();
-          if (userAllergenCodes.includes(flagKind) && (flag.present === 'yes' || flag.present === true)) {
-            personalRiskFlags.push({
-              type: 'allergen',
-              allergen: flagKind,
-              severity: userAllergens.find(a => a.allergen_code === flagKind)?.severity || 'avoid',
-              message: `Contains ${flagKind} - in your avoid list`
-            });
+          const mappedAllergen = allergenMapping[flagKind] || flagKind;
+
+          // Check if this allergen (or its mapped version) is in user's list
+          const matchedUserAllergen = userAllergens.find(a =>
+            a.allergen_code === flagKind || a.allergen_code === mappedAllergen
+          );
+
+          if (matchedUserAllergen) {
+            const isDefinitelyPresent = flag.present === 'yes' || flag.present === true;
+            const isPossiblyPresent = flag.present === 'maybe';
+
+            if (isDefinitelyPresent) {
+              personalRiskFlags.push({
+                type: 'allergen',
+                allergen: flagKind,
+                severity: matchedUserAllergen.severity,
+                certainty: 'definite',
+                message: `Contains ${flagKind} - in your ${matchedUserAllergen.severity} list`
+              });
+            } else if (isPossiblyPresent) {
+              personalRiskFlags.push({
+                type: 'allergen',
+                allergen: flagKind,
+                severity: matchedUserAllergen.severity,
+                certainty: 'possible',
+                message: `May contain ${flagKind} - in your ${matchedUserAllergen.severity} list`
+              });
+            }
           }
         }
       }
@@ -28025,12 +29955,16 @@ async function runDishAnalysis(env, body, ctx) {
     recipe: correctedRecipeResult,
     likely_recipe,
     full_recipe,
+    full_recipe_pending: wantFullRecipe && skipFullRecipe, // Flag for frontend to poll for full recipe
+    full_recipe_poll_key: wantFullRecipe && skipFullRecipe ? fullRecipeCacheKey : null,
     vision_corrections: visionCorrections?.corrections?.length > 0 ? visionCorrections.corrections : null,
     normalized,
     organs,
     organs_pending: skipOrgans, // Flag for frontend to poll for organs
     organs_poll_key: skipOrgans ? `organs:${PIPELINE_VERSION}:${hashShort([dishName, restaurantName].join("|"))}` : null,
     allergen_flags,
+    allergens_pending: skipAllergens, // Flag for frontend to poll for detailed allergens
+    allergens_poll_key: finalAllergensCacheKey,
     allergen_summary,
     allergen_breakdown,
     fodmap_flags,
@@ -28053,23 +29987,75 @@ async function runDishAnalysis(env, body, ctx) {
   };
 
   // ---- store in KV cache (best-effort) ----
+  // TTL: 30 days - dish analysis is stable (recipes, nutrition, allergens don't change)
+  // The PIPELINE_VERSION in the cache key handles invalidation when logic changes
   if (allowCache && cacheKey && env && env.DISH_ANALYSIS_CACHE) {
     try {
       const toCache = { ...result, debug: { ...result.debug } };
+      const ttl30Days = 60 * 60 * 24 * 30; // 30 days
       if (ctx && typeof ctx.waitUntil === "function") {
         ctx.waitUntil(
           env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(toCache), {
-            expirationTtl: 60 * 60 * 12 // 12 hours
+            expirationTtl: ttl30Days
           })
         );
       } else {
         env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(toCache), {
-          expirationTtl: 60 * 60 * 12
+          expirationTtl: ttl30Days
         });
       }
     } catch (e) {
       // do not break response if cache write fails
       debug.cache_write_error = String(e);
+    }
+  }
+
+  // ---- D1 SUPER BRAIN: Save recipe to persistent D1 cache (best-effort, background) ----
+  // Only save if we have valid ingredients and nutrition data (not from D1 cache already)
+  if (env?.D1_DB && !usedD1RecipeCache && likely_recipe?.ingredients?.length > 0) {
+    const d1CachePromise = (async () => {
+      try {
+        // Determine confidence based on data source
+        let confidence = 0.7; // Base confidence for LLM-generated recipes
+        if (recipeResult?.source === 'edamam' || recipeResult?.source === 'spoonacular') {
+          confidence = 0.9; // High confidence for API-sourced recipes
+        } else if (recipeResult?._d1CacheHit) {
+          return; // Skip - already in D1
+        }
+
+        const saveResult = await saveRecipeToD1Cache(env, {
+          dishName: effectiveDishName || dishName,
+          ingredients: likely_recipe.ingredients,
+          nutrition: finalNutritionSummary,
+          allergenFlags: allergen_flags,
+          fodmapFlags: fodmap_flags,
+          dietTags: allergen_lifestyle_tags?.map(t => t.tag) || [],
+          source: recipeResult?.source || 'analysis',
+          confidence,
+          servings: likely_recipe.servings || full_recipe?.full_recipe?.servings || 1
+        });
+
+        if (saveResult.ok && saveResult.isNew && saveResult.id) {
+          // Also save detailed ingredients
+          await saveRecipeIngredientsToD1(env, saveResult.id, likely_recipe.ingredients);
+          debug.d1_cache_write = 'new_recipe';
+          debug.d1_cache_id = saveResult.id;
+        } else if (saveResult.ok && saveResult.updated) {
+          debug.d1_cache_write = 'updated';
+        } else if (saveResult.ok) {
+          debug.d1_cache_write = 'skipped_exists';
+        }
+      } catch (d1Err) {
+        debug.d1_cache_error = String(d1Err);
+      }
+    })();
+
+    // Run in background if possible
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(d1CachePromise);
+    } else {
+      // If no waitUntil, still try but don't await
+      d1CachePromise.catch(e => console.error('D1 cache write failed:', e));
     }
   }
 
