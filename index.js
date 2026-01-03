@@ -221,6 +221,184 @@ function requireAdmin(request, env) {
   return { ok: true };
 }
 
+// ==== Authentication Helpers ================================================
+
+// Hash a token using SHA-256 for storage
+async function hashToken(token) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(token);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = new Uint8Array(hashBuffer);
+  return Array.from(hashArray).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Verify password against stored hash (PBKDF2 format: pbkdf2:iterations:salt:hash)
+async function verifyPassword(password, storedHash) {
+  try {
+    const parts = storedHash.split(":");
+    if (parts[0] !== "pbkdf2" || parts.length !== 4) {
+      return false;
+    }
+
+    const iterations = parseInt(parts[1], 10);
+    const saltHex = parts[2];
+    const expectedHashHex = parts[3];
+
+    // Convert hex salt back to Uint8Array
+    const salt = new Uint8Array(saltHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(password),
+      "PBKDF2",
+      false,
+      ["deriveBits"]
+    );
+
+    const derivedBits = await crypto.subtle.deriveBits(
+      {
+        name: "PBKDF2",
+        salt: salt,
+        iterations: iterations,
+        hash: "SHA-256"
+      },
+      keyMaterial,
+      256
+    );
+
+    const hashArray = new Uint8Array(derivedBits);
+    const computedHashHex = Array.from(hashArray).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    return computedHashHex === expectedHashHex;
+  } catch (e) {
+    console.error("[Auth] Password verification error:", e);
+    return false;
+  }
+}
+
+// Migrate user data from anonymous device user to authenticated user
+async function migrateUserData(env, oldUserId, newUserId) {
+  try {
+    console.log(`[Auth] Migrating data from ${oldUserId} to ${newUserId}`);
+
+    // Check if migration already happened
+    const existing = await env.D1_DB.prepare(
+      "SELECT id FROM device_migrations WHERE old_user_id = ? AND new_user_id = ?"
+    ).bind(oldUserId, newUserId).first();
+
+    if (existing) {
+      console.log("[Auth] Migration already completed");
+      return;
+    }
+
+    // Migrate logged_meals
+    await env.D1_DB.prepare(
+      "UPDATE logged_meals SET user_id = ? WHERE user_id = ?"
+    ).bind(newUserId, oldUserId).run();
+
+    // Migrate saved_dishes
+    await env.D1_DB.prepare(
+      "UPDATE saved_dishes SET user_id = ? WHERE user_id = ?"
+    ).bind(newUserId, oldUserId).run();
+
+    // Migrate water_intake
+    await env.D1_DB.prepare(
+      "UPDATE water_intake SET user_id = ? WHERE user_id = ?"
+    ).bind(newUserId, oldUserId).run();
+
+    // Migrate weight_history
+    await env.D1_DB.prepare(
+      "UPDATE weight_history SET user_id = ? WHERE user_id = ?"
+    ).bind(newUserId, oldUserId).run();
+
+    // Merge profile data if old profile exists and new doesn't have complete data
+    const oldProfile = await env.D1_DB.prepare(
+      "SELECT * FROM user_profiles WHERE user_id = ?"
+    ).bind(oldUserId).first();
+
+    if (oldProfile && oldProfile.profile_completed_at) {
+      const newProfile = await env.D1_DB.prepare(
+        "SELECT * FROM user_profiles WHERE user_id = ?"
+      ).bind(newUserId).first();
+
+      // If new profile is empty, copy over old profile data
+      if (!newProfile || !newProfile.profile_completed_at) {
+        await env.D1_DB.prepare(`
+          UPDATE user_profiles SET
+            biological_sex = COALESCE(biological_sex, ?),
+            date_of_birth = COALESCE(date_of_birth, ?),
+            height_cm = COALESCE(height_cm, ?),
+            current_weight_kg = COALESCE(current_weight_kg, ?),
+            activity_level = COALESCE(activity_level, ?),
+            primary_goal = COALESCE(primary_goal, ?),
+            bmr_kcal = COALESCE(bmr_kcal, ?),
+            tdee_kcal = COALESCE(tdee_kcal, ?),
+            unit_system = COALESCE(unit_system, ?),
+            profile_completed_at = COALESCE(profile_completed_at, ?),
+            updated_at = strftime('%s','now')
+          WHERE user_id = ?
+        `).bind(
+          oldProfile.biological_sex,
+          oldProfile.date_of_birth,
+          oldProfile.height_cm,
+          oldProfile.current_weight_kg,
+          oldProfile.activity_level,
+          oldProfile.primary_goal,
+          oldProfile.bmr_kcal,
+          oldProfile.tdee_kcal,
+          oldProfile.unit_system,
+          oldProfile.profile_completed_at,
+          newUserId
+        ).run();
+      }
+
+      // Migrate allergens
+      await env.D1_DB.prepare(
+        "UPDATE OR IGNORE user_allergens SET user_id = ? WHERE user_id = ?"
+      ).bind(newUserId, oldUserId).run();
+
+      // Migrate organ priorities
+      await env.D1_DB.prepare(
+        "UPDATE OR IGNORE user_organ_priorities SET user_id = ? WHERE user_id = ?"
+      ).bind(newUserId, oldUserId).run();
+    }
+
+    // Record the migration
+    await env.D1_DB.prepare(
+      "INSERT INTO device_migrations (old_user_id, new_user_id) VALUES (?, ?)"
+    ).bind(oldUserId, newUserId).run();
+
+    console.log("[Auth] Migration completed successfully");
+  } catch (e) {
+    console.error("[Auth] Migration error:", e);
+    // Don't throw - migration failures shouldn't block login/register
+  }
+}
+
+// Validate auth token from request header, returns user_id if valid
+async function validateAuthToken(env, request) {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  try {
+    const token = authHeader.slice(7);
+    const tokenHash = await hashToken(token);
+    const now = Math.floor(Date.now() / 1000);
+
+    const authToken = await env.D1_DB.prepare(
+      "SELECT user_id FROM auth_tokens WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?"
+    ).bind(tokenHash, now).first();
+
+    return authToken?.user_id || null;
+  } catch (e) {
+    console.error("[Auth] Token validation error:", e);
+    return null;
+  }
+}
+
 // ==== Step 41 Helpers: ctx + trace =========================================
 // Lightweight per-request context (for consistent analytics headers)
 function makeCtx(env) {
@@ -252,23 +430,35 @@ function pickFloat(query, name, def) {
 }
 
 const EVIDENCE_GUIDELINES = `
-EVIDENCE & EXPLANATION RULES (VERY IMPORTANT):
+EVIDENCE & EXPLANATION RULES (VERY IMPORTANT - MEDICAL GRADE ACCURACY):
+
+CRITICAL: NEVER mention ingredients that are not in the provided input data.
+- ONLY reference ingredients that appear in the recipe/ingredient list provided to you.
+- NEVER invent or assume ingredients that are not explicitly stated.
+- If you are unsure, say "based on typical recipes" but DO NOT claim specific ingredients are present unless you see them in the input.
 
 - Every reason or explanation you output must briefly say WHAT you are claiming and WHY you think it.
 - Always mention WHERE your evidence comes from when relevant:
   - "menu description mentions ..." if you relied on the dish name or menuDescription.
   - "the recipe used for this analysis includes ..." if you relied on the resolved ingredient list (ingredients from recipe / providers).
   - "the nutrition summary for this dish shows ..." if you used the numeric nutrition_summary (kcal, grams, mg).
-  - "typical recipes for this dish usually include ..." only when you are using common recipe patterns.
+  - "typical recipes for this dish usually include ..." only when you are using common recipe patterns AND the ingredient is NOT in the provided data.
   - "based on general nutritional / medical knowledge" for organ impact explanations.
 - Do NOT just say "contains X" without context. Always mention whether the evidence is from:
   - menu text,
   - recipe ingredients,
   - nutrition databases,
   - or typical recipes and general knowledge.
+
+ANTI-HALLUCINATION CHECK: Before mentioning any specific ingredient in your reasons:
+1. Verify it appears in the input data (recipe.ingredients, likely_recipe.ingredients, or menuDescription)
+2. If it does NOT appear, do NOT mention it as being "in this dish"
+3. Only use "typical recipes include..." for general patterns, never for claiming specific ingredients are present
+
 - Example for meatballs:
   - Good: "Typical meatball recipes use egg as a binder, and the recipe used for this analysis includes egg yolks."
   - Bad: "Contains egg yolks." (this hides where the information came from).
+  - BAD (HALLUCINATION): "This dish contains cranberries and grapes" when those are not in the input data.
 `;
 
 /**
@@ -879,13 +1069,15 @@ async function handleOrgansFromDish(url, env, request) {
   const userId =
     url.searchParams.get("user_id") || (body && body.user_id) || null;
   const prefsKey = `prefs:user:${userId || "anon"}`;
-  const user_prefs =
-    (env.USER_PREFS_KV &&
-      (await env.USER_PREFS_KV.get(prefsKey, "json")).catch?.(() => null)) ||
-    (env.USER_PREFS_KV
-      ? await env.USER_PREFS_KV.get(prefsKey, "json")
-      : null) ||
-    {};
+  let user_prefs = {};
+  if (env.USER_PREFS_KV) {
+    try {
+      user_prefs = await env.USER_PREFS_KV.get(prefsKey, "json") || {};
+    } catch (kvErr) {
+      console.warn('[UserPrefs] Failed to fetch user preferences:', kvErr?.message);
+      user_prefs = {};
+    }
+  }
   const ORGANS = await getOrgans(env);
   const method =
     (url.searchParams.get("method") || (body && body.method) || "saute")
@@ -1482,7 +1674,9 @@ Return JSON with an "items" array. Each item: {title, description, section, pric
         let payload = {};
         try {
           payload = JSON.parse(js?.choices?.[0]?.message?.content || "{}");
-        } catch {}
+        } catch (parseErr) {
+          console.warn('[OpenAI Parse] Failed to parse LLM response:', parseErr?.message, 'Raw:', js?.choices?.[0]?.message?.content?.slice(0, 200));
+        }
         const items = Array.isArray(payload.items) ? payload.items : [];
         return { ok: true, items };
       } catch (e) {
@@ -2846,7 +3040,9 @@ Rules:
           ...result,
           _cachedAt: new Date().toISOString()
         }));
-      } catch {}
+      } catch (cacheErr) {
+        console.warn('[ComboCache] Failed to cache combo decomposition:', cacheErr?.message);
+      }
     }
 
     return result;
@@ -4261,7 +4457,7 @@ async function upsertUserProfile(env, userId, profileData) {
       const values = [];
 
       const allowedFields = [
-        'biological_sex', 'date_of_birth', 'height_cm', 'current_weight_kg',
+        'display_name', 'biological_sex', 'date_of_birth', 'height_cm', 'current_weight_kg',
         'activity_level', 'unit_system', 'primary_goal', 'goals', 'bmr_kcal', 'tdee_kcal'
       ];
 
@@ -4308,11 +4504,12 @@ async function upsertUserProfile(env, userId, profileData) {
 
       await env.D1_DB.prepare(`
         INSERT INTO user_profiles (
-          user_id, biological_sex, date_of_birth, height_cm, current_weight_kg,
+          user_id, display_name, biological_sex, date_of_birth, height_cm, current_weight_kg,
           activity_level, unit_system, primary_goal, goals, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         userId,
+        profileData.display_name || null,
         profileData.biological_sex || null,
         profileData.date_of_birth || null,
         profileData.height_cm || null,
@@ -4666,7 +4863,7 @@ async function logMeal(env, userId, mealData) {
   }
 }
 
-async function getMealsForDate(env, userId, date) {
+async function getMealsForDate(env, userId, date, includeFullAnalysis = true) {
   if (!env?.D1_DB || !userId) return [];
   const targetDate = date || getTodayISO();
 
@@ -4677,11 +4874,31 @@ async function getMealsForDate(env, userId, date) {
       ORDER BY logged_at ASC
     `).bind(userId, targetDate).all();
 
-    return (results || []).map(row => ({
+    // Map basic fields
+    const meals = (results || []).map(row => ({
       ...row,
       organ_impacts: row.organ_impacts ? JSON.parse(row.organ_impacts) : null,
-      risk_flags: row.risk_flags ? JSON.parse(row.risk_flags) : []
+      risk_flags: row.risk_flags ? JSON.parse(row.risk_flags) : [],
+      full_analysis: null // Will be populated from R2 if available
     }));
+
+    // Fetch full_analysis from R2 for each meal that has r2_analysis_key
+    if (includeFullAnalysis && env.R2_BUCKET) {
+      await Promise.all(meals.map(async (meal) => {
+        if (meal.r2_analysis_key) {
+          try {
+            const analysis = await r2ReadJSON(env, meal.r2_analysis_key);
+            if (analysis) {
+              meal.full_analysis = analysis;
+            }
+          } catch (e) {
+            console.error('Failed to fetch full_analysis from R2:', meal.r2_analysis_key, e?.message);
+          }
+        }
+      }));
+    }
+
+    return meals;
   } catch (e) {
     console.error('getMealsForDate error:', e);
     return [];
@@ -4721,8 +4938,8 @@ async function updateDailySummary(env, userId, date) {
   const targetDate = date || getTodayISO();
 
   try {
-    // Aggregate meals for the day
-    const meals = await getMealsForDate(env, userId, targetDate);
+    // Aggregate meals for the day (no need for full_analysis here)
+    const meals = await getMealsForDate(env, userId, targetDate, false);
 
     const totals = {
       total_calories: 0,
@@ -5111,6 +5328,15 @@ async function setWaterForDate(env, userId, glasses, date) {
   const organImpacts = calculateWaterOrganImpacts(hydrationScore);
 
   try {
+    // Ensure user profile exists (for consistency with other user operations)
+    const existing = await getUserProfile(env, userId);
+    if (!existing) {
+      await env.D1_DB.prepare(`
+        INSERT INTO user_profiles (user_id, created_at, updated_at)
+        VALUES (?, ?, ?)
+      `).bind(userId, now, now).run();
+    }
+
     // Upsert daily_water_summaries
     await env.D1_DB.prepare(`
       INSERT INTO daily_water_summaries (user_id, summary_date, total_glasses, total_ml, hydration_score, organ_impacts, last_updated_at)
@@ -5435,7 +5661,7 @@ async function buildAssistantContext(env, userId) {
       getUserOrganPriorities(env, userId),
       getMealsForDate(env, userId, today),
       getDailySummary(env, userId, today),
-      getUserDailyTargets(env, userId),
+      getUserTargets(env, userId),
       getWaterForDate(env, userId, today)
     ]);
 
@@ -5595,7 +5821,7 @@ async function buildAssistantContext(env, userId) {
 function buildAssistantSystemPrompt(context) {
   const { user, allergens, prioritized_organs, today, superbrain } = context;
 
-  let systemPrompt = `You are a friendly, knowledgeable nutrition coach for the Tummy Buddy app. Your role is to help users make better food choices based on their personal health profile, today's eating, and scientific knowledge about foods and their effects on the body.
+  let systemPrompt = `You are a friendly, knowledgeable nutrition coach. Your role is to help users make better food choices based on their personal health profile, today's eating, and scientific knowledge about foods and their effects on the body.
 
 IMPORTANT RULES:
 - Be conversational but concise (2-3 sentences when possible)
@@ -6853,7 +7079,9 @@ async function callEdamamNutritionAnalyze(payload, env) {
         const r = await fetch(u);
         const d = await r.json();
         if (typeof d?.calories === "number") sum += d.calories;
-      } catch {}
+      } catch (edamamErr) {
+        console.warn('[Edamam Fallback] Failed to fetch nutrition for ingredient:', line?.slice(0, 50), edamamErr?.message);
+      }
     }
     if (sum > 0) {
       calories = Math.round(sum);
@@ -7479,7 +7707,7 @@ async function lookupIngredientFromSuperBrain(env, ingredientName) {
   try {
     // Step 1: Find ingredient by canonical name or synonym
     let ingredient = await env.D1_DB.prepare(`
-      SELECT i.id, i.canonical_name, i.description
+      SELECT i.id, i.canonical_name
       FROM ingredients i
       WHERE i.canonical_name = ? OR i.canonical_name LIKE ?
       LIMIT 1
@@ -7488,7 +7716,7 @@ async function lookupIngredientFromSuperBrain(env, ingredientName) {
     // Try synonyms if not found directly
     if (!ingredient) {
       ingredient = await env.D1_DB.prepare(`
-        SELECT i.id, i.canonical_name, i.description
+        SELECT i.id, i.canonical_name
         FROM ingredients i
         JOIN ingredient_synonyms s ON s.ingredient_id = i.id
         WHERE s.synonym = ? OR s.synonym LIKE ?
@@ -8578,7 +8806,9 @@ async function enrichWithNutrition(env, rows = []) {
       if (hit) {
         try {
           await putCachedNutrition(env, q, hit);
-        } catch {}
+        } catch (cacheErr) {
+          console.warn('[NutritionCache] Failed to cache nutrition for:', q?.slice(0, 30), cacheErr?.message);
+        }
       }
     }
     return hit ? { type: 'fdc', data: hit, q } : { type: 'none', q };
@@ -9957,6 +10187,9 @@ function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
   const organsArray = Array.isArray(llm.organs) ? llm.organs : [];
   const flags = llm.flags || {};
 
+  // Extract the smart sentences from LLM response
+  const llmSentences = llm.sentences || null;
+
   const normalizedOrgans = organsArray.map((o) => ({
     organ: o.organ || "gut",
     score: typeof o.score === "number" ? o.score : 0,
@@ -9979,7 +10212,9 @@ function mapOrgansLLMToOrgansBlock(llm, existingOrgansBlock) {
     },
     organs: normalizedOrgans.length
       ? normalizedOrgans
-      : (existingOrgansBlock && existingOrgansBlock.organs) || []
+      : (existingOrgansBlock && existingOrgansBlock.organs) || [],
+    // Include LLM-generated smart sentences for display
+    llm_sentences: llmSentences
   };
 
   return block;
@@ -11879,12 +12114,14 @@ async function processAndCacheDish(env, jobId, dishPayload) {
     });
 
     // Run the actual dish analysis
-    // In background batch mode, we run FULL analysis (including organs and full recipe)
+    // In background batch mode, we run FULL analysis (including organs, allergens, and full recipe)
     // since user isn't waiting - no need to skip anything and lazy-load
     const { status, result } = await runDishAnalysis(env, {
       ...dishPayload,
       // Include organs in background processing - we have time
       skip_organs: false,
+      // Include detailed allergen analysis - medical grade accuracy required
+      skip_allergens: false,
       // Include full recipe for wine pairing, storage tips, etc.
       fullRecipe: true
     }, null);
@@ -11941,6 +12178,7 @@ async function processAndCacheDish(env, jobId, dishPayload) {
 
 // Process multiple dishes in parallel with concurrency control
 async function processBatchInBackground(env, batchId, jobs, options = {}) {
+  console.log(`[BATCH-BG] processBatchInBackground started: batchId=${batchId}, jobs=${jobs.length}`);
   const { concurrency = 5 } = options;
   const results = [];
 
@@ -16319,7 +16557,7 @@ const _worker_impl = {
             cuisine: dish.cuisine || body.cuisine || "",
             placeId: dish.placeId || body.placeId || "",
             user_id: body.user_id || body.userId || "",
-            skip_organs: true // Faster initial load, lazy-load organs later
+            skip_organs: false // Include organs for complete health analysis (needed for tracker)
           };
 
           // Check if already cached
@@ -16331,13 +16569,17 @@ const _worker_impl = {
             } catch (e) { /* ignore cache errors */ }
           }
 
+          // Validate cached result has organ data (required for tracker functionality)
+          // Old cached analyses may not have organs - treat as uncached to re-analyze
+          const isCacheValid = cached?.ok && cached?.organs && Array.isArray(cached.organs.organs) && cached.organs.organs.length > 0;
+
           const jobId = generateJobId();
           jobs.push({
             jobId,
             dishName,
             payload,
-            cached: cached?.ok ? true : false,
-            cachedResult: cached?.ok ? cached : null
+            cached: isCacheValid ? true : false,
+            cachedResult: isCacheValid ? cached : null
           });
         }
 
@@ -16370,12 +16612,43 @@ const _worker_impl = {
           })
         ));
 
-        // Start background processing with ctx.waitUntil
-        // This ensures processing continues even if client disconnects
-        if (ctx && uncachedJobs.length > 0) {
+        // Queue each uncached dish for background processing via Cloudflare Queue
+        // This is more reliable than ctx.waitUntil() for long-running tasks
+        console.log(`[BATCH] Queueing ${uncachedJobs.length} dishes for background processing`);
+        if (env?.ANALYSIS_QUEUE && uncachedJobs.length > 0) {
+          try {
+            // Queue jobs in batches (max 100 messages per send)
+            const queueMessages = uncachedJobs.map(job => ({
+              body: {
+                type: 'batch_dish_analysis',
+                batchId,
+                jobId: job.jobId,
+                payload: job.payload
+              }
+            }));
+
+            // Send in chunks of 100
+            for (let i = 0; i < queueMessages.length; i += 100) {
+              const chunk = queueMessages.slice(i, i + 100);
+              await env.ANALYSIS_QUEUE.sendBatch(chunk);
+            }
+            console.log(`[BATCH] Queued ${uncachedJobs.length} dishes successfully`);
+          } catch (queueErr) {
+            console.error("[BATCH] Queue error, falling back to waitUntil:", queueErr?.message);
+            // Fallback to waitUntil if queue fails
+            if (ctx) {
+              ctx.waitUntil(
+                processBatchInBackground(env, batchId, uncachedJobs, { concurrency })
+                  .catch(err => console.error("[BATCH] Background error:", err?.message || err))
+              );
+            }
+          }
+        } else if (ctx && uncachedJobs.length > 0) {
+          // Fallback if queue not available
+          console.log(`[BATCH] Queue not available, using waitUntil for batch ${batchId}`);
           ctx.waitUntil(
             processBatchInBackground(env, batchId, uncachedJobs, { concurrency })
-              .catch(err => console.error("Batch processing error:", err))
+              .catch(err => console.error("[BATCH] Background error:", err?.message || err))
           );
         }
 
@@ -16500,8 +16773,10 @@ const _worker_impl = {
         // Check current job status
         const jobData = await r2ReadJSON(env, `jobs/${jobId}.json`);
 
-        // If already completed, return the result immediately
-        if (jobData?.status === "completed" && jobData?.result) {
+        // If already completed, return the result immediately (only if organs are present)
+        // Old results may not have organs - need to re-analyze
+        const hasValidOrgans = jobData?.result?.organs && Array.isArray(jobData.result.organs.organs) && jobData.result.organs.organs.length > 0;
+        if (jobData?.status === "completed" && jobData?.result && hasValidOrgans) {
           return new Response(
             JSON.stringify({
               ok: true,
@@ -18260,6 +18535,228 @@ const _worker_impl = {
       }
     }
 
+    // ========== GOOGLE PLACES API PROXY ==========
+    // These endpoints proxy Google Places API to keep API key server-side
+
+    // OPTIONS preflight for /api/places/*
+    if (pathname.startsWith("/api/places") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // GET /api/places/autocomplete?input=starbucks - Place autocomplete
+    if (pathname === "/api/places/autocomplete" && request.method === "GET") {
+      const input = searchParams.get("input") || "";
+      if (!input.trim()) {
+        return new Response(JSON.stringify({ ok: true, predictions: [] }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const apiKey = env.GOOGLE_PLACES_API_KEY;
+      if (!apiKey) {
+        console.error("[Places Proxy] GOOGLE_PLACES_API_KEY not configured");
+        return new Response(JSON.stringify({ ok: false, error: "Places API not configured" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const googleUrl = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&types=establishment&components=country:us&key=${apiKey}`;
+        const res = await fetch(googleUrl);
+        const data = await res.json();
+
+        if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+          console.error("[Places Proxy] Autocomplete error:", data.status, data.error_message);
+          return new Response(JSON.stringify({ ok: false, error: data.error_message || data.status }), {
+            status: 502,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const predictions = (data.predictions || []).map(p => ({
+          placeId: p.place_id,
+          description: p.description
+        }));
+
+        return new Response(JSON.stringify({ ok: true, predictions }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Places Proxy] Autocomplete fetch error:", e.message);
+        return new Response(JSON.stringify({ ok: false, error: "Failed to fetch places" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // GET /api/places/details?place_id=ChIJ... - Place details (lat/lng, photos)
+    if (pathname === "/api/places/details" && request.method === "GET") {
+      const placeId = searchParams.get("place_id") || searchParams.get("placeId") || "";
+      if (!placeId) {
+        return new Response(JSON.stringify({ ok: false, error: "place_id required" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const apiKey = env.GOOGLE_PLACES_API_KEY;
+      if (!apiKey) {
+        console.error("[Places Proxy] GOOGLE_PLACES_API_KEY not configured");
+        return new Response(JSON.stringify({ ok: false, error: "Places API not configured" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const googleUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=geometry,photos&key=${apiKey}`;
+        const res = await fetch(googleUrl);
+        const data = await res.json();
+
+        if (data.status !== "OK") {
+          console.error("[Places Proxy] Details error:", data.status, data.error_message);
+          return new Response(JSON.stringify({ ok: false, error: data.error_message || data.status }), {
+            status: 502,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const loc = data.result?.geometry?.location;
+        if (!loc || typeof loc.lat !== "number" || typeof loc.lng !== "number") {
+          return new Response(JSON.stringify({ ok: false, error: "No geometry in response" }), {
+            status: 404,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const photoRef = data.result?.photos?.[0]?.photo_reference || null;
+
+        return new Response(JSON.stringify({
+          ok: true,
+          lat: loc.lat,
+          lng: loc.lng,
+          photoRef
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Places Proxy] Details fetch error:", e.message);
+        return new Response(JSON.stringify({ ok: false, error: "Failed to fetch place details" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // GET /api/places/nearby?lat=40.7128&lng=-74.0060 - Nearby restaurants
+    if (pathname === "/api/places/nearby" && request.method === "GET") {
+      const lat = parseFloat(searchParams.get("lat") || "");
+      const lng = parseFloat(searchParams.get("lng") || "");
+
+      if (isNaN(lat) || isNaN(lng)) {
+        return new Response(JSON.stringify({ ok: false, error: "lat and lng required" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const apiKey = env.GOOGLE_PLACES_API_KEY;
+      if (!apiKey) {
+        console.error("[Places Proxy] GOOGLE_PLACES_API_KEY not configured");
+        return new Response(JSON.stringify({ ok: false, error: "Places API not configured" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const radiusMeters = 800;
+        const googleUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radiusMeters}&type=restaurant&key=${apiKey}`;
+        const res = await fetch(googleUrl);
+        const data = await res.json();
+
+        if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+          console.error("[Places Proxy] Nearby error:", data.status, data.error_message);
+          return new Response(JSON.stringify({ ok: false, error: data.error_message || data.status }), {
+            status: 502,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const results = (data.results || [])
+          .map(r => ({
+            placeId: r.place_id,
+            name: r.name,
+            lat: r.geometry?.location?.lat,
+            lng: r.geometry?.location?.lng
+          }))
+          .filter(p => typeof p.lat === "number" && typeof p.lng === "number");
+
+        return new Response(JSON.stringify({ ok: true, results }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Places Proxy] Nearby fetch error:", e.message);
+        return new Response(JSON.stringify({ ok: false, error: "Failed to fetch nearby places" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // GET /api/places/search?query=pizza%20restaurant - Text search
+    if (pathname === "/api/places/search" && request.method === "GET") {
+      const query = searchParams.get("query") || searchParams.get("q") || "";
+      if (!query.trim()) {
+        return new Response(JSON.stringify({ ok: true, results: [] }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      const apiKey = env.GOOGLE_PLACES_API_KEY;
+      if (!apiKey) {
+        console.error("[Places Proxy] GOOGLE_PLACES_API_KEY not configured");
+        return new Response(JSON.stringify({ ok: false, error: "Places API not configured" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const googleUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query + " restaurant")}&type=restaurant&key=${apiKey}`;
+        const res = await fetch(googleUrl);
+        const data = await res.json();
+
+        if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+          console.error("[Places Proxy] Search error:", data.status, data.error_message);
+          return new Response(JSON.stringify({ ok: false, error: data.error_message || data.status }), {
+            status: 502,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        return new Response(JSON.stringify({ ok: true, results: data.results || [] }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Places Proxy] Search fetch error:", e.message);
+        return new Response(JSON.stringify({ ok: false, error: "Failed to search places" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
     // ========== DISH AUTOCOMPLETE / SPELL SUGGEST ==========
     // GET /api/dish-suggest?q=chiken%20parm&limit=10 - Typo-tolerant dish search
     if (pathname === "/api/dish-suggest" && request.method === "GET") {
@@ -18294,6 +18791,336 @@ const _worker_impl = {
           ok: false,
           error: e.message || "Search failed"
         }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // ========== AUTHENTICATION API ENDPOINTS ==========
+
+    // OPTIONS preflight for /api/auth/*
+    if (pathname.startsWith("/api/auth") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // POST /api/auth/register - Create new account
+    if (pathname === "/api/auth/register" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const { email, password, device_user_id } = body || {};
+
+      if (!email || !password) {
+        return new Response(JSON.stringify({ ok: false, error: "email_and_password_required" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return new Response(JSON.stringify({ ok: false, error: "invalid_email_format" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      // Validate password strength (min 8 chars)
+      if (password.length < 8) {
+        return new Response(JSON.stringify({ ok: false, error: "password_too_short", message: "Password must be at least 8 characters" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        // Check if email already exists
+        const existing = await env.D1_DB.prepare(
+          "SELECT user_id FROM user_credentials WHERE email = ?"
+        ).bind(email.toLowerCase()).first();
+
+        if (existing) {
+          return new Response(JSON.stringify({ ok: false, error: "email_already_registered" }), {
+            status: 409,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Generate new user_id
+        const userId = "user_" + crypto.randomUUID().replace(/-/g, "");
+
+        // Hash password using Web Crypto API (PBKDF2)
+        const encoder = new TextEncoder();
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const keyMaterial = await crypto.subtle.importKey(
+          "raw",
+          encoder.encode(password),
+          "PBKDF2",
+          false,
+          ["deriveBits"]
+        );
+        const derivedBits = await crypto.subtle.deriveBits(
+          {
+            name: "PBKDF2",
+            salt: salt,
+            iterations: 100000,
+            hash: "SHA-256"
+          },
+          keyMaterial,
+          256
+        );
+        const hashArray = new Uint8Array(derivedBits);
+        const saltHex = Array.from(salt).map(b => b.toString(16).padStart(2, "0")).join("");
+        const hashHex = Array.from(hashArray).map(b => b.toString(16).padStart(2, "0")).join("");
+        const passwordHash = `pbkdf2:100000:${saltHex}:${hashHex}`;
+
+        // Create user profile first
+        await env.D1_DB.prepare(
+          "INSERT OR IGNORE INTO user_profiles (user_id, created_at, updated_at) VALUES (?, strftime('%s','now'), strftime('%s','now'))"
+        ).bind(userId).run();
+
+        // Create credentials
+        await env.D1_DB.prepare(
+          "INSERT INTO user_credentials (user_id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, strftime('%s','now'), strftime('%s','now'))"
+        ).bind(userId, email.toLowerCase(), passwordHash).run();
+
+        // If device_user_id provided, migrate data
+        if (device_user_id && device_user_id !== userId) {
+          await migrateUserData(env, device_user_id, userId);
+        }
+
+        // Generate auth token
+        const token = crypto.randomUUID() + "-" + crypto.randomUUID();
+        const tokenHash = await hashToken(token);
+        const expiresAt = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60); // 30 days
+
+        await env.D1_DB.prepare(
+          "INSERT INTO auth_tokens (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, strftime('%s','now'))"
+        ).bind(userId, tokenHash, expiresAt).run();
+
+        return new Response(JSON.stringify({
+          ok: true,
+          user_id: userId,
+          token: token,
+          expires_at: expiresAt
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Auth] Register error:", e);
+        return new Response(JSON.stringify({ ok: false, error: "registration_failed", message: e.message }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // POST /api/auth/login - Login with email/password
+    if (pathname === "/api/auth/login" && request.method === "POST") {
+      const body = await readJsonSafe(request);
+      const { email, password, device_user_id } = body || {};
+
+      if (!email || !password) {
+        return new Response(JSON.stringify({ ok: false, error: "email_and_password_required" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        // Find user by email
+        const creds = await env.D1_DB.prepare(
+          "SELECT user_id, password_hash FROM user_credentials WHERE email = ?"
+        ).bind(email.toLowerCase()).first();
+
+        if (!creds) {
+          return new Response(JSON.stringify({ ok: false, error: "invalid_credentials" }), {
+            status: 401,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Verify password
+        const isValid = await verifyPassword(password, creds.password_hash);
+        if (!isValid) {
+          return new Response(JSON.stringify({ ok: false, error: "invalid_credentials" }), {
+            status: 401,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Update last login
+        await env.D1_DB.prepare(
+          "UPDATE user_credentials SET last_login_at = strftime('%s','now') WHERE user_id = ?"
+        ).bind(creds.user_id).run();
+
+        // If device_user_id provided and different, migrate data
+        if (device_user_id && device_user_id !== creds.user_id) {
+          await migrateUserData(env, device_user_id, creds.user_id);
+        }
+
+        // Generate new auth token
+        const token = crypto.randomUUID() + "-" + crypto.randomUUID();
+        const tokenHash = await hashToken(token);
+        const expiresAt = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60); // 30 days
+
+        await env.D1_DB.prepare(
+          "INSERT INTO auth_tokens (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, strftime('%s','now'))"
+        ).bind(creds.user_id, tokenHash, expiresAt).run();
+
+        return new Response(JSON.stringify({
+          ok: true,
+          user_id: creds.user_id,
+          token: token,
+          expires_at: expiresAt
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Auth] Login error:", e);
+        return new Response(JSON.stringify({ ok: false, error: "login_failed", message: e.message }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // POST /api/auth/logout - Revoke current token
+    if (pathname === "/api/auth/logout" && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const token = authHeader.slice(7);
+        const tokenHash = await hashToken(token);
+
+        await env.D1_DB.prepare(
+          "UPDATE auth_tokens SET revoked_at = strftime('%s','now') WHERE token_hash = ?"
+        ).bind(tokenHash).run();
+
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Auth] Logout error:", e);
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // GET /api/auth/verify - Verify token and get user info
+    if (pathname === "/api/auth/verify" && request.method === "GET") {
+      const authHeader = request.headers.get("Authorization");
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return new Response(JSON.stringify({ ok: false, error: "no_token" }), {
+          status: 401,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const token = authHeader.slice(7);
+        const tokenHash = await hashToken(token);
+        const now = Math.floor(Date.now() / 1000);
+
+        const authToken = await env.D1_DB.prepare(
+          "SELECT user_id, expires_at FROM auth_tokens WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?"
+        ).bind(tokenHash, now).first();
+
+        if (!authToken) {
+          return new Response(JSON.stringify({ ok: false, error: "invalid_or_expired_token" }), {
+            status: 401,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Get user email
+        const creds = await env.D1_DB.prepare(
+          "SELECT email, email_verified FROM user_credentials WHERE user_id = ?"
+        ).bind(authToken.user_id).first();
+
+        return new Response(JSON.stringify({
+          ok: true,
+          user_id: authToken.user_id,
+          email: creds?.email,
+          email_verified: !!creds?.email_verified,
+          expires_at: authToken.expires_at
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Auth] Verify error:", e);
+        return new Response(JSON.stringify({ ok: false, error: "verification_failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // POST /api/auth/refresh - Refresh token (extend expiry)
+    if (pathname === "/api/auth/refresh" && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return new Response(JSON.stringify({ ok: false, error: "no_token" }), {
+          status: 401,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      try {
+        const token = authHeader.slice(7);
+        const tokenHash = await hashToken(token);
+        const now = Math.floor(Date.now() / 1000);
+
+        const authToken = await env.D1_DB.prepare(
+          "SELECT user_id, expires_at FROM auth_tokens WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?"
+        ).bind(tokenHash, now).first();
+
+        if (!authToken) {
+          return new Response(JSON.stringify({ ok: false, error: "invalid_or_expired_token" }), {
+            status: 401,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Revoke old token
+        await env.D1_DB.prepare(
+          "UPDATE auth_tokens SET revoked_at = strftime('%s','now') WHERE token_hash = ?"
+        ).bind(tokenHash).run();
+
+        // Generate new token
+        const newToken = crypto.randomUUID() + "-" + crypto.randomUUID();
+        const newTokenHash = await hashToken(newToken);
+        const expiresAt = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60); // 30 days
+
+        await env.D1_DB.prepare(
+          "INSERT INTO auth_tokens (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, strftime('%s','now'))"
+        ).bind(authToken.user_id, newTokenHash, expiresAt).run();
+
+        return new Response(JSON.stringify({
+          ok: true,
+          user_id: authToken.user_id,
+          token: newToken,
+          expires_at: expiresAt
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("[Auth] Refresh error:", e);
+        return new Response(JSON.stringify({ ok: false, error: "refresh_failed" }), {
           status: 500,
           headers: { "content-type": "application/json", ...CORS_ALL }
         });
@@ -18620,11 +19447,12 @@ const _worker_impl = {
         });
       }
 
-      const [summary, targets, meals, organPriorities] = await Promise.all([
+      const [summary, targets, meals, organPriorities, water] = await Promise.all([
         getDailySummary(env, userId, date),
         getUserTargets(env, userId),
         getMealsForDate(env, userId, date),
-        getUserOrganPriorities(env, userId)
+        getUserOrganPriorities(env, userId),
+        getWaterForDate(env, userId, date)
       ]);
 
       // Sort organ impacts by user priority
@@ -18652,7 +19480,13 @@ const _worker_impl = {
         summary: summary || { meals_logged: 0 },
         targets,
         meals,
-        organ_impacts: sortedOrganImpacts
+        organ_impacts: sortedOrganImpacts,
+        water: water?.ok ? {
+          total_glasses: water.total_glasses,
+          total_ml: water.total_ml,
+          target_glasses: water.target_glasses,
+          hydration_score: water.hydration_score
+        } : null
       }, null, 2), {
         headers: { "content-type": "application/json", ...CORS_ALL }
       });
@@ -26957,16 +27791,15 @@ async function runDishAnalysis(env, body, ctx) {
   // Full recipe generation flag
   const wantFullRecipe = body.fullRecipe === true || body.full_recipe === true;
 
-  // LATENCY OPTIMIZATION: Skip organs LLM by default for faster initial response
-  // Frontend can lazy-load organs when user expands that section
-  // Set skip_organs=false explicitly to include organs in the response
-  const skipOrgans = body.skip_organs !== false && body.skipOrgans !== false;
+  // MEDICAL GRADE: Include organs LLM by default for complete health analysis
+  // Users need accurate organ impact information - this is critical for the app's value
+  // Set skip_organs=true explicitly if you want faster initial response (not recommended)
+  const skipOrgans = body.skip_organs === true || body.skipOrgans === true;
 
-  // LATENCY OPTIMIZATION: Skip detailed allergen LLM by default for faster initial response
-  // Basic allergen flags are computed from D1/ingredient data immediately
-  // Detailed component breakdown runs in background and can be polled
-  // Set skip_allergens=false explicitly to include full allergen analysis in the response
-  const skipAllergens = body.skip_allergens !== false && body.skipAllergens !== false;
+  // MEDICAL GRADE: Include detailed allergen LLM by default for accurate allergen detection
+  // Basic text detection is not sufficient for users with allergies
+  // Set skip_allergens=true explicitly if you want faster initial response (not recommended)
+  const skipAllergens = body.skip_allergens === true || body.skipAllergens === true;
 
   // Full recipe runs synchronously by default (provides complete data immediately)
   // Set skip_full_recipe=true explicitly to run full recipe in background
@@ -28609,17 +29442,47 @@ async function runDishAnalysis(env, body, ctx) {
     let summarySentences = [];
     try {
       if (summary && summary.tummyBarometer) {
-        summarySentences = buildHumanSentences(
-          organs.flags || {},
-          summary.tummyBarometer
-        );
+        // SMART SENTENCES: Prefer LLM-generated sentences over basic count-based sentences
+        // The organs LLM returns a "sentences" object with: overall, allergens, fodmap, organs_overview
+        const llmSentences = organs.llm_sentences;
 
-        let organSentences = [];
-        if (Array.isArray(organs.organs) && organs.organs.length) {
-          organSentences = buildOrganSentences(organs.organs);
+        if (llmSentences && typeof llmSentences === "object") {
+          // Use LLM-generated smart sentences
+          const smartSentences = [];
+          if (llmSentences.overall) smartSentences.push(llmSentences.overall);
+          if (llmSentences.allergens) smartSentences.push(llmSentences.allergens);
+          if (llmSentences.fodmap) smartSentences.push(llmSentences.fodmap);
+          if (llmSentences.organs_overview) smartSentences.push(llmSentences.organs_overview);
+
+          if (smartSentences.length > 0) {
+            summary.sentences = smartSentences;
+            summary.llm_sentences = llmSentences; // Also include structured sentences
+          } else {
+            // Fallback to basic sentences if LLM sentences were empty
+            summarySentences = buildHumanSentences(
+              organs.flags || {},
+              summary.tummyBarometer
+            );
+            let organSentences = [];
+            if (Array.isArray(organs.organs) && organs.organs.length) {
+              organSentences = buildOrganSentences(organs.organs);
+            }
+            summary.sentences = [...summarySentences, ...organSentences];
+          }
+        } else {
+          // Fallback: Use basic count-based sentences when LLM sentences not available
+          summarySentences = buildHumanSentences(
+            organs.flags || {},
+            summary.tummyBarometer
+          );
+
+          let organSentences = [];
+          if (Array.isArray(organs.organs) && organs.organs.length) {
+            organSentences = buildOrganSentences(organs.organs);
+          }
+
+          summary.sentences = [...summarySentences, ...organSentences];
         }
-
-        summary.sentences = [...summarySentences, ...organSentences];
       }
     } catch {}
 
@@ -28731,18 +29594,48 @@ async function runDishAnalysis(env, body, ctx) {
   let summarySentences = [];
   try {
     if (summary && summary.tummyBarometer) {
-      summarySentences = buildHumanSentences(
-        organs.flags || {},
-        summary.tummyBarometer
-      );
+      // SMART SENTENCES: Prefer LLM-generated sentences over basic count-based sentences
+      // The organs LLM returns a "sentences" object with: overall, allergens, fodmap, organs_overview
+      const llmSentences = organs.llm_sentences;
 
-      // Factual organ sentences from organ graph
-      let organSentences = [];
-      if (Array.isArray(organs.organs) && organs.organs.length) {
-        organSentences = buildOrganSentences(organs.organs);
+      if (llmSentences && typeof llmSentences === "object") {
+        // Use LLM-generated smart sentences
+        const smartSentences = [];
+        if (llmSentences.overall) smartSentences.push(llmSentences.overall);
+        if (llmSentences.allergens) smartSentences.push(llmSentences.allergens);
+        if (llmSentences.fodmap) smartSentences.push(llmSentences.fodmap);
+        if (llmSentences.organs_overview) smartSentences.push(llmSentences.organs_overview);
+
+        if (smartSentences.length > 0) {
+          summary.sentences = smartSentences;
+          summary.llm_sentences = llmSentences; // Also include structured sentences
+        } else {
+          // Fallback to basic sentences if LLM sentences were empty
+          summarySentences = buildHumanSentences(
+            organs.flags || {},
+            summary.tummyBarometer
+          );
+          let organSentences = [];
+          if (Array.isArray(organs.organs) && organs.organs.length) {
+            organSentences = buildOrganSentences(organs.organs);
+          }
+          summary.sentences = [...summarySentences, ...organSentences];
+        }
+      } else {
+        // Fallback: Use basic count-based sentences when LLM sentences not available
+        summarySentences = buildHumanSentences(
+          organs.flags || {},
+          summary.tummyBarometer
+        );
+
+        // Factual organ sentences from organ graph
+        let organSentences = [];
+        if (Array.isArray(organs.organs) && organs.organs.length) {
+          organSentences = buildOrganSentences(organs.organs);
+        }
+
+        summary.sentences = [...summarySentences, ...organSentences];
       }
-
-      summary.sentences = [...summarySentences, ...organSentences];
     }
   } catch {}
 
@@ -31002,7 +31895,64 @@ export default {
     return withTbWhoamiHeaders(response, env);
   },
   queue: async (batch, env, ctx) => {
-    return handleQueue(batch, env, ctx);
+    // Process queue messages for batch dish analysis
+    console.log(`[QUEUE] Processing ${batch.messages.length} messages`);
+
+    for (const message of batch.messages) {
+      try {
+        const msg = message.body;
+        console.log(`[QUEUE] Message type: ${msg?.type}, jobId: ${msg?.jobId}`);
+
+        if (msg?.type === 'batch_dish_analysis' && msg?.jobId && msg?.payload) {
+          // Process the dish analysis
+          const { jobId, batchId, payload } = msg;
+          console.log(`[QUEUE] Processing dish: ${payload.dishName}`);
+
+          try {
+            // Run the dish analysis
+            const result = await processAndCacheDish(env, jobId, payload);
+            console.log(`[QUEUE] Completed ${payload.dishName}: ${result?.status || 'unknown'}`);
+
+            // Update batch status if batchId provided
+            if (batchId) {
+              try {
+                const batchData = await r2ReadJSON(env, `batches/${batchId}.json`);
+                if (batchData) {
+                  const completedCount = (batchData.completed || 0) + (result?.ok ? 1 : 0);
+                  const failedCount = (batchData.failed || 0) + (result?.ok ? 0 : 1);
+                  const totalPending = batchData.pending || batchData.total || 0;
+
+                  await r2WriteJSON(env, `batches/${batchId}.json`, {
+                    ...batchData,
+                    completed: completedCount,
+                    failed: failedCount,
+                    status: (completedCount + failedCount >= totalPending) ? 'completed' : 'processing'
+                  });
+                }
+              } catch (batchUpdateErr) {
+                console.error(`[QUEUE] Batch update error: ${batchUpdateErr?.message}`);
+              }
+            }
+          } catch (analysisErr) {
+            console.error(`[QUEUE] Analysis error for ${payload.dishName}: ${analysisErr?.message}`);
+            // Update job status to failed
+            await r2WriteJSON(env, `jobs/${jobId}.json`, {
+              id: jobId,
+              status: "error",
+              error_at: new Date().toISOString(),
+              dish_name: payload.dishName,
+              error: String(analysisErr?.message || analysisErr)
+            });
+          }
+        }
+
+        // Acknowledge the message
+        message.ack();
+      } catch (msgErr) {
+        console.error(`[QUEUE] Message processing error: ${msgErr?.message}`);
+        message.retry();
+      }
+    }
   },
   scheduled: async (controller, env, ctx) => {
     return handleScheduled(controller, env, ctx);
