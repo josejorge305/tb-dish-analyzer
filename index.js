@@ -405,42 +405,89 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Wait for search results
     await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => null);
 
-    // Find restaurant links
-    const storeLinks = await page.$$eval('a[href*="/store/"]', (links, searchQuery) => {
-      const normalizedQuery = searchQuery.toLowerCase();
-      return links
-        .filter(link => {
-          const text = link.textContent?.toLowerCase() || '';
-          const href = link.href || '';
-          // Match restaurant name in link text
-          return text.includes(normalizedQuery.split(' ')[0]) ||
-                 href.toLowerCase().includes(normalizedQuery.replace(/\s+/g, '-'));
-        })
-        .slice(0, 5)
-        .map(link => ({
+    // Find ALL restaurant links first, then score them by similarity
+    const allStoreLinks = await page.$$eval('a[href*="/store/"]', (links) => {
+      // Extract restaurant name from link - look for the main text
+      return links.slice(0, 20).map(link => {
+        // Try to find restaurant name in link structure
+        // Uber Eats typically has: Restaurant Name followed by rating/delivery info
+        let text = link.textContent?.trim() || '';
+        // Extract just the restaurant name (usually first line before ratings/numbers)
+        const nameMatch = text.match(/^([A-Za-z0-9\s&''\-\(\)]+?)(?:\d|\$|min|rating|•|Delivery|Pickup|Promoted)/i);
+        const extractedName = nameMatch ? nameMatch[1].trim() : text.split('\n')[0]?.trim() || text.slice(0, 80);
+        return {
           href: link.href,
-          text: link.textContent?.trim().slice(0, 100)
-        }));
-    }, query);
+          text: extractedName,
+          fullText: text.slice(0, 200)
+        };
+      });
+    });
 
-    if (!storeLinks.length) {
-      console.log(`[InHouseScraper] No restaurants found for "${query}"`);
+    // Score each result by similarity to the search query
+    const normalizedQuery = query.toLowerCase().trim();
+    const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length > 1);
+
+    const scoredLinks = allStoreLinks.map(link => {
+      const linkName = link.text.toLowerCase().trim();
+      const linkWords = linkName.split(/\s+/).filter(w => w.length > 1);
+
+      // Calculate word overlap score
+      let matchedWords = 0;
+      for (const qWord of queryWords) {
+        if (linkWords.some(lWord => lWord.includes(qWord) || qWord.includes(lWord))) {
+          matchedWords++;
+        }
+      }
+      const wordOverlap = queryWords.length > 0 ? matchedWords / queryWords.length : 0;
+
+      // Check if query is contained in link name or vice versa
+      const containsQuery = linkName.includes(normalizedQuery) ? 1.0 : 0;
+      const queryContainsLink = normalizedQuery.includes(linkName) ? 0.9 : 0;
+
+      // Check exact start match (e.g., "Caffe Abbracci" starts with "Caffe Abbracci")
+      const startsWithQuery = linkName.startsWith(normalizedQuery.split(' ')[0]) &&
+                              linkName.includes(normalizedQuery.split(' ').slice(-1)[0]) ? 0.8 : 0;
+
+      // Calculate final similarity score
+      const similarity = Math.max(containsQuery, queryContainsLink, startsWithQuery, wordOverlap);
+
+      return { ...link, similarity, matchedWords, totalQueryWords: queryWords.length };
+    });
+
+    // Sort by similarity (highest first) and filter out very low matches
+    const MIN_SIMILARITY = 0.5; // Require at least 50% match
+    const sortedLinks = scoredLinks
+      .filter(l => l.similarity >= MIN_SIMILARITY)
+      .sort((a, b) => b.similarity - a.similarity);
+
+    console.log(`[InHouseScraper] Scored ${scoredLinks.length} results for "${query}":`);
+    scoredLinks.slice(0, 5).forEach((l, i) => {
+      console.log(`  ${i + 1}. "${l.text}" - similarity: ${(l.similarity * 100).toFixed(0)}% (${l.matchedWords}/${l.totalQueryWords} words)`);
+    });
+
+    if (!sortedLinks.length) {
+      console.log(`[InHouseScraper] No restaurants found matching "${query}" (none above ${MIN_SIMILARITY * 100}% similarity)`);
       await browser.close();
       return {
         ok: false,
         error: `No restaurants found matching "${query}"`,
+        hint: scoredLinks.length > 0
+          ? `Best match was "${scoredLinks[0].text}" at ${(scoredLinks[0].similarity * 100).toFixed(0)}% similarity (below ${MIN_SIMILARITY * 100}% threshold)`
+          : "No results found in search",
         searchUrl
       };
     }
 
+    const bestMatch = sortedLinks[0];
+    console.log(`[InHouseScraper] Best match: "${bestMatch.text}" with ${(bestMatch.similarity * 100).toFixed(0)}% similarity`);
+
     // Navigate to best matching store
     // Add pl param to store URL to maintain location context
-    let storeUrl = storeLinks[0].href;
+    let storeUrl = bestMatch.href;
     if (!storeUrl.includes('pl=')) {
       const separator = storeUrl.includes('?') ? '&' : '?';
       storeUrl = `${storeUrl}${separator}pl=${plParam}`;
     }
-    console.log(`[InHouseScraper] Found store: ${storeLinks[0].text}`);
     console.log(`[InHouseScraper] Navigating to: ${storeUrl}`);
 
     await page.goto(storeUrl, {
