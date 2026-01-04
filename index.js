@@ -243,6 +243,76 @@ function buildUberEatsStoreUrl(storeSlug, storeId) {
 }
 
 /**
+ * Location coordinates lookup for common cities
+ * Used to generate the pl parameter for Uber Eats URLs
+ */
+const CITY_COORDS = {
+  'miami': { lat: 25.7617, lng: -80.1918 },
+  'coral gables': { lat: 25.7215, lng: -80.2684 },
+  'new york': { lat: 40.7128, lng: -74.0060 },
+  'nyc': { lat: 40.7128, lng: -74.0060 },
+  'los angeles': { lat: 34.0522, lng: -118.2437 },
+  'la': { lat: 34.0522, lng: -118.2437 },
+  'chicago': { lat: 41.8781, lng: -87.6298 },
+  'houston': { lat: 29.7604, lng: -95.3698 },
+  'san francisco': { lat: 37.7749, lng: -122.4194 },
+  'sf': { lat: 37.7749, lng: -122.4194 },
+  'seattle': { lat: 47.6062, lng: -122.3321 },
+  'boston': { lat: 42.3601, lng: -71.0589 },
+  'austin': { lat: 30.2672, lng: -97.7431 },
+  'denver': { lat: 39.7392, lng: -104.9903 },
+  'atlanta': { lat: 33.7490, lng: -84.3880 },
+  'dallas': { lat: 32.7767, lng: -96.7970 },
+  'phoenix': { lat: 33.4484, lng: -112.0740 },
+  'philadelphia': { lat: 39.9526, lng: -75.1652 },
+  'san diego': { lat: 32.7157, lng: -117.1611 },
+  'portland': { lat: 45.5152, lng: -122.6784 },
+  'default': { lat: 25.7617, lng: -80.1918 } // Miami as default
+};
+
+/**
+ * Get coordinates for an address string
+ */
+function getLocationCoords(address) {
+  if (!address) return CITY_COORDS.default;
+
+  const lowerAddr = address.toLowerCase();
+
+  // Try to match city name
+  for (const [city, coords] of Object.entries(CITY_COORDS)) {
+    if (lowerAddr.includes(city)) {
+      return coords;
+    }
+  }
+
+  // Check for FL/Florida -> Miami default
+  if (lowerAddr.includes('fl') || lowerAddr.includes('florida')) {
+    return CITY_COORDS.miami;
+  }
+
+  return CITY_COORDS.default;
+}
+
+/**
+ * Generate the pl (place) parameter for Uber Eats URLs
+ * This encodes location information that Uber Eats uses to show local stores
+ * Format: base64(urlencode(json)) - verified from working Uber URLs
+ */
+function generatePlParam(address, coords) {
+  const plObject = {
+    address: address || "Miami, FL",
+    referenceType: "google_places",
+    latitude: coords.lat,
+    longitude: coords.lng
+  };
+
+  // Format: base64(urlencode(json))
+  const jsonStr = JSON.stringify(plObject);
+  const urlEncoded = encodeURIComponent(jsonStr);
+  return Buffer.from(urlEncoded).toString('base64');
+}
+
+/**
  * Main in-house scraper function using Cloudflare Browser Rendering
  *
  * @param {object} env - Cloudflare environment with BROWSER binding
@@ -276,8 +346,49 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    // Step 1: Go to Uber Eats and search for restaurant
-    const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}`;
+    // Generate location parameter (pl) for address - this is crucial for store access
+    const locationCoords = getLocationCoords(address);
+    const plParam = generatePlParam(address, locationCoords);
+    console.log(`[InHouseScraper] Using location: ${locationCoords.lat}, ${locationCoords.lng}`);
+
+    // Set multiple location-related cookies before navigating
+    const locationCookie = {
+      address: {
+        address1: address,
+        city: address.split(',')[0]?.trim() || "Miami",
+        country: "US"
+      },
+      latitude: locationCoords.lat,
+      longitude: locationCoords.lng
+    };
+
+    // Set cookies for location persistence
+    await page.setCookie(
+      {
+        name: 'uev2.loc',
+        value: encodeURIComponent(JSON.stringify(locationCookie)),
+        domain: '.ubereats.com',
+        path: '/'
+      },
+      {
+        name: 'uev2.diningMode',
+        value: 'DELIVERY',
+        domain: '.ubereats.com',
+        path: '/'
+      }
+    );
+
+    // Step 1: First visit the feed page with location to establish session
+    const feedUrl = `https://www.ubereats.com/feed?pl=${plParam}`;
+    console.log(`[InHouseScraper] Establishing session via feed: ${feedUrl}`);
+    await page.goto(feedUrl, {
+      waitUntil: 'networkidle0',
+      timeout: 30000
+    });
+    await wait(2000);
+
+    // Step 2: Now search for the restaurant
+    const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}&pl=${plParam}`;
     console.log(`[InHouseScraper] Navigating to search: ${searchUrl}`);
 
     await page.goto(searchUrl, {
@@ -288,23 +399,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Wait for page to settle
     await wait(3000);
 
-    // Check if we need to set address
-    const addressModal = await page.$('[data-testid="location-typeahead-input"], input[placeholder*="address"]');
-    if (addressModal && address) {
-      console.log(`[InHouseScraper] Setting delivery address: ${address}`);
-      await addressModal.click();
-      await addressModal.type(address, { delay: 50 });
-      await wait(2000);
-
-      // Click first suggestion
-      const suggestion = await page.$('[data-testid*="suggestion"], [role="option"]');
-      if (suggestion) {
-        await suggestion.click();
-        await wait(2000);
-      }
-    }
-
-    // Step 2: Find and click on the first matching restaurant
+    // Step 3: Find and click on the first matching restaurant
     console.log(`[InHouseScraper] Looking for restaurant matching "${query}"`);
 
     // Wait for search results
@@ -339,7 +434,12 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     }
 
     // Navigate to best matching store
-    const storeUrl = storeLinks[0].href;
+    // Add pl param to store URL to maintain location context
+    let storeUrl = storeLinks[0].href;
+    if (!storeUrl.includes('pl=')) {
+      const separator = storeUrl.includes('?') ? '&' : '?';
+      storeUrl = `${storeUrl}${separator}pl=${plParam}`;
+    }
     console.log(`[InHouseScraper] Found store: ${storeLinks[0].text}`);
     console.log(`[InHouseScraper] Navigating to: ${storeUrl}`);
 
@@ -351,21 +451,104 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Wait for menu to load
     await wait(3000);
 
-    // Step 3: Scroll to load lazy content
-    console.log(`[InHouseScraper] Scrolling to load all menu items...`);
+    // Check if we got redirected to location picker
+    const currentUrl = page.url();
+    const pageTitle = await page.title();
+    console.log(`[InHouseScraper] Current URL: ${currentUrl}`);
+    console.log(`[InHouseScraper] Page title: ${pageTitle}`);
+
+    // If on location picker, try going back to store with direct URL
+    if (currentUrl.includes('/location') || pageTitle.includes('All Cities')) {
+      console.log(`[InHouseScraper] Detected location picker redirect, retrying with direct navigation...`);
+
+      // Try setting location via localStorage before retry
+      await page.evaluate((locData) => {
+        try {
+          localStorage.setItem('uber_eats_location', JSON.stringify(locData));
+        } catch (e) {}
+      }, { latitude: locationCoords.lat, longitude: locationCoords.lng, address: address });
+
+      // Retry navigation
+      await page.goto(storeUrl, {
+        waitUntil: 'networkidle0',
+        timeout: 30000
+      });
+      await wait(3000);
+
+      const retryUrl = page.url();
+      console.log(`[InHouseScraper] Retry URL: ${retryUrl}`);
+    }
+
+    // Dismiss any modals/overlays that might be blocking the page
+    console.log(`[InHouseScraper] Checking for and dismissing modals...`);
+    await page.evaluate(() => {
+      // Try to close common modal types
+      const closeButtons = document.querySelectorAll(
+        'button[aria-label*="close"], button[aria-label*="Close"], ' +
+        'button[aria-label*="dismiss"], button[aria-label*="Dismiss"], ' +
+        '[data-testid*="close"], [data-testid*="dismiss"], ' +
+        '[class*="close-button"], [class*="CloseButton"], ' +
+        '[class*="modal-close"], [class*="ModalClose"], ' +
+        'button[class*="close"], button[class*="Close"]'
+      );
+      closeButtons.forEach(btn => {
+        try { btn.click(); } catch (e) {}
+      });
+
+      // Press Escape to dismiss any modal
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27 }));
+
+      // Click outside modal overlay
+      const overlay = document.querySelector('[class*="overlay"], [class*="Overlay"], [data-testid*="overlay"]');
+      if (overlay) {
+        try { overlay.click(); } catch (e) {}
+      }
+    });
+    await wait(1000);
+
+    // Wait for menu content to actually load
+    console.log(`[InHouseScraper] Waiting for menu content...`);
+    try {
+      await page.waitForSelector('[data-testid^="store-item-"], [data-testid*="menu-item"], [data-testid*="catalog-item"]', {
+        timeout: 10000
+      });
+      console.log(`[InHouseScraper] Menu items detected`);
+    } catch (e) {
+      console.log(`[InHouseScraper] Menu items not found with standard selectors, trying broader approach...`);
+      // Wait a bit longer for SPA to settle
+      await wait(3000);
+    }
+
+    // Step 4: Scroll to load lazy content (first pass)
+    console.log(`[InHouseScraper] Scrolling to load all menu items (pass 1)...`);
     await autoScrollPage(page);
 
-    // Step 4: Expand collapsed sections
+    // Step 5: Expand collapsed sections
     console.log(`[InHouseScraper] Expanding collapsed sections...`);
-    await expandSections(page);
+    const expandedCount = await expandSections(page);
+    console.log(`[InHouseScraper] Clicked ${expandedCount} expand buttons`);
 
-    // Second scroll pass
-    await autoScrollPage(page);
+    // Step 6: Second scroll pass after expanding (slower, more thorough)
+    console.log(`[InHouseScraper] Scrolling again after expansion (pass 2)...`);
+    await autoScrollPage(page, { slow: true });
+
+    // Step 7: One more expand pass in case new buttons appeared
+    const expandedCount2 = await expandSections(page);
+    if (expandedCount2 > 0) {
+      console.log(`[InHouseScraper] Found ${expandedCount2} more expand buttons, scrolling again...`);
+      await autoScrollPage(page, { slow: true, skipFinalSweep: true });
+    }
 
     // Let content settle
     await wait(2000);
 
-    // Step 5: Extract menu data from DOM
+    // Debug: Check where we are before extraction
+    const finalUrl = page.url();
+    const finalTitle = await page.title();
+    console.log(`[InHouseScraper] Before extraction - URL: ${finalUrl.slice(0, 100)}...`);
+    console.log(`[InHouseScraper] Before extraction - Title: ${finalTitle}`);
+
+    // Step 8: Extract menu data from DOM
     console.log(`[InHouseScraper] Extracting menu data...`);
 
     const menuData = await page.evaluate(() => {
@@ -380,10 +563,40 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         items: []
       };
 
-      // Extract restaurant name
-      const h1 = document.querySelector('h1');
+      // Extract restaurant name - avoid modal/location picker h1 elements
+      // Look for h1 within main content area, not in modals or location picker
+      const mainContent = document.querySelector('main, [role="main"], [data-testid="store-page"], [data-testid*="store"]');
+      let h1 = mainContent?.querySelector('h1');
+
+      // Fallback to first h1 that doesn't look like location picker
+      if (!h1) {
+        const allH1s = document.querySelectorAll('h1');
+        for (const el of allH1s) {
+          const text = el.textContent?.trim() || '';
+          // Skip location picker/modal h1s
+          if (!text.includes('Cities') && !text.includes('Select') && !text.includes('Choose') && text.length > 2) {
+            h1 = el;
+            break;
+          }
+        }
+      }
+
       if (h1) {
         result.restaurant.name = h1.textContent.trim();
+      }
+
+      // Also try title tag as more reliable source
+      const titleTag = document.querySelector('title');
+      if (titleTag) {
+        const titleText = titleTag.textContent || '';
+        const match = titleText.match(/^Order\s+(.+?)\s*[-–]/);
+        if (match && match[1]) {
+          result.restaurant.titleName = match[1].trim();
+          // Prefer title if h1 looks wrong
+          if (!result.restaurant.name || result.restaurant.name.includes('Cities')) {
+            result.restaurant.name = result.restaurant.titleName;
+          }
+        }
       }
 
       // Extract delivery info
@@ -399,64 +612,320 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         }
       });
 
-      // Build section map from headers
-      const sectionMap = new Map();
-      const headers = document.querySelectorAll('h2, h3, [data-testid*="section"], [role="heading"]');
-      const sectionElements = [];
+      // Non-menu section patterns to filter out (navigation/info)
+      const NON_MENU_PATTERNS = [
+        /rating/i, /review/i, /question/i, /faq/i, /about/i,
+        /delivery/i, /pickup/i, /does.*serve/i, /how.*spicy/i,
+        /what.*is/i, /frequently/i, /sign\s*in/i, /log\s*in/i,
+        /cart/i, /checkout/i, /order/i, /address/i, /info/i,
+        /hour/i, /location/i, /contact/i, /popular\s*near/i
+      ];
 
-      headers.forEach(h => {
-        const text = h.textContent?.trim();
-        if (!text || text.length > 60 || text.includes('$') || text.includes('Cal')) return;
-        if (/rating|review|faq|about|delivery|sign in/i.test(text)) return;
+      // NOISE SECTIONS: Sections that should be excluded (utensils, promos, condiments)
+      const NOISE_SECTION_PATTERNS = [
+        /utensil/i, /napkin/i, /silverware/i, /cutlery/i, /packet/i,
+        /buy\s*\d+.*get/i, /bogo/i, /free\s*with/i, /limited\s*time/i,
+        /cross-?sell/i, /upsell/i, /add-?on/i,
+        /featured\s*deal/i, /special\s*offer/i, /promo/i,
+        /retail/i, /merchandise/i, /gift\s*card/i
+      ];
+
+      // NOISE ITEMS: Item names that should be excluded (only exact matches for utensils)
+      const NOISE_ITEM_PATTERNS = [
+        /^utensils?$/i, /^napkins?$/i, /^forks?$/i, /^knives?$/i, /^spoons?$/i,
+        /^straws?$/i, /^straws?\s*\(/i, /\bdrinking\s*straws?/i,
+        /^plastic\s*(ware|utensil)/i, /^disposable/i,
+        /^packet\s*-?\s*utensil/i, /^cutlery\s*(set|pack)?$/i, /^silverware$/i,
+        /^condiment\s*(pack|kit)/i, /^sauce\s*pack/i,
+        /^extra\s*(napkin|utensil|straw)s?$/i,
+        /^cheese\s*grater$/i, /^grater$/i,
+        /^no\s+/i, /^none$/i, /^n\/a$/i,
+        /^utensils?\s*(pack|kit|set)/i  // Fixed: utensils pack
+      ];
+
+      // Helper to check if section is noise
+      const isNoiseSection = (name) => NOISE_SECTION_PATTERNS.some(p => p.test(name));
+
+      // Helper to check if item is noise
+      const isNoiseItem = (name) => NOISE_ITEM_PATTERNS.some(p => p.test(name));
+
+      // Build section map from headers - IMPROVED selector set
+      const sectionMap = new Map();
+      const sectionElements = [];
+      const seenSectionNames = new Set();
+
+      // STRATEGY 1: Use Uber's specific catalog-section-title (most reliable)
+      const catalogSectionTitles = document.querySelectorAll('[data-testid="catalog-section-title"]');
+      catalogSectionTitles.forEach(h => {
+        let text = h.textContent?.trim();
+        if (!text || text.length > 80) return;
+        if (text.includes('$') || text.includes('Cal') || /\d+\.\d{2}/.test(text)) return;
+        if (NON_MENU_PATTERNS.some(p => p.test(text))) return;
+        if (seenSectionNames.has(text.toLowerCase())) return;
+        seenSectionNames.add(text.toLowerCase());
 
         const rect = h.getBoundingClientRect();
+        // Find parent section container for DOM-based item mapping
+        const parentSection = h.closest('[data-testid*="catalog-section"], [data-testid*="store-section"]');
         sectionElements.push({
           name: text,
-          top: rect.top + window.scrollY
+          top: rect.top + window.scrollY,
+          element: parentSection || h.parentElement
         });
       });
 
+      // STRATEGY 2: Fallback to broad header selectors if no catalog sections found
+      if (sectionElements.length === 0) {
+        const headers = document.querySelectorAll(
+          'h2, h3, h4, ' +
+          '[data-testid*="section-title"], [data-testid*="category-title"], ' +
+          '[data-testid*="menu-section"], [data-testid*="store-section"], ' +
+          '[role="heading"][aria-level="2"], [role="heading"][aria-level="3"], ' +
+          '[class*="sectionHeader"], [class*="SectionHeader"], [class*="section-header"], ' +
+          '[class*="categoryHeader"], [class*="CategoryHeader"], [class*="category-header"], ' +
+          '[class*="menuSection"], [class*="MenuSection"], [class*="sectionTitle"], [class*="SectionTitle"]'
+        );
+
+        headers.forEach(h => {
+          let text = h.textContent?.trim();
+          if (!text || text.length > 80) return;
+          if (text.includes('$') || text.includes('Cal') || /\d+\.\d{2}/.test(text)) return;
+          if (NON_MENU_PATTERNS.some(p => p.test(text))) return;
+          if (seenSectionNames.has(text.toLowerCase())) return;
+          seenSectionNames.add(text.toLowerCase());
+
+          const rect = h.getBoundingClientRect();
+          // Try to find parent section container
+          const parentSection = h.closest('[data-testid*="section"], [class*="section"], [class*="Section"]');
+          sectionElements.push({
+            name: text,
+            top: rect.top + window.scrollY,
+            element: parentSection || h.parentElement
+          });
+        });
+      }
+
       sectionElements.sort((a, b) => a.top - b.top);
 
-      // Extract menu items
-      const itemElements = document.querySelectorAll(
+      // Build a map of section containers to section names for DOM-based mapping
+      const sectionContainerMap = new Map();
+      sectionElements.forEach(sec => {
+        if (sec.element) {
+          sectionContainerMap.set(sec.element, sec.name);
+        }
+      });
+
+      // Check if restaurant is closed/unavailable
+      const isUnavailable = window.location.href.includes('merchantUnavailable') ||
+        document.querySelector('[data-testid*="unavailable"]') !== null ||
+        document.body.textContent.includes('currently unavailable');
+      result.isUnavailable = isUnavailable;
+
+      // Extract menu items - comprehensive selector set
+      // Primary: data-testid based selectors (most reliable)
+      // Fallback: class-based selectors for varying DOM structures
+      // Additional fallbacks for unavailable/closed restaurants
+      let itemElements = document.querySelectorAll(
         '[data-testid^="store-item-"], ' +
         '[data-testid*="menu-item"], ' +
-        '[data-testid*="catalog-item"]'
+        '[data-testid*="catalog-item"], ' +
+        '[data-testid*="product-card"], ' +
+        'li[data-testid*="store-item"], ' +
+        'div[data-testid*="store-item"]'
       );
 
+      // If no items found with primary selectors, try broader fallbacks
+      if (itemElements.length === 0) {
+        // Try container-based approach for closed restaurants
+        itemElements = document.querySelectorAll(
+          '[data-testid*="store"] li[class*="item"], ' +
+          '[role="listitem"][class*="product"], ' +
+          'article[class*="item"], ' +
+          '[class*="MenuItem"], [class*="menu-item"], [class*="menuItem"], ' +
+          '[class*="FoodItem"], [class*="food-item"], [class*="foodItem"], ' +
+          '[class*="ProductCard"], [class*="product-card"]'
+        );
+      }
+
+      // IMPROVED: Enhanced debug info for troubleshooting
+      // Count ALL store-item elements on page
+      const allStoreItems = document.querySelectorAll('[data-testid^="store-item-"]');
+
+      // DEBUG: Sample items WITH and WITHOUT names to compare structures
+      const itemsWithNames = [];
+      const itemsWithoutNames = [];
+
+      Array.from(allStoreItems).forEach(el => {
+        const testId = el.getAttribute('data-testid');
+        const nameLabel = el.querySelector('[data-testid="item-thumbnail-label"]');
+        const h3 = el.querySelector('h3, h4');
+        const span = el.querySelector('span');
+        const anyText = el.textContent?.trim().slice(0, 150);
+
+        const info = {
+          testId: testId?.slice(0, 50),
+          hasNameLabel: !!nameLabel,
+          nameLabelText: nameLabel?.textContent?.trim().slice(0, 50),
+          h3Text: h3?.textContent?.trim().slice(0, 50),
+          firstSpanText: span?.textContent?.trim().slice(0, 50),
+          childCount: el.children.length,
+          innerHTML: el.innerHTML?.slice(0, 200),
+          textSample: anyText
+        };
+
+        if (nameLabel?.textContent?.trim()) {
+          if (itemsWithNames.length < 3) itemsWithNames.push(info);
+        } else {
+          if (itemsWithoutNames.length < 5) itemsWithoutNames.push(info);
+        }
+      });
+
+      const sampleItems = { withNames: itemsWithNames, withoutNames: itemsWithoutNames };
+
+      result.debug = {
+        sectionsFound: sectionElements.length,
+        sectionNames: sectionElements.map(s => s.name),
+        itemElementsFound: itemElements.length,
+        allStoreItemsOnPage: allStoreItems.length,
+        catalogSectionTitlesFound: catalogSectionTitles.length,
+        sectionContainersFound: sectionContainerMap.size,
+        sampleItems: sampleItems,
+        sampleItemTestIds: Array.from(allStoreItems).slice(0, 10).map(el => el.getAttribute('data-testid'))
+      };
+
       const seenIds = new Set();
+      const seenNames = new Set(); // Track by name too for better deduplication
+      let skippedDuplicates = 0;
+      let skippedNoName = 0;
 
       itemElements.forEach((item, idx) => {
         const testId = item.getAttribute('data-testid') || '';
-        let itemId = testId.replace(/^store-item-|^menu-item-|^catalog-item-/, '') || `item-${idx}`;
+        let itemId = testId.replace(/^store-item-|^menu-item-|^catalog-item-|^product-card-/, '');
 
-        if (seenIds.has(itemId)) return;
+        // If no testid, generate ID from content
+        if (!itemId || itemId === testId) {
+          const nameEl = item.querySelector('[data-testid="item-thumbnail-label"], h3, h4, [class*="title"], [class*="Title"], [class*="name"], [class*="Name"]');
+          const nameText = nameEl?.textContent?.trim();
+          if (nameText) {
+            itemId = `gen-${nameText.slice(0, 30).replace(/\s+/g, '-').toLowerCase()}`;
+          } else {
+            itemId = `item-${idx}`;
+          }
+        }
+
+        if (seenIds.has(itemId)) {
+          skippedDuplicates++;
+          return;
+        }
         seenIds.add(itemId);
 
-        // Get item position to determine section
-        const itemRect = item.getBoundingClientRect();
-        const itemTop = itemRect.top + window.scrollY;
-
+        // IMPROVED: Determine section using DOM hierarchy first, then Y-position fallback
         let sectionName = 'Menu Items';
-        for (let i = sectionElements.length - 1; i >= 0; i--) {
-          if (sectionElements[i].top < itemTop) {
-            sectionName = sectionElements[i].name;
+
+        // STRATEGY 1: Check if item is inside a known section container (DOM-based)
+        for (const [container, name] of sectionContainerMap.entries()) {
+          if (container && container.contains(item)) {
+            sectionName = name;
             break;
           }
         }
 
-        // Extract item details
-        let name = null;
-        const nameEl = item.querySelector('[data-testid="item-thumbnail-label"], h3, h4, [class*="itemTitle"]');
-        if (nameEl) {
-          const text = nameEl.textContent?.trim();
-          if (text && !text.startsWith('$') && !text.includes('Cal')) {
-            name = text;
+        // STRATEGY 2: If no DOM match, use Y-position based mapping
+        if (sectionName === 'Menu Items' && sectionElements.length > 0) {
+          const itemRect = item.getBoundingClientRect();
+          const itemTop = itemRect.top + window.scrollY;
+
+          for (let i = sectionElements.length - 1; i >= 0; i--) {
+            if (sectionElements[i].top < itemTop) {
+              sectionName = sectionElements[i].name;
+              break;
+            }
           }
         }
 
-        if (!name) return;
+        // Extract item details - ROBUST name extraction from multiple sources
+        let name = null;
+
+        // Try official testid labels first
+        const nameLabels = item.querySelectorAll('[data-testid="item-thumbnail-label"]');
+        nameLabels.forEach(label => {
+          const text = label.textContent?.trim();
+          if (text && !text.startsWith('$') && !text.includes('Cal') && !name) {
+            name = text;
+          }
+        });
+
+        // Fallback to common title patterns
+        if (!name) {
+          const titleEl = item.querySelector(
+            'h3, h4, ' +
+            '[class*="itemTitle"], [class*="ItemTitle"], [class*="item-title"], ' +
+            '[class*="productTitle"], [class*="ProductTitle"], [class*="product-title"], ' +
+            '[class*="name"], [class*="Name"]:not([class*="userName"]):not([class*="storeName"])'
+          );
+          if (titleEl) {
+            const text = titleEl.textContent?.trim();
+            if (text && !text.startsWith('$') && !text.includes('Cal') && text.length > 1) {
+              name = text;
+            }
+          }
+        }
+
+        // ADDED: Fallback to first span (Uber Eats often uses span for item names in list view)
+        if (!name) {
+          const firstSpan = item.querySelector('span');
+          if (firstSpan) {
+            const text = firstSpan.textContent?.trim();
+            // Name should be reasonable length and not look like price/rating
+            if (text && text.length >= 2 && text.length <= 100 &&
+                !text.startsWith('$') && !text.includes('Cal') &&
+                !/^\d+%/.test(text) && !/^#\d+/.test(text)) {
+              name = text;
+            }
+          }
+        }
+
+        // ADDED: Last resort - extract from beginning of textContent
+        if (!name) {
+          const fullText = item.textContent?.trim() || '';
+          // Extract text before first $ or Cal marker
+          const match = fullText.match(/^([A-Za-z][A-Za-z0-9\s&'\-,]+?)(?:\$|Cal|\d+%|#\d+)/);
+          if (match && match[1] && match[1].trim().length >= 2) {
+            name = match[1].trim();
+          }
+        }
+
+        // Skip if no name or name is too short
+        if (!name || name.length < 2) {
+          skippedNoName++;
+          return;
+        }
+
+        // Skip if name looks like a price or calorie count
+        if (/^\$[\d.]+$/.test(name) || /^\d+\s*Cal/.test(name)) {
+          skippedNoName++;
+          return;
+        }
+
+        // Skip if we've already seen this name (additional deduplication)
+        const normalizedName = name.toLowerCase().trim();
+        if (seenNames.has(normalizedName)) {
+          skippedDuplicates++;
+          return;
+        }
+        seenNames.add(normalizedName);
+
+        // NOISE FILTER: Skip items that are utensils, condiment packs, etc.
+        if (isNoiseItem(name)) {
+          skippedNoName++; // Count as filtered
+          return;
+        }
+
+        // NOISE FILTER: Skip items from noise sections (utensils, promos, retail)
+        if (isNoiseSection(sectionName)) {
+          skippedNoName++; // Count as filtered
+          return;
+        }
 
         const fullText = item.textContent || '';
 
@@ -470,16 +939,25 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
         // Description
         let description = null;
-        const descEl = item.querySelector('[data-testid="rich-text"], [class*="description"]');
+        const descEl = item.querySelector('[data-testid="rich-text"], [class*="description"], [class*="Description"]');
         if (descEl) {
           description = descEl.textContent?.trim() || null;
         }
 
-        // Image
+        // Image - check multiple sources
         let imageUrl = null;
-        const imgEl = item.querySelector('img[src*="uber"], img[src*="cloudfront"]');
+        const imgEl = item.querySelector('img[src*="uber.com"], img[src*="ubereats"], img[src*="cloudfront"]');
         if (imgEl) {
-          imageUrl = imgEl.src || null;
+          imageUrl = imgEl.src || imgEl.getAttribute('data-src') || null;
+        }
+        // Fallback: check for background-image style
+        if (!imageUrl) {
+          const bgEl = item.querySelector('[style*="background-image"]');
+          if (bgEl) {
+            const style = bgEl.getAttribute('style') || '';
+            const urlMatch = style.match(/url\(["']?([^"')]+)["']?\)/);
+            if (urlMatch) imageUrl = urlMatch[1];
+          }
         }
 
         result.items.push({
@@ -520,21 +998,47 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         });
       }
 
+      // Add skip counts to debug
+      result.debug.skippedDuplicates = skippedDuplicates;
+      result.debug.skippedNoName = skippedNoName;
+      result.debug.uniqueIdsFound = seenIds.size;
+      result.debug.uniqueNamesFound = seenNames.size;
+
       return result;
     });
 
     await browser.close();
 
     const elapsed = Date.now() - startTime;
-    console.log(`[InHouseScraper] Extracted ${menuData.items.length} items in ${elapsed}ms`);
+
+    // IMPROVED: Enhanced logging
+    console.log(`[InHouseScraper] === EXTRACTION RESULTS ===`);
+    console.log(`[InHouseScraper] Total items: ${menuData.items.length}`);
+    console.log(`[InHouseScraper] Sections found: ${menuData.debug?.sectionsFound || 0}`);
+    console.log(`[InHouseScraper] Section names: ${menuData.debug?.sectionNames?.join(', ') || 'none'}`);
+    console.log(`[InHouseScraper] Items per section: ${menuData.sections?.map(s => `${s.name}(${s.items.length})`).join(', ') || 'none'}`);
+    console.log(`[InHouseScraper] Elapsed: ${elapsed}ms`);
 
     if (menuData.items.length === 0) {
       return {
         ok: false,
-        error: "No menu items found on page",
+        error: menuData.isUnavailable
+          ? "Restaurant is currently closed/unavailable on Uber Eats"
+          : "No menu items found on page",
+        hint: menuData.isUnavailable
+          ? "Try again during restaurant business hours"
+          : "The restaurant may be unavailable or closed. Try a different location.",
         restaurant: menuData.restaurant,
-        storeUrl,
-        elapsed_ms: elapsed
+        store_url: storeUrl,
+        elapsed_ms: elapsed,
+        isUnavailable: menuData.isUnavailable,
+        debug: {
+          page_title: menuData.restaurant?.name || "unknown",
+          sections_found: menuData.sections?.length || 0,
+          itemElementsFound: menuData.debug?.itemElementsFound || 0,
+          relevantTestIds: menuData.debug?.allDataTestIds || [],
+          bodyTextSample: menuData.debug?.bodyTextSample?.slice(0, 200) || ""
+        }
       };
     }
 
@@ -559,7 +1063,8 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       items: menuData.items.slice(0, maxRows),
       sections: menuData.sections,
       store_url: storeUrl,
-      elapsed_ms: elapsed
+      elapsed_ms: elapsed,
+      debug: menuData.debug
     };
 
   } catch (error) {
@@ -578,15 +1083,20 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 /**
  * Auto-scroll page to load lazy content
  */
-async function autoScrollPage(page) {
-  await page.evaluate(async () => {
+async function autoScrollPage(page, options = {}) {
+  const { slow = false } = options;
+
+  await page.evaluate(async (slowMode) => {
     await new Promise((resolve) => {
       let totalHeight = 0;
       let lastHeight = 0;
       let noChangeCount = 0;
-      const distance = 300;
-      const maxIterations = 100;
+      // TUNED: Slower scroll for better lazy-load triggering
+      const distance = slowMode ? 200 : 350;
+      const maxIterations = 150; // Increased from 100
       let iterations = 0;
+      // TUNED: Longer wait for content to load
+      const scrollDelay = slowMode ? 400 : 250; // Increased from 150ms
 
       const timer = setInterval(() => {
         const scrollHeight = document.body.scrollHeight;
@@ -601,43 +1111,124 @@ async function autoScrollPage(page) {
         }
         lastHeight = scrollHeight;
 
-        if (totalHeight >= scrollHeight || noChangeCount > 5 || iterations > maxIterations) {
+        // TUNED: Higher threshold before giving up (10 instead of 5)
+        if (totalHeight >= scrollHeight || noChangeCount > 10 || iterations > maxIterations) {
           clearInterval(timer);
+          // Scroll back to top
           window.scrollTo(0, 0);
           resolve();
         }
-      }, 150);
+      }, scrollDelay);
     });
-  });
+  }, slow);
+
+  // ADDED: Final sweep - slow scroll back down to catch any missed lazy content
+  if (!options.skipFinalSweep) {
+    await page.evaluate(async () => {
+      await new Promise((resolve) => {
+        let pos = 0;
+        const maxHeight = document.body.scrollHeight;
+        const timer = setInterval(() => {
+          pos += 500;
+          window.scrollTo(0, pos);
+          if (pos >= maxHeight) {
+            clearInterval(timer);
+            window.scrollTo(0, 0);
+            resolve();
+          }
+        }, 100);
+      });
+    });
+  }
 }
 
 /**
- * Expand collapsed menu sections
+ * Expand collapsed menu sections - aggressive approach to find all expandable content
+ * TUNED: More passes, better selectors, longer waits
  */
 async function expandSections(page) {
-  await page.evaluate(async () => {
-    const expandButtons = document.querySelectorAll(
-      'button[aria-expanded="false"], ' +
-      '[data-testid*="show-more"], ' +
-      '[data-testid*="view-more"], ' +
-      '[data-testid*="expand"]'
-    );
+  const expandedCount = await page.evaluate(async () => {
+    let totalClicked = 0;
 
-    const allButtons = document.querySelectorAll('button, [role="button"]');
-    const textButtons = Array.from(allButtons).filter(btn => {
-      const text = btn.textContent?.toLowerCase() || '';
-      return text.includes('view more') || text.includes('show more') || text.includes('see all');
-    });
+    // TUNED: 5 passes instead of 3 to catch late-loading buttons
+    for (let pass = 0; pass < 5; pass++) {
+      // Selector-based expand buttons - ONLY within menu/store content area
+      // Avoid header/nav elements that might navigate away
+      const menuContainer = document.querySelector('main, [data-testid*="store"], [role="main"]') || document.body;
 
-    const buttons = [...expandButtons, ...textButtons];
+      const expandButtons = menuContainer.querySelectorAll(
+        'button[aria-expanded="false"], ' +
+        '[data-testid*="show-more"], ' +
+        '[data-testid*="view-more"], ' +
+        '[data-testid*="expand"], ' +
+        '[data-testid*="load-more"], ' +
+        '[data-testid*="see-more"], ' +
+        '[class*="showMore"], [class*="ShowMore"], [class*="show-more"], ' +
+        '[class*="viewMore"], [class*="ViewMore"], [class*="view-more"], ' +
+        '[class*="loadMore"], [class*="LoadMore"], [class*="load-more"], ' +
+        '[class*="seeMore"], [class*="SeeMore"], [class*="see-more"]'
+      );
 
-    for (const btn of buttons) {
-      try {
-        btn.click();
-        await new Promise(r => setTimeout(r, 300));
-      } catch (e) {}
+      // Text-based expand buttons - ONLY buttons, not links (to avoid navigation)
+      const allButtons = menuContainer.querySelectorAll('button, [role="button"], div[tabindex="0"]');
+      const textButtons = Array.from(allButtons).filter(btn => {
+        const text = btn.textContent?.toLowerCase() || '';
+        // Must be short text (not a whole paragraph)
+        if (text.length > 60) return false;
+
+        // Skip if it's in a header or nav
+        const closestNav = btn.closest('header, nav, [role="navigation"], [data-testid*="header"]');
+        if (closestNav) return false;
+
+        // Skip if it's an address-related element
+        if (text.includes('address') || text.includes('deliver') || text.includes('location')) return false;
+        if (text.includes('sign in') || text.includes('log in') || text.includes('cart')) return false;
+
+        return (
+          text.includes('view more') ||
+          text.includes('show more') ||
+          text.includes('see all') ||
+          text.includes('load more') ||
+          text.includes('show all') ||
+          text.includes('view all') ||
+          text.includes('see more') ||
+          /^\d+\s*more$/i.test(text.trim()) ||
+          /^see\s*\d+\s*more$/i.test(text.trim()) ||
+          /^\d+\s*more\s*items?$/i.test(text.trim()) ||     // ADDED: "12 more items"
+          /^view\s*\d+\s*more$/i.test(text.trim()) ||       // ADDED: "View 12 more"
+          /^show\s*\d+\s*more$/i.test(text.trim())          // ADDED: "Show 12 more"
+        );
+      });
+
+      const buttons = [...new Set([...expandButtons, ...textButtons])]; // Dedupe
+
+      for (const btn of buttons) {
+        try {
+          // Skip if button would navigate away
+          const href = btn.getAttribute('href');
+          if (href && (href.includes('/location') || href.includes('/feed') || href.startsWith('/'))) {
+            continue;
+          }
+
+          // Skip if already expanded
+          if (btn.getAttribute('aria-expanded') === 'true') continue;
+
+          btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await new Promise(r => setTimeout(r, 100)); // Small wait after scroll
+          btn.click();
+          totalClicked++;
+          await new Promise(r => setTimeout(r, 500)); // TUNED: Longer wait (500ms vs 400ms)
+        } catch (e) {}
+      }
+
+      // Wait for content to load between passes - TUNED: longer wait
+      await new Promise(r => setTimeout(r, 800));
     }
+
+    return totalClicked;
   });
+
+  return expandedCount;
 }
 
 /**
@@ -21512,7 +22103,9 @@ const _worker_impl = {
         // ---- IN-HOUSE PIPELINE CHECK ----
         // Check for pre-published menus from our own scraper pipeline BEFORE live scraping
         // In-house menus are already normalized/validated - NO filterMenuForDisplay() needed
-        const inHouseMenu = await getInHouseMenu(env, query, addressRaw);
+        // ?fresh=1 bypasses in-house cache too (forces fresh scrape)
+        const skipInHouseCache = searchParams.get("fresh") === "1";
+        const inHouseMenu = skipInHouseCache ? null : await getInHouseMenu(env, query, addressRaw);
         if (inHouseMenu && inHouseMenu.items && inHouseMenu.items.length > 0) {
           trace.used_path = "inhouse_cache";
           trace.used_tier = "inhouse";
@@ -21577,7 +22170,10 @@ const _worker_impl = {
               error: scrapeResult.error || "Menu scraping failed",
               hint: "The restaurant may be unavailable or closed. Try a different location.",
               source: "inhouse_scraper",
-              elapsed_ms: scrapeResult.elapsed_ms
+              elapsed_ms: scrapeResult.elapsed_ms,
+              store_url: scrapeResult.store_url,
+              restaurant: scrapeResult.restaurant,
+              debug: scrapeResult.debug
             },
             404,
             ctx,
@@ -21624,6 +22220,7 @@ const _worker_impl = {
                 elapsed_ms: scrapeResult.elapsed_ms,
                 scraped_at: new Date().toISOString()
               },
+              debug: scrapeResult.debug,
               ...warnPart()
             },
             ctx,
