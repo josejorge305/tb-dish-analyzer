@@ -990,58 +990,59 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         const calMatch = fullText.match(/(\d+(?:\s*-\s*\d+)?)\s*Cal/);
         const calories = calMatch ? calMatch[1].replace(/\s/g, '') : null;
 
-        // Description - Uber Eats shows descriptions in various elements
+        // Description - Uber Eats shows descriptions AFTER calories in format:
+        // "Name$Price • Rating • Calories Cal.DESCRIPTION HERE"
         let description = null;
 
-        // Try multiple selectors for description
-        const descSelectors = [
-          '[data-testid="rich-text"]',
-          '[data-testid="item-description"]',
-          '[class*="itemDescription"]',
-          '[class*="ItemDescription"]',
-          '[class*="item-description"]',
-          '[class*="productDescription"]',
-          '[class*="product-description"]',
-          '[class*="menuItemDescription"]',
-          // Uber Eats often uses a secondary text element after the title
-          'div > div:nth-child(2) > span',
-          'div > span:nth-of-type(2)'
-        ];
-
-        for (const sel of descSelectors) {
-          const descEl = item.querySelector(sel);
-          if (descEl) {
-            const text = descEl.textContent?.trim();
-            // Description should be different from name and not be price/calories
-            if (text && text !== name && text.length > 5 &&
-                !text.startsWith('$') && !/^\d+\s*Cal/.test(text) &&
-                !/^\d+(\.\d+)?$/.test(text) && !text.includes('•')) {
-              description = text;
-              break;
+        // Method 1: Extract description from fullText - it comes AFTER calories
+        // Format: "...1234 Cal.Description starts here..." or "...1234 - 5678 Cal.Description..."
+        const calDescMatch = fullText.match(/\d+(?:\s*-\s*\d+)?\s*Cal\.?\s*(.+?)(?:\$|$)/i);
+        if (calDescMatch && calDescMatch[1]) {
+          let extracted = calDescMatch[1].trim();
+          // Clean up any trailing metadata/badges
+          extracted = extracted
+            .replace(/\d+%.*$/g, '')  // Remove rating percentages
+            .replace(/Popular.*$/i, '')
+            .replace(/Promoted.*$/i, '')
+            .replace(/#\d+.*$/g, '')  // Remove rankings
+            .replace(/Plus small.*$/i, '')  // Remove Plus badge text
+            .replace(/^Buy \d+.*Free$/i, '')  // Remove promo badges
+            .replace(/^Free delivery.*$/i, '')
+            .replace(/^Best seller.*$/i, '')
+            .replace(/^Limited time.*$/i, '')
+            .trim();
+          // Must be substantial description text (not just noise/promo)
+          // Real descriptions describe food, not promos
+          if (extracted.length >= 15 && extracted !== name && /\s/.test(extracted)) {
+            // Skip if it looks like a promo/badge rather than food description
+            if (!/^(Buy|Get|Free|Save|Off|\d+%)/i.test(extracted)) {
+              description = extracted;
             }
           }
         }
 
-        // Fallback: Try to extract description from fullText after removing name, price, calories, metadata
+        // Method 2: Look for standalone description elements
         if (!description) {
-          let remaining = fullText
-            .replace(name, '')
-            .replace(/\$[\d.]+/g, '')
-            .replace(/\d+\s*Cal/g, '')
-            .replace(/•/g, '')
-            .replace(/\d+-\d+\s*min/g, '')
-            .replace(/Promoted/g, '')
-            .replace(/#\d+\s*most\s*liked/gi, '')  // Remove popularity markers
-            .replace(/Plus\s*small/gi, '')         // Remove Plus badge
-            .replace(/\d+%\s*\(\d+\)/g, '')        // Remove rating percentages like "87% (174)"
-            .replace(/\(\d+\)/g, '')               // Remove counts like "(174)"
-            .trim();
-          // Clean up multiple spaces and leading/trailing punctuation
-          remaining = remaining.replace(/\s+/g, ' ').replace(/^[.\s]+|[.\s]+$/g, '').trim();
-          // Only use if it looks like a real description (not just numbers/symbols/short text)
-          if (remaining && remaining.length > 15 && /[a-zA-Z]{4,}/.test(remaining) &&
-              !/^(most liked|liked|popular|best seller)/i.test(remaining)) {
-            description = remaining;
+          const allTextElements = item.querySelectorAll('span, div, p');
+          for (const el of allTextElements) {
+            const text = el.textContent?.trim();
+            if (!text || text.length < 20) continue;
+
+            // Skip if it contains price/cal patterns (it's the main info line)
+            if (/\$\d/.test(text)) continue;
+            if (/Cal\.?/i.test(text)) continue;
+            if (text === name) continue;
+            if (/^\d+%/.test(text)) continue;
+            if (/^#\d+/.test(text)) continue;
+            if (/^Popular$/i.test(text)) continue;
+            if (/^Promoted$/i.test(text)) continue;
+            if (/^Plus small$/i.test(text)) continue;
+
+            // Good description: multiple words describing food
+            if (/^[A-Z]/.test(text) && text.includes(' ') && text.length >= 20) {
+              description = text;
+              break;
+            }
           }
         }
 
