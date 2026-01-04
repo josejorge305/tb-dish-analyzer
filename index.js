@@ -119,6 +119,558 @@ function buildDishCacheKey(body) {
   ].join("|");
 }
 
+// ---- In-House Menu Pipeline (bypasses legacy scraping) ----
+// Menus published via our own scraper pipeline are cached with key: inhouse:menu:{slug}
+// These menus are already normalized, validated, and categorized - NO FURTHER FILTERING NEEDED
+
+function slugify(text) {
+  return (text || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function buildInHouseMenuKey(query, address) {
+  // Key format: inhouse:menu:{restaurant-slug}:{location-slug}
+  const restaurantSlug = slugify(query);
+  const locationSlug = slugify(address);
+  return `inhouse:menu:${restaurantSlug}:${locationSlug}`;
+}
+
+async function getInHouseMenu(env, query, address) {
+  if (!env?.MENUS_CACHE) return null;
+
+  const key = buildInHouseMenuKey(query, address);
+  try {
+    const cached = await env.MENUS_CACHE.get(key, "json");
+    if (cached && cached.items && cached.items.length > 0) {
+      console.log(`[InHouseMenu] HIT for ${key} (${cached.items.length} items)`);
+      return {
+        ok: true,
+        source: "inhouse_pipeline",
+        items: cached.items,
+        restaurant: cached.restaurant || { name: query },
+        meta: cached.meta || {},
+        cachedAt: cached.cachedAt || cached.savedAt,
+        _key: key
+      };
+    }
+  } catch (e) {
+    console.log(`[InHouseMenu] Error reading ${key}:`, e?.message);
+  }
+
+  // Also try without location for single-location restaurants
+  const keyNoLocation = `inhouse:menu:${slugify(query)}`;
+  try {
+    const cached = await env.MENUS_CACHE.get(keyNoLocation, "json");
+    if (cached && cached.items && cached.items.length > 0) {
+      console.log(`[InHouseMenu] HIT for ${keyNoLocation} (${cached.items.length} items)`);
+      return {
+        ok: true,
+        source: "inhouse_pipeline",
+        items: cached.items,
+        restaurant: cached.restaurant || { name: query },
+        meta: cached.meta || {},
+        cachedAt: cached.cachedAt || cached.savedAt,
+        _key: keyNoLocation
+      };
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  return null;
+}
+
+async function putInHouseMenu(env, query, address, menuData) {
+  if (!env?.MENUS_CACHE || !menuData?.items) return false;
+
+  const key = buildInHouseMenuKey(query, address);
+  try {
+    const payload = {
+      restaurant: menuData.restaurant || { name: query },
+      items: menuData.items,
+      meta: {
+        source: "inhouse_pipeline",
+        item_count: menuData.items.length,
+        ...(menuData.meta || {})
+      },
+      cachedAt: new Date().toISOString()
+    };
+    // 30-day TTL for in-house menus (longer than legacy cache)
+    await env.MENUS_CACHE.put(key, JSON.stringify(payload), { expirationTtl: 30 * 24 * 3600 });
+    console.log(`[InHouseMenu] Stored ${key} (${menuData.items.length} items)`);
+    return true;
+  } catch (e) {
+    console.log(`[InHouseMenu] Store failed for ${key}:`, e?.message);
+    return false;
+  }
+}
+
+// ========== IN-HOUSE UBER EATS SCRAPER (Cloudflare Browser Rendering) ==========
+// Uses Puppeteer via Cloudflare's Browser binding - NO external APIs needed
+// This replaces RapidAPI/Apify completely
+
+import puppeteer from "@cloudflare/puppeteer";
+
+/**
+ * Helper: wait for specified milliseconds (replaces page.waitForTimeout which isn't available in CF Puppeteer)
+ */
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Build Uber Eats search URL for a restaurant
+ */
+function buildUberEatsSearchUrl(query, address) {
+  const params = new URLSearchParams({
+    q: query,
+    pl: address ? Buffer.from(JSON.stringify({
+      address: address,
+      source: "manual"
+    })).toString('base64') : ''
+  });
+  return `https://www.ubereats.com/search?${params.toString()}`;
+}
+
+/**
+ * Build Uber Eats store URL from slug
+ */
+function buildUberEatsStoreUrl(storeSlug, storeId) {
+  return `https://www.ubereats.com/store/${storeSlug}/${storeId}?diningMode=DELIVERY`;
+}
+
+/**
+ * Main in-house scraper function using Cloudflare Browser Rendering
+ *
+ * @param {object} env - Cloudflare environment with BROWSER binding
+ * @param {string} query - Restaurant name to search for
+ * @param {string} address - Delivery address (city, state)
+ * @param {object} options - Optional settings
+ * @returns {object} - { ok, items, restaurant, error }
+ */
+async function scrapeUberEatsMenu(env, query, address, options = {}) {
+  const startTime = Date.now();
+  const maxRows = options.maxRows || 500;
+
+  if (!env.BROWSER) {
+    return {
+      ok: false,
+      error: "BROWSER binding not available - enable Cloudflare Browser Rendering",
+      hint: "Add [browser] binding to wrangler.toml"
+    };
+  }
+
+  let browser = null;
+
+  try {
+    console.log(`[InHouseScraper] Starting scrape for "${query}" @ "${address}"`);
+
+    // Launch browser session
+    browser = await puppeteer.launch(env.BROWSER);
+    const page = await browser.newPage();
+
+    // Set viewport and user agent
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    // Step 1: Go to Uber Eats and search for restaurant
+    const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}`;
+    console.log(`[InHouseScraper] Navigating to search: ${searchUrl}`);
+
+    await page.goto(searchUrl, {
+      waitUntil: 'networkidle0',
+      timeout: 30000
+    });
+
+    // Wait for page to settle
+    await wait(3000);
+
+    // Check if we need to set address
+    const addressModal = await page.$('[data-testid="location-typeahead-input"], input[placeholder*="address"]');
+    if (addressModal && address) {
+      console.log(`[InHouseScraper] Setting delivery address: ${address}`);
+      await addressModal.click();
+      await addressModal.type(address, { delay: 50 });
+      await wait(2000);
+
+      // Click first suggestion
+      const suggestion = await page.$('[data-testid*="suggestion"], [role="option"]');
+      if (suggestion) {
+        await suggestion.click();
+        await wait(2000);
+      }
+    }
+
+    // Step 2: Find and click on the first matching restaurant
+    console.log(`[InHouseScraper] Looking for restaurant matching "${query}"`);
+
+    // Wait for search results
+    await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => null);
+
+    // Find restaurant links
+    const storeLinks = await page.$$eval('a[href*="/store/"]', (links, searchQuery) => {
+      const normalizedQuery = searchQuery.toLowerCase();
+      return links
+        .filter(link => {
+          const text = link.textContent?.toLowerCase() || '';
+          const href = link.href || '';
+          // Match restaurant name in link text
+          return text.includes(normalizedQuery.split(' ')[0]) ||
+                 href.toLowerCase().includes(normalizedQuery.replace(/\s+/g, '-'));
+        })
+        .slice(0, 5)
+        .map(link => ({
+          href: link.href,
+          text: link.textContent?.trim().slice(0, 100)
+        }));
+    }, query);
+
+    if (!storeLinks.length) {
+      console.log(`[InHouseScraper] No restaurants found for "${query}"`);
+      await browser.close();
+      return {
+        ok: false,
+        error: `No restaurants found matching "${query}"`,
+        searchUrl
+      };
+    }
+
+    // Navigate to best matching store
+    const storeUrl = storeLinks[0].href;
+    console.log(`[InHouseScraper] Found store: ${storeLinks[0].text}`);
+    console.log(`[InHouseScraper] Navigating to: ${storeUrl}`);
+
+    await page.goto(storeUrl, {
+      waitUntil: 'networkidle0',
+      timeout: 30000
+    });
+
+    // Wait for menu to load
+    await wait(3000);
+
+    // Step 3: Scroll to load lazy content
+    console.log(`[InHouseScraper] Scrolling to load all menu items...`);
+    await autoScrollPage(page);
+
+    // Step 4: Expand collapsed sections
+    console.log(`[InHouseScraper] Expanding collapsed sections...`);
+    await expandSections(page);
+
+    // Second scroll pass
+    await autoScrollPage(page);
+
+    // Let content settle
+    await wait(2000);
+
+    // Step 5: Extract menu data from DOM
+    console.log(`[InHouseScraper] Extracting menu data...`);
+
+    const menuData = await page.evaluate(() => {
+      const result = {
+        restaurant: {
+          name: null,
+          url: window.location.href,
+          deliveryTime: null,
+          rating: null
+        },
+        sections: [],
+        items: []
+      };
+
+      // Extract restaurant name
+      const h1 = document.querySelector('h1');
+      if (h1) {
+        result.restaurant.name = h1.textContent.trim();
+      }
+
+      // Extract delivery info
+      const metaSpans = document.querySelectorAll('[data-testid="store-info"] span, header span');
+      metaSpans.forEach(span => {
+        const text = span.textContent.trim();
+        if (text.includes('min') && !result.restaurant.deliveryTime) {
+          result.restaurant.deliveryTime = text;
+        }
+        const ratingMatch = text.match(/^(\d+\.?\d*)\s*\(/);
+        if (ratingMatch && !result.restaurant.rating) {
+          result.restaurant.rating = parseFloat(ratingMatch[1]);
+        }
+      });
+
+      // Build section map from headers
+      const sectionMap = new Map();
+      const headers = document.querySelectorAll('h2, h3, [data-testid*="section"], [role="heading"]');
+      const sectionElements = [];
+
+      headers.forEach(h => {
+        const text = h.textContent?.trim();
+        if (!text || text.length > 60 || text.includes('$') || text.includes('Cal')) return;
+        if (/rating|review|faq|about|delivery|sign in/i.test(text)) return;
+
+        const rect = h.getBoundingClientRect();
+        sectionElements.push({
+          name: text,
+          top: rect.top + window.scrollY
+        });
+      });
+
+      sectionElements.sort((a, b) => a.top - b.top);
+
+      // Extract menu items
+      const itemElements = document.querySelectorAll(
+        '[data-testid^="store-item-"], ' +
+        '[data-testid*="menu-item"], ' +
+        '[data-testid*="catalog-item"]'
+      );
+
+      const seenIds = new Set();
+
+      itemElements.forEach((item, idx) => {
+        const testId = item.getAttribute('data-testid') || '';
+        let itemId = testId.replace(/^store-item-|^menu-item-|^catalog-item-/, '') || `item-${idx}`;
+
+        if (seenIds.has(itemId)) return;
+        seenIds.add(itemId);
+
+        // Get item position to determine section
+        const itemRect = item.getBoundingClientRect();
+        const itemTop = itemRect.top + window.scrollY;
+
+        let sectionName = 'Menu Items';
+        for (let i = sectionElements.length - 1; i >= 0; i--) {
+          if (sectionElements[i].top < itemTop) {
+            sectionName = sectionElements[i].name;
+            break;
+          }
+        }
+
+        // Extract item details
+        let name = null;
+        const nameEl = item.querySelector('[data-testid="item-thumbnail-label"], h3, h4, [class*="itemTitle"]');
+        if (nameEl) {
+          const text = nameEl.textContent?.trim();
+          if (text && !text.startsWith('$') && !text.includes('Cal')) {
+            name = text;
+          }
+        }
+
+        if (!name) return;
+
+        const fullText = item.textContent || '';
+
+        // Price
+        const priceMatch = fullText.match(/\$(\d+\.?\d*)/);
+        const price = priceMatch ? parseFloat(priceMatch[1]) : null;
+
+        // Calories
+        const calMatch = fullText.match(/(\d+(?:\s*-\s*\d+)?)\s*Cal/);
+        const calories = calMatch ? calMatch[1].replace(/\s/g, '') : null;
+
+        // Description
+        let description = null;
+        const descEl = item.querySelector('[data-testid="rich-text"], [class*="description"]');
+        if (descEl) {
+          description = descEl.textContent?.trim() || null;
+        }
+
+        // Image
+        let imageUrl = null;
+        const imgEl = item.querySelector('img[src*="uber"], img[src*="cloudfront"]');
+        if (imgEl) {
+          imageUrl = imgEl.src || null;
+        }
+
+        result.items.push({
+          id: itemId,
+          name: name,
+          description: description,
+          section: sectionName,
+          price: price,
+          price_display: price ? `$${price.toFixed(2)}` : null,
+          calories: calories,
+          image_url: imageUrl
+        });
+
+        // Track sections
+        if (!sectionMap.has(sectionName)) {
+          sectionMap.set(sectionName, []);
+        }
+        sectionMap.get(sectionName).push(result.items[result.items.length - 1]);
+      });
+
+      // Build sections array
+      sectionElements.forEach(sec => {
+        if (sectionMap.has(sec.name)) {
+          result.sections.push({
+            name: sec.name,
+            items: sectionMap.get(sec.name)
+          });
+        }
+      });
+
+      // Add uncategorized items
+      const categorizedIds = new Set(result.sections.flatMap(s => s.items.map(i => i.id)));
+      const uncategorized = result.items.filter(i => !categorizedIds.has(i.id));
+      if (uncategorized.length > 0) {
+        result.sections.push({
+          name: 'Other Items',
+          items: uncategorized
+        });
+      }
+
+      return result;
+    });
+
+    await browser.close();
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[InHouseScraper] Extracted ${menuData.items.length} items in ${elapsed}ms`);
+
+    if (menuData.items.length === 0) {
+      return {
+        ok: false,
+        error: "No menu items found on page",
+        restaurant: menuData.restaurant,
+        storeUrl,
+        elapsed_ms: elapsed
+      };
+    }
+
+    // Cache the result for future requests
+    await putInHouseMenu(env, query, address, {
+      restaurant: menuData.restaurant,
+      items: menuData.items.slice(0, maxRows).map(item => ({
+        ...item,
+        canonical_category: mapSectionToCategory(item.section)
+      })),
+      meta: {
+        scraped_at: new Date().toISOString(),
+        store_url: storeUrl,
+        elapsed_ms: elapsed
+      }
+    });
+
+    return {
+      ok: true,
+      source: "inhouse_scraper",
+      restaurant: menuData.restaurant,
+      items: menuData.items.slice(0, maxRows),
+      sections: menuData.sections,
+      store_url: storeUrl,
+      elapsed_ms: elapsed
+    };
+
+  } catch (error) {
+    console.log(`[InHouseScraper] Error: ${error.message}`);
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
+    return {
+      ok: false,
+      error: error.message,
+      elapsed_ms: Date.now() - startTime
+    };
+  }
+}
+
+/**
+ * Auto-scroll page to load lazy content
+ */
+async function autoScrollPage(page) {
+  await page.evaluate(async () => {
+    await new Promise((resolve) => {
+      let totalHeight = 0;
+      let lastHeight = 0;
+      let noChangeCount = 0;
+      const distance = 300;
+      const maxIterations = 100;
+      let iterations = 0;
+
+      const timer = setInterval(() => {
+        const scrollHeight = document.body.scrollHeight;
+        window.scrollBy(0, distance);
+        totalHeight += distance;
+        iterations++;
+
+        if (scrollHeight === lastHeight) {
+          noChangeCount++;
+        } else {
+          noChangeCount = 0;
+        }
+        lastHeight = scrollHeight;
+
+        if (totalHeight >= scrollHeight || noChangeCount > 5 || iterations > maxIterations) {
+          clearInterval(timer);
+          window.scrollTo(0, 0);
+          resolve();
+        }
+      }, 150);
+    });
+  });
+}
+
+/**
+ * Expand collapsed menu sections
+ */
+async function expandSections(page) {
+  await page.evaluate(async () => {
+    const expandButtons = document.querySelectorAll(
+      'button[aria-expanded="false"], ' +
+      '[data-testid*="show-more"], ' +
+      '[data-testid*="view-more"], ' +
+      '[data-testid*="expand"]'
+    );
+
+    const allButtons = document.querySelectorAll('button, [role="button"]');
+    const textButtons = Array.from(allButtons).filter(btn => {
+      const text = btn.textContent?.toLowerCase() || '';
+      return text.includes('view more') || text.includes('show more') || text.includes('see all');
+    });
+
+    const buttons = [...expandButtons, ...textButtons];
+
+    for (const btn of buttons) {
+      try {
+        btn.click();
+        await new Promise(r => setTimeout(r, 300));
+      } catch (e) {}
+    }
+  });
+}
+
+/**
+ * Map section name to canonical category
+ */
+function mapSectionToCategory(sectionName) {
+  const name = (sectionName || '').toLowerCase();
+
+  if (/burger|sandwich|wrap|taco|pizza|bowl|entree|main|chicken|beef|pork|fish|steak|fried/i.test(name)) {
+    return 'mains';
+  }
+  if (/appetizer|starter|small plate|share/i.test(name)) {
+    return 'appetizers';
+  }
+  if (/side|fries|salad|soup/i.test(name)) {
+    return 'sides';
+  }
+  if (/dessert|sweet|ice cream|cake|cookie/i.test(name)) {
+    return 'desserts';
+  }
+  if (/drink|beverage|soda|juice|water|coffee|tea|shake|smoothie/i.test(name)) {
+    return 'drinks';
+  }
+  if (/combo|meal|bundle|family|party/i.test(name)) {
+    return 'combos';
+  }
+  if (/kid|child/i.test(name)) {
+    return 'kids';
+  }
+
+  return 'mains';
+}
+
 // ---- fetch with timeout helper ----
 async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   const controller = new AbortController();
@@ -12002,7 +12554,7 @@ async function callUberForMenu(env, query, address, opts = {}, ctx) {
   const params = new URLSearchParams({
     query,
     address,
-    maxRows: String(opts.maxRows || 250),
+    maxRows: String(opts.maxRows || 500),  // TUNED: Increased from 250 for fuller menus
     page: String(opts.page || 1),
     us: "1",
     locale: opts.locale || "en-US"
@@ -12464,7 +13016,7 @@ async function handleMenuExtract(env, request, url, ctx) {
           env,
           query,
           address,
-          { maxRows: 250, page: 1, locale: "en-US" },
+          { maxRows: 500, page: 1, locale: "en-US" },  // TUNED: 500 items for complete menus
           ctx
         );
         uberResult = uber;
@@ -14352,7 +14904,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
 // ========== Uber Eats (Apify) — Tier 1 Scraper ==========
 // ========== Apify Async with Webhooks ==========
 // Start an async Apify run and get notified via webhook when complete
-async function startApifyRunAsync(env, query, address, maxRows = 250, locale = "en-US", jobId = null) {
+async function startApifyRunAsync(env, query, address, maxRows = 500, locale = "en-US", jobId = null) {
   const token = env.APIFY_TOKEN;
   const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
 
@@ -14450,7 +15002,7 @@ async function fetchMenuFromApify(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 250,
+  maxRows = 500,  // TUNED: Increased from 250 for complete menus
   locale = "en-US"
 ) {
   const token = env.APIFY_TOKEN;
@@ -14468,7 +15020,7 @@ async function fetchMenuFromApify(
     query: String(query || ""),
     address: String(address),
     locale: String(locale || "en-US"),
-    maxRows: Number(maxRows) || 15,
+    maxRows: Number(maxRows) || 500,  // TUNED: Increased from 15 for complete menus
     proxy: {
       useApifyProxy: true,
       apifyProxyGroups: ["RESIDENTIAL"]
@@ -14533,7 +15085,7 @@ async function fetchMenuFromUberEatsTiered(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 250,
+  maxRows = 500,  // TUNED: Increased for complete menus
   lat = null,
   lng = null,
   radius = 5000
@@ -14578,7 +15130,7 @@ async function fetchMenuFromUberEatsTiered(
 // Returns same interface as postJobByAddress: { ok, immediate, raw, job_id?, _tier }
 // Runs both scrapers in parallel and returns the first successful response
 async function postJobByAddressTiered(
-  { query, address, maxRows = 250, locale = "en-US", page = 1, webhook = null },
+  { query, address, maxRows = 500, locale = "en-US", page = 1, webhook = null },  // TUNED: 500 items
   env
 ) {
   const apifyEnabled = !!env.APIFY_TOKEN;
@@ -14648,7 +15200,7 @@ async function postJobByAddressTiered(
 // ========== Uber Eats Tiered Job by Location (GPS) — Apify (Tier 1) → RapidAPI (Tier 2) ==========
 // Returns same interface as postJobByLocation: { ok, data/results, _tier }
 async function postJobByLocationTiered(
-  { query, lat, lng, radius = 6000, maxRows = 250 },
+  { query, lat, lng, radius = 6000, maxRows = 500 },  // TUNED: 500 items for complete menus
   env
 ) {
   const tier1Enabled = !!env.APIFY_TOKEN;
@@ -14695,7 +15247,7 @@ async function fetchMenuFromUberEats(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 250,
+  maxRows = 500,  // TUNED: Increased for complete menus
   lat = null,
   lng = null,
   radius = 5000
@@ -15029,7 +15581,7 @@ async function searchNearbyCandidates(
             seen.add(k);
             return true;
           })
-          .slice(0, Number(maxRows) || 25);
+          .slice(0, Number(maxRows) || 500);  // TUNED: Default to 500 items
 
         return {
           ok: true,
@@ -15052,7 +15604,7 @@ async function searchNearbyCandidates(
 
 // ---- UBER EATS: CREATE A JOB BY ADDRESS (exact vendor format) ----
 async function postJobByAddress(
-  { query, address, maxRows = 250, locale = "en-US", page = 1, webhook = null },
+  { query, address, maxRows = 500, locale = "en-US", page = 1, webhook = null },  // TUNED: 500 items
   env
 ) {
   const host = env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
@@ -15502,22 +16054,28 @@ function flattenUberPayloadToItemsGateway(payload, opts = {}) {
       store.location?.formattedAddress ||
       "";
 
+    // TUNED: Handle multiple menu data structures from Uber Eats
     const menus = Array.isArray(store.menu) ? store.menu : [];
 
     for (const section of menus) {
-      const sectionName = section.catalogName || section.sectionName || "";
-      const items = Array.isArray(section.catalogItems)
-        ? section.catalogItems
+      const sectionName = section.catalogName || section.sectionName || section.title || section.name || "";
+
+      // TUNED: Try multiple item array field names
+      const items = Array.isArray(section.catalogItems) ? section.catalogItems
+        : Array.isArray(section.items) ? section.items
+        : Array.isArray(section.menuItems) ? section.menuItems
+        : Array.isArray(section.products) ? section.products
+        : Array.isArray(section.itemList) ? section.itemList
         : [];
 
       for (const item of items) {
         if (!item) continue;
-        const name = item.title || item.name || "";
+        const name = item.title || item.name || item.itemName || item.productName || "";
         if (!name) continue;
 
         let imageUrl = null;
-        if (item.imageUrl || item.image_url || item.image) {
-          imageUrl = item.imageUrl || item.image_url || item.image;
+        if (item.imageUrl || item.image_url || item.image || item.heroImageUrl) {
+          imageUrl = item.imageUrl || item.image_url || item.image || item.heroImageUrl;
         } else if (Array.isArray(item.images) && item.images.length > 0) {
           imageUrl =
             item.images[0].url ||
@@ -15532,13 +16090,25 @@ function flattenUberPayloadToItemsGateway(payload, opts = {}) {
             null;
         }
 
+        // TUNED: Handle multiple price formats
+        let price = null;
+        if (typeof item.price === "number") {
+          price = item.price;
+        } else if (item.price?.amount) {
+          price = item.price.amount / 100; // Convert cents to dollars
+        } else if (item.price?.value) {
+          price = item.price.value;
+        } else if (item.priceInfo?.amount) {
+          price = item.priceInfo.amount / 100;
+        }
+
         flat.push({
           name,
-          description: item.itemDescription || item.description || "",
+          description: item.itemDescription || item.description || item.desc || "",
           section: sectionName,
-          price: typeof item.price === "number" ? item.price : null,
-          price_display: item.priceTagline || null,
-          calories_display: item.calories || item.calories_display || null,
+          price: price,
+          price_display: item.priceTagline || item.priceDisplay || item.formattedPrice || null,
+          calories_display: item.calories || item.calories_display || item.caloriesDisplay || item.nutritionalInfo?.calories || null,
           restaurantTitle,
           restaurantAddress,
           imageUrl,
@@ -15952,7 +16522,7 @@ async function runAddressJobRaw(
   {
     query = "seafood",
     address = "South Miami, FL, USA",
-    maxRows = 250,
+    maxRows = 500,  // TUNED: 500 for complete menus
     locale = "en-US",
     page = 1
   },
@@ -15962,7 +16532,7 @@ async function runAddressJobRaw(
   const key = env.RAPIDAPI_KEY || "";
   const body = {
     scraper: {
-      maxRows: Number(maxRows) || 250,
+      maxRows: Number(maxRows) || 500,  // TUNED: 500 for complete menus
       query,
       address,
       locale,
@@ -20075,6 +20645,98 @@ const _worker_impl = {
       }, null, 2), { headers: { "content-type": "application/json" } });
     }
 
+    // --- ADMIN: Publish in-house menu to cache ---
+    // POST /inhouse/menu/publish
+    // Body: { restaurant: string, address: string, items: [...] }
+    if (pathname === "/inhouse/menu/publish" && request.method === "POST") {
+      const adminGate = requireAdmin(request, env);
+      if (!adminGate.ok) {
+        return new Response(JSON.stringify(adminGate.body), {
+          status: adminGate.status,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      let body;
+      try {
+        body = await request.json();
+      } catch (e) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Invalid JSON body"
+        }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+
+      // Handle restaurant as string or object (normalized_menu.json uses object format)
+      let restaurantName = body.query;
+      let restaurantData = null;
+      if (typeof body.restaurant === 'string') {
+        restaurantName = body.restaurant;
+      } else if (body.restaurant && typeof body.restaurant === 'object') {
+        restaurantName = body.restaurant.name || body.restaurant.slug || body.query;
+        restaurantData = body.restaurant;
+      }
+
+      const address = body.address || body.location || "";
+      const items = body.items || [];
+
+      if (!restaurantName) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Missing restaurant name. Use 'query' field or 'restaurant.name'"
+        }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Missing or empty 'items' array"
+        }), { status: 400, headers: { "content-type": "application/json" } });
+      }
+
+      const success = await putInHouseMenu(env, restaurantName, address, {
+        restaurant: restaurantData || { name: restaurantName, address },
+        items,
+        meta: body.meta || {}
+      });
+
+      const key = buildInHouseMenuKey(restaurantName, address);
+      return new Response(JSON.stringify({
+        ok: success,
+        key,
+        item_count: items.length,
+        restaurant: restaurantName,
+        address: address || "(none)"
+      }, null, 2), {
+        status: success ? 200 : 500,
+        headers: { "content-type": "application/json" }
+      });
+    }
+
+    // --- ADMIN: List in-house menus ---
+    if (pathname === "/inhouse/menu/list") {
+      const kv = env.MENUS_CACHE;
+      if (!kv) {
+        return new Response(JSON.stringify({ ok: false, error: "MENUS_CACHE not bound" }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      const limit = Number(searchParams.get("limit") || "100");
+      const list = await kv.list({ prefix: "inhouse:menu:", limit });
+      const menus = list.keys.map(k => ({
+        key: k.name,
+        expiration: k.expiration ? new Date(k.expiration * 1000).toISOString() : null
+      }));
+
+      return new Response(JSON.stringify({
+        ok: true,
+        count: menus.length,
+        menus,
+        more: !list.list_complete
+      }, null, 2), { headers: { "content-type": "application/json" } });
+    }
+
     // --- DEBUG: View stale menu entries ---
     if (pathname === "/debug/menu-cache/stale") {
       const limit = Number(searchParams.get("limit") || "50");
@@ -20847,344 +21509,48 @@ const _worker_impl = {
           // ignore cache errors and proceed to live
         }
 
-        // Address-based job path
-        if (addressRaw) {
-          // US hint: append ", USA" once if forcing US but address lacks it
-          let address = addressRaw;
-          if (forceUSFlag && !/usa|united states/i.test(address))
-            address = `${addressRaw}, USA`;
+        // ---- IN-HOUSE PIPELINE CHECK ----
+        // Check for pre-published menus from our own scraper pipeline BEFORE live scraping
+        // In-house menus are already normalized/validated - NO filterMenuForDisplay() needed
+        const inHouseMenu = await getInHouseMenu(env, query, addressRaw);
+        if (inHouseMenu && inHouseMenu.items && inHouseMenu.items.length > 0) {
+          trace.used_path = "inhouse_cache";
+          trace.used_tier = "inhouse";
+          await bumpStatusKV(env, { inhouse_hit: 1 });
 
-          const job = await postJobByAddressTiered(
-            { query, address, maxRows, locale, page },
-            env
-          );
+          // Map in-house items to expected response format (no filtering needed - already clean)
+          const items = inHouseMenu.items.map((it, idx) => ({
+            id: it.id || it.source_id || `item-${idx + 1}`,
+            name: it.name || "",
+            description: it.description || "",
+            section: it.canonical_category || it.section || "mains",
+            canonicalCategory: it.canonical_category || "mains",
+            rawPrice: it.price_cents ? it.price_cents / 100 : (it.price || null),
+            priceText: it.price_cents ? `$${(it.price_cents / 100).toFixed(2)}` : it.price_display,
+            imageUrl: it.image_url || null,
+            restaurantCalories: it.calories?.min || it.calories?.max || (typeof it.calories === 'string' ? parseInt(it.calories) : null)
+          }));
 
-          // Update trace with tier info
-          const usedTier = job?._tier || "unknown";
-          trace.used_tier = usedTier;
-          trace.host = usedTier === "apify" ? "api.apify.com" : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
-          trace.used_path = usedTier === "apify" ? "/v2/acts/run-sync" : "/api/job";
-
-          // Immediate data
-          if (job?.immediate) {
-            let rows = job.raw?.returnvalue?.data || [];
-            const rowsUS = filterRowsUS(rows, forceUSFlag);
-            const titles = rowsUS.map((r) => r?.title).filter(Boolean);
-
-            if (debug === "titles") {
-              return respondTB(
-                withBodyAnalytics(
-                  {
-                    ok: true,
-                    source: "address-immediate",
-                    count: titles.length,
-                    titles,
-                    ...warnPart()
-                  },
-                  ctx,
-                  rid,
-                  trace
-                ),
-                200
-              );
-            }
-
-            // [38.11b] debug=1 preview for address-immediate
-            if (debug === "1") {
-              trace.used_path = "/api/job";
-              await bumpStatusKV(env, { debug: 1 });
-              const preview = buildDebugPreview(
-                job?.raw || {},
-                env,
-                rowsUS,
-                titles
-              );
-              return respondTB(
-                withBodyAnalytics(preview, ctx, rid, trace),
-                200
-              );
-            }
-
-            const googleContext = {
-              name: query,
-              address: addressRaw,
-              lat: lat ? Number(lat) : null,
-              lng: lng ? Number(lng) : null
-            };
-
-            const best = pickBestRestaurant({
-              rows: rowsUS,
-              query,
-              googleContext
-            });
-            const chosen =
-              best ||
-              (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
-            if (debug === "why") {
-              const exp = explainRestaurantChoices({
-                rows: rowsUS,
-                query,
-                limit: 10
-              });
-              await bumpStatusKV(env, { debug: 1 });
-              return respondTB(
-                withBodyAnalytics(
-                  {
-                    ok: true,
-                    source: "debug-why-immediate",
-                    explain: exp,
-                    query,
-                    address: addressRaw,
-                    ...warnPart()
-                  },
-                  ctx,
-                  rid,
-                  trace
-                ),
-                200
-              );
-            }
-            if (!chosen) {
-              await bumpStatusKV(env, { errors_4xx: 1 });
-              return notFoundCandidates(ctx, rid, trace, {
-                query,
-                address: addressRaw
-              });
-            }
-
-            const fake = { data: { results: [chosen] } };
-            const rawFlattenedItems = extractMenuItemsFromUber(fake, query);
-            // Apply filtering to remove drinks, utensils, extras, etc.
-            const flattenedItems = filterMenuForDisplay(rawFlattenedItems);
-
-            // Optional: enqueue for analysis when requested
-            const analyze = searchParams.get("analyze") === "1";
-            let enqueued = [];
-            if (
-              analyze &&
-              Array.isArray(flattenedItems) &&
-              flattenedItems.length
-            ) {
-              const top = filterAndRankItems(flattenedItems, searchParams, env);
-              const place_id = searchParams.get("place_id") || "place.unknown";
-              const cuisine = searchParams.get("cuisine") || "";
-              ({ enqueued } = await enqueueTopItems(env, top, {
-                place_id,
-                cuisine,
-                query,
-                address: addressRaw,
-                forceUS: !!forceUSFlag
-              }));
-            }
-
-            // 2) Write to cache (best-effort)
-            try {
-              await writeMenuToCache(env, cacheKey, {
-                query,
-                address: addressRaw,
-                forceUS: !!forceUSFlag,
-                items: flattenedItems
-              });
-              cacheStatus = "stored";
-            } catch (e) {
-              cacheStatus = "store-failed";
-              setWarn("Could not store fresh cache (non-fatal).");
-            }
-
-            // 3) Respond (include enqueued[] when present)
-            trace.used_path = "/api/job"; // [38.9]
-            await bumpStatusKV(env, { address_immediate: 1 });
-            return respondTB(
-              withBodyAnalytics(
-                {
-                  ok: true,
-                  source: "address-immediate",
-                  cache: cacheStatus,
-                  data: {
-                    query,
-                    address: addressRaw,
-                    forceUS: !!forceUSFlag,
-                    items: flattenedItems.slice(0, maxRows)
-                  },
-                  enqueued,
-                  ...warnPart()
-                },
-                ctx,
-                rid,
-                trace
-              ),
-              200
-            );
-          }
-
-          // Poll by job id
-          const jobId = job?.job_id;
-          if (!jobId) {
-            await bumpStatusKV(env, { errors_5xx: 1 });
-            return errorResponseWith(
-              {
-                ok: false,
-                error:
-                  "Upstream didn’t return a job_id for the address search.",
-                hint: "Please try again in a moment. If this keeps happening, try a nearby ZIP code.",
-                raw: job
-              },
-              502,
-              ctx,
-              {
-                "X-TB-Source": "job-missing-id",
-                "X-TB-Upstream-Status": "502",
-                trace: safeTrace(trace)
-              },
-              rid
-            );
-          }
-
-          const finished = await pollUberJobUntilDone({ jobId, env });
-
-          let rows =
-            finished?.returnvalue?.data ||
-            finished?.data?.data ||
-            finished?.data ||
-            [];
-          const rowsUS = filterRowsUS(rows, forceUSFlag);
-
-          const googleContext = {
-            name: query,
-            address: addressRaw,
-            lat: lat ? Number(lat) : null,
-            lng: lng ? Number(lng) : null
-          };
-
-          const best = pickBestRestaurant({
-            rows: rowsUS,
-            query,
-            googleContext
-          });
-          const chosen =
-            best || (Array.isArray(rowsUS) && rowsUS.length ? rowsUS[0] : null);
-          if (debug === "why") {
-            const exp = explainRestaurantChoices({
-              rows: rowsUS,
-              query,
-              limit: 10
-            });
-            await bumpStatusKV(env, { debug: 1 });
-            return respondTB(
-              withBodyAnalytics(
-                {
-                  ok: true,
-                  source: "debug-why-job",
-                  explain: exp,
-                  query,
-                  address: addressRaw,
-                  ...warnPart()
-                },
-                ctx,
-                rid,
-                trace
-              ),
-              200
-            );
-          }
-          if (!chosen) {
-            await bumpStatusKV(env, { errors_4xx: 1 });
-            return notFoundCandidates(ctx, rid, trace, {
-              query,
-              address: addressRaw
-            });
-          }
-
-          if (debug === "titles") {
-            const titles = (Array.isArray(rowsUS) ? rowsUS : [])
-              .map((r) => r?.title)
-              .filter(Boolean);
-            return respondTB(
-              withBodyAnalytics(
-                {
-                  ok: true,
-                  source: "address-job",
-                  picked: chosen?.title || null,
-                  count: titles.length,
-                  titles,
-                  ...warnPart()
-                },
-                ctx,
-                rid,
-                trace
-              ),
-              200
-            );
-          }
-
-          // [38.11b] debug=1 preview for address-job
-          if (debug === "1") {
-            trace.used_path = "/api/job";
-            const titles = (Array.isArray(rowsUS) ? rowsUS : [])
-              .map((r) => r?.title)
-              .filter(Boolean);
-            await bumpStatusKV(env, { debug: 1 });
-            const preview = buildDebugPreview(
-              finished || {},
-              env,
-              rowsUS,
-              titles
-            );
-            return respondTB(withBodyAnalytics(preview, ctx, rid, trace), 200);
-          }
-
-          const fake = { data: { results: [chosen] } };
-          const rawFlattenedItems = extractMenuItemsFromUber(fake, query);
-          // Apply filtering to remove drinks, utensils, extras, etc.
-          const flattenedItems = filterMenuForDisplay(rawFlattenedItems);
-
-          // Optional analyze enqueue
-          const analyze = searchParams.get("analyze") === "1";
-          let enqueued = [];
-          if (
-            analyze &&
-            Array.isArray(flattenedItems) &&
-            flattenedItems.length
-          ) {
-            const top = filterAndRankItems(flattenedItems, searchParams, env);
-            const place_id = searchParams.get("place_id") || "place.unknown";
-            const cuisine = searchParams.get("cuisine") || "";
-            ({ enqueued } = await enqueueTopItems(env, top, {
-              place_id,
-              cuisine,
-              query,
-              address: addressRaw,
-              forceUS: !!forceUSFlag
-            }));
-          }
-
-          try {
-            await writeMenuToCache(env, cacheKey, {
-              query,
-              address: addressRaw,
-              forceUS: !!forceUSFlag,
-              items: flattenedItems
-            });
-            cacheStatus = "stored";
-          } catch (e) {
-            cacheStatus = "store-failed";
-            setWarn("Could not store fresh cache (non-fatal).");
-          }
-          trace.used_path = "/api/job"; // [38.9]
-          await bumpStatusKV(env, { address_job: 1 });
           return respondTB(
             withBodyAnalytics(
               {
                 ok: true,
-                source: "address-job",
-                cache: cacheStatus,
+                source: "inhouse_cache",
+                cache: "hit",
+                inhouse: true,
+                restaurant: inHouseMenu.restaurant,
                 data: {
                   query,
                   address: addressRaw,
                   forceUS: !!forceUSFlag,
-                  items: flattenedItems.slice(0, maxRows)
+                  items: items.slice(0, maxRows)
                 },
-                enqueued,
+                meta: {
+                  item_count: items.length,
+                  cached_at: inHouseMenu.cachedAt,
+                  cache_key: inHouseMenu._key,
+                  pipeline: "v1_published"
+                },
                 ...warnPart()
               },
               ctx,
@@ -21195,348 +21561,96 @@ const _worker_impl = {
           );
         }
 
-        // GPS flow
-        if (lat && lng) {
-          try {
-            const jobRes = await postJobByLocationTiered(
-              { query, lat: Number(lat), lng: Number(lng), radius, maxRows },
-              env
-            );
-            if (jobRes?.path) trace.used_path = jobRes.path; // [38.9]
-            if (jobRes?._tier) trace.used_tier = jobRes._tier;
-            const jobId = jobRes?.job_id || jobRes?.id || jobRes?.jobId;
-            if (!jobId) {
-              await bumpStatusKV(env, { errors_5xx: 1 });
-              return errorResponseWith(
-                {
-                  ok: false,
-                  error:
-                    "Upstream didn’t return a job_id for the location search.",
-                  hint: "Please try again shortly. If it keeps failing, widen the radius or include a ZIP.",
-                  raw: jobRes
-                },
-                502,
-                ctx,
-                {
-                  "X-TB-Source": "job-missing-id",
-                  "X-TB-Upstream-Status": "502",
-                  trace: safeTrace(trace)
-                },
-                rid
-              );
-            }
+        // ---- IN-HOUSE LIVE SCRAPER (Cloudflare Browser Rendering) ----
+        // NO LEGACY FALLBACK - scrape directly using our own browser
+        trace.used_path = "inhouse_scraper";
+        trace.used_tier = "inhouse";
 
-            const finished = await pollUberJobUntilDone({ jobId, env });
-            const buckets = [
-              finished?.data?.stores,
-              finished?.data?.restaurants,
-              finished?.stores,
-              finished?.restaurants,
-              finished?.data
-            ].filter(Boolean);
-            const candidates = [];
-            for (const b of buckets)
-              if (Array.isArray(b)) candidates.push(...b);
-            const titles = candidates
-              .map((c) => c?.title || c?.name || c?.storeName || c?.displayName)
-              .filter(Boolean);
+        console.log(`[menu/uber-test] Launching in-house scraper for "${query}" @ "${addressRaw}"`);
+        const scrapeResult = await scrapeUberEatsMenu(env, query, addressRaw, { maxRows });
 
-            if (debug === "titles") {
-              return respondTB(
-                withBodyAnalytics(
-                  {
-                    ok: true,
-                    source: "location-job",
-                    count: titles.length,
-                    titles,
-                    ...warnPart()
-                  },
-                  ctx,
-                  rid,
-                  trace
-                ),
-                200
-              );
-            }
-
-            await bumpStatusKV(env, { location_job: 1 });
-            return respondTB(
-              withBodyAnalytics(
-                {
-                  ok: true,
-                  source: "location-job",
-                  candidates: titles.slice(0, maxRows),
-                  raw: finished,
-                  ...warnPart()
-                },
-                ctx,
-                rid,
-                trace
-              ),
-              200
-            );
-          } catch (e) {
-            const msg = String(e?.message || e);
-            if (msg.includes("HARD_404")) {
-              const nearby = await searchNearbyCandidates(
-                { query, lat: Number(lat), lng: Number(lng), radius, maxRows },
-                env
-              );
-              setWarn(
-                "Used GPS search fallback (vendor location job unavailable)."
-              );
-              trace.used_path = nearby?.pathTried || "gps-search"; // [38.9]
-              if (debug === "titles") {
-                return respondTB(
-                  withBodyAnalytics(
-                    {
-                      ok: nearby.ok,
-                      source: "gps-search",
-                      count: nearby?.count || 0,
-                      titles: (nearby?.candidates || []).map((c) => c.title),
-                      ...warnPart()
-                    },
-                    ctx,
-                    rid,
-                    trace
-                  ),
-                  200
-                );
-              }
-              if (debug === "raw") {
-                return respondTB(
-                  withBodyAnalytics(
-                    {
-                      ok: nearby.ok,
-                      source: "gps-search",
-                      pathTried: nearby?.pathTried,
-                      raw: nearby?.raw,
-                      ...warnPart()
-                    },
-                    ctx,
-                    rid,
-                    trace
-                  ),
-                  200
-                );
-              }
-              await bumpStatusKV(env, { gps_search: 1 });
-              return respondTB(
-                withBodyAnalytics(
-                  {
-                    ok: nearby.ok,
-                    source: "gps-search",
-                    candidates: nearby?.candidates || [],
-                    ...warnPart()
-                  },
-                  ctx,
-                  rid,
-                  trace
-                ),
-                200
-              );
-            }
-            if (/\b429\b/.test(msg)) {
-              const mSecs = msg.match(/RETRYABLE_429:(\d+)/);
-              const secs = mSecs ? Number(mSecs[1] || 0) : 30;
-              await bumpStatusKV(env, { ratelimits_429: 1 });
-              return rateLimitResponse(
-                ctx,
-                rid,
-                trace,
-                secs > 0 ? secs : 30,
-                "upstream-failure"
-              );
-            }
-            await bumpStatusKV(env, { errors_5xx: 1 });
-            return errorResponseWith(
-              {
-                ok: false,
-                error: friendlyUpstreamMessage(502),
-                upstream_error: msg.slice(0, 300),
-                hint: "Please try again shortly."
-              },
-              502,
-              ctx,
-              {
-                "X-TB-Source": "upstream-failure",
-                "X-TB-Upstream-Status": "502",
-                trace: safeTrace(trace)
-              },
-              rid
-            );
-          }
-        }
-
-        if (!query) {
-          await bumpStatusKV(env, { errors_4xx: 1 });
+        if (!scrapeResult.ok) {
+          await bumpStatusKV(env, { scraper_error: 1 });
           return errorResponseWith(
             {
               ok: false,
-              error: 'Missing "query" (restaurant name).',
-              hint: "Example: /menu/uber-test?query=McDonald%27s&address=Miami,%20FL",
-              examples: [
-                "/menu/uber-test?query=McDonald%27s&address=Miami,%20FL",
-                "/menu/uber-test?query=Starbucks&address=Seattle,%20WA",
-                "/menu/uber-test?query=Chipotle&address=Austin,%20TX"
-              ]
+              error: scrapeResult.error || "Menu scraping failed",
+              hint: "The restaurant may be unavailable or closed. Try a different location.",
+              source: "inhouse_scraper",
+              elapsed_ms: scrapeResult.elapsed_ms
             },
-            400,
+            404,
             ctx,
             {
-              "X-TB-Source": "input-missing",
+              "X-TB-Source": "inhouse-scraper",
               trace: safeTrace(trace)
             },
             rid
           );
         }
 
-        const raw = await fetchMenuFromUberEatsTiered(
-          env,
-          query,
-          addressRaw,
-          maxRows,
-          latNum,
-          lngNum,
-          radius
-        );
-        if (searchParams.get("debug") === "1") {
-          trace.used_path = trace.used_path || `fetchMenuFromUberEats:${raw?._tier || "unknown"}`; // keep trace detail
-          await bumpStatusKV(env, { debug: 1 });
-          const preview = buildDebugPreview(raw || {}, env);
-          return respondTB(withBodyAnalytics(preview, ctx, rid, trace), 200);
-        }
+        // Map scraped items to expected response format
+        const scrapedItems = (scrapeResult.items || []).map((it, idx) => ({
+          id: it.id || `item-${idx + 1}`,
+          name: it.name || "",
+          description: it.description || "",
+          section: it.section || "mains",
+          canonicalCategory: mapSectionToCategory(it.section),
+          rawPrice: it.price || null,
+          priceText: it.price_display || null,
+          imageUrl: it.image_url || null,
+          restaurantCalories: it.calories ? parseInt(it.calories) : null
+        }));
 
-        const usedHost = raw?._tier === "apify"
-          ? "api.apify.com"
-          : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
-        const rawFlattenedItems = extractMenuItemsFromUber(raw, query);
-        // Apply filtering to remove drinks, utensils, extras, etc.
-        const flattenedItems = filterMenuForDisplay(rawFlattenedItems);
+        await bumpStatusKV(env, { inhouse_scrape: 1 });
 
-        if (debug === "rank") {
-          const preview = rankTop(flattenedItems, 10).map((x) => ({
-            section: x.section,
-            name: x.name || x.title,
-            price_display: x.price_display || null
-          }));
-          return respondTB(
-            withBodyAnalytics(
-              {
-                ok: true,
-                source: "live",
-                cache: cacheStatus,
-                preview,
-                ...warnPart()
-              },
-              ctx,
-              rid,
-              trace
-            ),
-            200,
-            {},
-            CORS_ALL
-          );
-        }
-
-        // Optional analyze enqueue
-        const analyze = searchParams.get("analyze") === "1";
-        let enqueued = [];
-        if (analyze && Array.isArray(flattenedItems) && flattenedItems.length) {
-          const top = filterAndRankItems(flattenedItems, searchParams, env);
-          const place_id = searchParams.get("place_id") || "place.unknown";
-          const cuisine = searchParams.get("cuisine") || "";
-          ({ enqueued } = await enqueueTopItems(env, top, {
-            place_id,
-            cuisine,
-            query,
-            address: addressRaw,
-            forceUS: !!forceUSFlag
-          }));
-        }
-
-        // store into cache (best-effort)
-        try {
-          await writeMenuToCache(env, cacheKey, {
-            query,
-            address: addressRaw,
-            forceUS: !!forceUSFlag,
-            items: flattenedItems
-          });
-          cacheStatus = "stored";
-        } catch (e) {
-          cacheStatus = "store-failed";
-          setWarn("Could not store fresh cache (non-fatal).");
-        }
-
-        if (!trace.used_path) trace.used_path = `fetchMenuFromUberEats:${raw?._tier || "unknown"}`; // [38.9]
-        await bumpStatusKV(env, { live: 1 });
         return respondTB(
           withBodyAnalytics(
             {
               ok: true,
-              source: "live",
-              cache: cacheStatus,
+              source: "inhouse_scraper",
+              cache: "miss",
+              inhouse: true,
+              restaurant: scrapeResult.restaurant,
               data: {
                 query,
                 address: addressRaw,
                 forceUS: !!forceUSFlag,
-                maxRows,
-                host: usedHost,
-                count: flattenedItems.length,
-                items: flattenedItems.slice(0, 25)
+                items: scrapedItems.slice(0, maxRows)
               },
-              enqueued,
+              meta: {
+                item_count: scrapedItems.length,
+                store_url: scrapeResult.store_url,
+                elapsed_ms: scrapeResult.elapsed_ms,
+                scraped_at: new Date().toISOString()
+              },
               ...warnPart()
             },
             ctx,
             rid,
             trace
           ),
-          200,
-          {},
-          CORS_ALL
+          200
         );
-      } catch (err) {
-        // [40.2] friendlier upstream error with analytics + real Retry-After on 429
-        const msg = String(err?.message || err || "");
-        const m = msg.match(/\b(429|500|502|503|504)\b/);
-        const upstreamStatus = m ? Number(m[1]) : 500;
 
-        // Pull seconds if the message was like "RETRYABLE_429:NN"
-        let retrySecs = 0;
-        const mSecs = msg.match(/RETRYABLE_429:(\d+)/);
-        if (mSecs) retrySecs = Number(mSecs[1] || 0);
+      } catch (scrapeErr) {
+        // Handle scraper errors gracefully
+        const msg = String(scrapeErr?.message || scrapeErr || "");
+        console.log(`[menu/uber-test] Scraper error: ${msg}`);
 
-        if (upstreamStatus === 429) {
-          await bumpStatusKV(env, { ratelimits_429: 1 });
-          return rateLimitResponse(
-            ctx,
-            rid,
-            trace,
-            retrySecs > 0 ? retrySecs : 30,
-            "upstream-failure"
-          );
-        }
-
-        await bumpStatusKV(env, { errors_5xx: 1 });
-        const hint =
-          upstreamStatus === 429
-            ? "Please retry in ~30–60 seconds."
-            : "Please try again shortly.";
-
+        await bumpStatusKV(env, { scraper_error: 1 });
         return errorResponseWith(
           {
             ok: false,
-            error: friendlyUpstreamMessage(upstreamStatus),
-            upstream_error: msg.slice(0, 300),
-            hint
+            error: "Menu scraping failed",
+            details: msg.slice(0, 300),
+            hint: "The restaurant may be unavailable. Try a different search or location.",
+            source: "inhouse_scraper"
           },
-          upstreamStatus,
+          500,
           ctx,
           {
-            "X-TB-Source": "upstream-failure",
-            "X-TB-Upstream-Status": String(upstreamStatus),
+            "X-TB-Source": "inhouse-scraper-error",
             trace: safeTrace(trace)
           },
           rid
@@ -25483,50 +25597,46 @@ async function writeMenuToCache(env, key, data) {
 
 // Background refresh: fetch fresh menu data and update cache (non-blocking).
 // Called when serving stale cache to ensure next request gets fresh data.
+// Uses in-house Cloudflare Browser Rendering scraper.
 async function refreshMenuInBackground(env, { query, address, forceUS, cacheKey }) {
   console.log(`[menu-refresh] Starting background refresh for: ${query} @ ${address}`);
   try {
-    // Use the same tiered job fetcher as live requests
-    let addr = address;
-    if (forceUS && !/usa|united states/i.test(addr)) {
-      addr = `${address}, USA`;
+    // Use in-house scraper (Cloudflare Browser Rendering)
+    const scrapeResult = await scrapeUberEatsMenu(env, query, address, { maxRows: 100 });
+
+    if (!scrapeResult.ok) {
+      console.log(`[menu-refresh] Scraper failed for ${query}: ${scrapeResult.error}`);
+      return { ok: false, reason: "scraper_failed", error: scrapeResult.error };
     }
 
-    const job = await postJobByAddressTiered({ query, address: addr, maxRows: 50 }, env);
-
-    if (job?.immediate) {
-      const rows = job.raw?.returnvalue?.data || [];
-      const rowsUS = filterRowsUS(rows, forceUS);
-
-      // Pick best restaurant
-      const googleContext = { name: query, address };
-      const best = pickBestRestaurant({ rows: rowsUS, query, googleContext });
-      const chosen = best || (rowsUS.length ? rowsUS[0] : null);
-
-      if (chosen?.menu?.length) {
-        // Normalize menu items for cache storage
-        const items = chosen.menu.map(m => ({
-          name: m.name || m.title || "",
-          section: m.section || "",
-          description: m.description || m.itemDescription || "",
-          price: m.price,
-          price_display: m.priceTagline || m.price_display || "",
-          calories_display: m.calories_display || null
-        }));
-        const finalKey = cacheKey || cacheKeyForMenu(query, address, forceUS);
-
-        await writeMenuToCache(env, finalKey, {
-          query,
-          address,
-          forceUS,
-          items
-        });
-        console.log(`[menu-refresh] Successfully refreshed: ${query} @ ${address} (${items.length} items)`);
-        return { ok: true, items: items.length };
-      }
+    const scrapedItems = scrapeResult.items || [];
+    if (scrapedItems.length === 0) {
+      console.log(`[menu-refresh] No menu data found for: ${query} @ ${address}`);
+      return { ok: false, reason: "no_data" };
     }
-    console.log(`[menu-refresh] No menu data found for: ${query} @ ${address}`);
-    return { ok: false, reason: "no_data" };
+
+    // Normalize menu items for cache storage
+    const items = scrapedItems.map(m => ({
+      name: m.name || "",
+      section: m.section || "",
+      description: m.description || "",
+      price: m.price,
+      price_display: m.price_display || "",
+      calories_display: m.calories ? String(m.calories) : null,
+      image_url: m.image_url || null
+    }));
+
+    const finalKey = cacheKey || cacheKeyForMenu(query, address, forceUS);
+
+    await writeMenuToCache(env, finalKey, {
+      query,
+      address,
+      forceUS,
+      items
+    });
+
+    console.log(`[menu-refresh] Successfully refreshed: ${query} @ ${address} (${items.length} items)`);
+    return { ok: true, items: items.length };
   } catch (err) {
     console.log(`[menu-refresh] Error refreshing ${query}: ${err?.message}`);
     return { ok: false, error: err?.message };

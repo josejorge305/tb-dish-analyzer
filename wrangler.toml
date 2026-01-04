@@ -8,6 +8,10 @@ compatibility_flags = ["nodejs_compat"]
 [ai]
 binding = "AI"
 
+# Browser Rendering for in-house menu scraping
+[browser]
+binding = "BROWSER"
+
 [durable_objects]
 bindings = []
 
@@ -94,6 +98,10 @@ queue = "tb-dish-analysis-queue"
 # existing production bindings stay above this if you have them (KV, D1, etc.)
 [env.production.ai]
 binding = "AI"
+
+# Browser Rendering for in-house menu scraping (production)
+[env.production.browser]
+binding = "BROWSER"
 
 [env.production.durable_objects]
 bindings = []
