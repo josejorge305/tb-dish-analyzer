@@ -424,11 +424,13 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     });
 
     // Score each result by similarity to the search query
-    const normalizedQuery = query.toLowerCase().trim();
+    // Normalize: lowercase, remove punctuation (apostrophes, etc.), trim
+    const normalize = (s) => s.toLowerCase().replace(/[''`]/g, '').replace(/[^\w\s]/g, ' ').trim();
+    const normalizedQuery = normalize(query);
     const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length > 1);
 
     const scoredLinks = allStoreLinks.map(link => {
-      const linkName = link.text.toLowerCase().trim();
+      const linkName = normalize(link.text);
       const linkWords = linkName.split(/\s+/).filter(w => w.length > 1);
 
       // Calculate word overlap score
@@ -444,12 +446,16 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       const containsQuery = linkName.includes(normalizedQuery) ? 1.0 : 0;
       const queryContainsLink = normalizedQuery.includes(linkName) ? 0.9 : 0;
 
+      // Check if first word matches (handles "Applebees" matching "Applebees Grill + Bar")
+      const firstWordMatch = queryWords.length > 0 && linkWords.length > 0 &&
+        (linkWords[0].startsWith(queryWords[0]) || queryWords[0].startsWith(linkWords[0])) ? 0.85 : 0;
+
       // Check exact start match (e.g., "Caffe Abbracci" starts with "Caffe Abbracci")
       const startsWithQuery = linkName.startsWith(normalizedQuery.split(' ')[0]) &&
                               linkName.includes(normalizedQuery.split(' ').slice(-1)[0]) ? 0.8 : 0;
 
       // Calculate final similarity score
-      const similarity = Math.max(containsQuery, queryContainsLink, startsWithQuery, wordOverlap);
+      const similarity = Math.max(containsQuery, queryContainsLink, firstWordMatch, startsWithQuery, wordOverlap);
 
       return { ...link, similarity, matchedWords, totalQueryWords: queryWords.length };
     });
@@ -984,11 +990,59 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         const calMatch = fullText.match(/(\d+(?:\s*-\s*\d+)?)\s*Cal/);
         const calories = calMatch ? calMatch[1].replace(/\s/g, '') : null;
 
-        // Description
+        // Description - Uber Eats shows descriptions in various elements
         let description = null;
-        const descEl = item.querySelector('[data-testid="rich-text"], [class*="description"], [class*="Description"]');
-        if (descEl) {
-          description = descEl.textContent?.trim() || null;
+
+        // Try multiple selectors for description
+        const descSelectors = [
+          '[data-testid="rich-text"]',
+          '[data-testid="item-description"]',
+          '[class*="itemDescription"]',
+          '[class*="ItemDescription"]',
+          '[class*="item-description"]',
+          '[class*="productDescription"]',
+          '[class*="product-description"]',
+          '[class*="menuItemDescription"]',
+          // Uber Eats often uses a secondary text element after the title
+          'div > div:nth-child(2) > span',
+          'div > span:nth-of-type(2)'
+        ];
+
+        for (const sel of descSelectors) {
+          const descEl = item.querySelector(sel);
+          if (descEl) {
+            const text = descEl.textContent?.trim();
+            // Description should be different from name and not be price/calories
+            if (text && text !== name && text.length > 5 &&
+                !text.startsWith('$') && !/^\d+\s*Cal/.test(text) &&
+                !/^\d+(\.\d+)?$/.test(text) && !text.includes('•')) {
+              description = text;
+              break;
+            }
+          }
+        }
+
+        // Fallback: Try to extract description from fullText after removing name, price, calories, metadata
+        if (!description) {
+          let remaining = fullText
+            .replace(name, '')
+            .replace(/\$[\d.]+/g, '')
+            .replace(/\d+\s*Cal/g, '')
+            .replace(/•/g, '')
+            .replace(/\d+-\d+\s*min/g, '')
+            .replace(/Promoted/g, '')
+            .replace(/#\d+\s*most\s*liked/gi, '')  // Remove popularity markers
+            .replace(/Plus\s*small/gi, '')         // Remove Plus badge
+            .replace(/\d+%\s*\(\d+\)/g, '')        // Remove rating percentages like "87% (174)"
+            .replace(/\(\d+\)/g, '')               // Remove counts like "(174)"
+            .trim();
+          // Clean up multiple spaces and leading/trailing punctuation
+          remaining = remaining.replace(/\s+/g, ' ').replace(/^[.\s]+|[.\s]+$/g, '').trim();
+          // Only use if it looks like a real description (not just numbers/symbols/short text)
+          if (remaining && remaining.length > 15 && /[a-zA-Z]{4,}/.test(remaining) &&
+              !/^(most liked|liked|popular|best seller)/i.test(remaining)) {
+            description = remaining;
+          }
         }
 
         // Image - check multiple sources
@@ -22168,7 +22222,9 @@ const _worker_impl = {
             rawPrice: it.price_cents ? it.price_cents / 100 : (it.price || null),
             priceText: it.price_cents ? `$${(it.price_cents / 100).toFixed(2)}` : it.price_display,
             imageUrl: it.image_url || null,
-            restaurantCalories: it.calories?.min || it.calories?.max || (typeof it.calories === 'string' ? parseInt(it.calories) : null)
+            restaurantCalories: it.calories?.min || it.calories?.max ||
+              (typeof it.calories === 'string' ? parseInt(it.calories.split('-')[0]) : null) ||
+              (typeof it.calories === 'number' ? it.calories : null)
           }));
 
           return respondTB(
