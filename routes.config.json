@@ -1,0 +1,28 @@
+{
+  "default_paths": {
+    "v1_menu": "published_menu.json",
+    "v2_menu": "adjudicated_menu.json",
+    "v2_confidence": "menu_confidence_report.json",
+    "franchise_menu": "franchise_resolved_menu.json"
+  },
+  "confidence_threshold": 0.4,
+  "restaurants": {
+    "shake-shack-coral-gables": {
+      "v1_menu": "published_menu.json",
+      "v2_menu": "adjudicated_menu.json",
+      "v2_confidence": "menu_confidence_report.json",
+      "franchise_menu": "franchise_resolved_menu.json"
+    }
+  },
+  "franchises": {
+    "shake-shack": {
+      "resolved_menu": "franchise_resolved_menu.json",
+      "locations": [
+        "shake-shack-coral-gables",
+        "shake-shack-downtown-miami",
+        "shake-shack-brickell",
+        "shake-shack-miami-beach"
+      ]
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "franchise_name": "Shake Shack",
+  "canonical_location_slug": "shake-shack-coral-gables",
+  "location_overrides": {
+    "shake-shack-downtown-miami": {
+      "price_delta_percent": 5,
+      "excluded_items": []
+    },
+    "shake-shack-brickell": {
+      "price_delta_percent": 8,
+      "excluded_items": ["Shack Burger", "Chicken Shack"]
+    },
+    "shake-shack-miami-beach": {
+      "price_delta_percent": 12,
+      "excluded_items": []
+    }
+  }
+}

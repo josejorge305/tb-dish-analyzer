@@ -25,6 +25,11 @@ BUILT_AT = "2025-11-11T00:00:00Z"
 FALLBACK_TRIGGER_UNDER = "50"
 HITS_LIMIT = "25"
 
+# === Menu Source Control ===
+# USE_LEGACY_MENU_SOURCE = false → use in-house pipeline (DEFAULT)
+# USE_LEGACY_MENU_SOURCE = true → enable Apify/RapidAPI (ROLLBACK ONLY)
+USE_LEGACY_MENU_SOURCE = "false"
+
 # === Providers ===
 PROVIDERS = "edamam,spoonacular,openai"
 PROVIDERS_PARSE = "zestful,openai"
@@ -40,7 +45,7 @@ USDA_FDC_HOST = "api.nal.usda.gov"
 
 # === Internal services / URLs ===
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
-PROXY_API_KEY = "supersecret123"
+# PROXY_API_KEY moved to secrets - set via: wrangler secret put PROXY_API_KEY
 OPENAI_MODEL_ALLERGEN = "gpt-4o-mini"
 OPENAI_MODEL_NUTRITION = "gpt-4o-mini"
 PARALLEL_LLM = "true"
@@ -106,6 +111,11 @@ BUILT_AT = "2025-11-11T00:00:00Z"
 FALLBACK_TRIGGER_UNDER = "50"
 HITS_LIMIT = "25"
 
+# === Menu Source Control ===
+# USE_LEGACY_MENU_SOURCE = false → use in-house pipeline (DEFAULT)
+# USE_LEGACY_MENU_SOURCE = true → enable Apify/RapidAPI (ROLLBACK ONLY)
+USE_LEGACY_MENU_SOURCE = "false"
+
 # === Providers ===
 # Code reads ONLY this var for recipe provider order:
 # (edamam, spoonacular, openai) — adjust as needed
@@ -131,7 +141,7 @@ USDA_FDC_HOST      = "api.nal.usda.gov"
 
 # === Internal services / URLs ===
 FATSECRET_PROXY_URL = "https://tummy-lexicon-api.onrender.com"
-PROXY_API_KEY = "supersecret123"
+# PROXY_API_KEY moved to secrets - set via: wrangler secret put PROXY_API_KEY
 OPENAI_MODEL_ALLERGEN = "gpt-4o-mini"
 OPENAI_MODEL_NUTRITION = "gpt-4o-mini"
 PARALLEL_LLM = "true"
@@ -140,6 +150,7 @@ FATSECRET_SCOPES = "image-recognition"
 
 # === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===
 #   wrangler secret put ADMIN_SECRET         # Admin key for cache/R2 deletion endpoints (X-Admin-Key header)
+#   wrangler secret put PROXY_API_KEY        # FatSecret proxy API key
 #   wrangler secret put APIFY_TOKEN          # Tier 1 Uber Eats scraper (Apify)
 #   wrangler secret put RAPIDAPI_KEY         # Tier 2 Uber Eats scraper (RapidAPI fallback)
 #   wrangler secret put OPENAI_API_KEY
@@ -147,6 +158,7 @@ FATSECRET_SCOPES = "image-recognition"
 #   wrangler secret put ZESTFUL_RAPID_KEY
 #   wrangler secret put EDAMAM_APP_ID
 #   wrangler secret put EDAMAM_APP_KEY
+#   wrangler secret put GOOGLE_PLACES_API_KEY  # Google Places API for restaurant search
 
 # --- D1 (production) ---
 [[env.production.d1_databases]]

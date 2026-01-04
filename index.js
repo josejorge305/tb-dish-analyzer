@@ -2049,165 +2049,217 @@ function isBannedSectionName(sectionName) {
 
 // ---------- GATEWAY: Item-level noise filters ----------
 
-const NOISE_KEYWORDS = [
-  // drinks
-  "coke",
-  "sprite",
-  "soda",
-  "juice",
-  "oj",
-  "orange juice",
-  "redbull",
-  "red bull",
-  "perrier",
-  "sparkling",
-  "bottle",
-  "water",
-  "tea",
-  "coffee",
-  "lemonade",
-  "iced",
-  "energy",
-  // merch / bottles
-  "5oz",
-  "btl",
-  "merch",
-  // raw counts of wings / boneless (not plated dishes)
-  "5 wings",
-  "10 wings",
-  "5 boneless",
-  "10 boneless",
-  // pure sides
-  "side",
-  "fries",
-  "tots",
-  "waffle",
-  "onion rings",
-  "chips"
-];
+// Check if an item name is a standalone drink (not part of a meal)
+function isStandaloneDrink(name) {
+  const n = (name || "").toLowerCase().trim();
+  // Remove trademark symbols for matching
+  const cleanName = n.replace(/[®™©]/g, "").trim();
 
-function isNoiseItem(name, description = "") {
-  const text = `${name} ${description}`.toLowerCase();
-  return NOISE_KEYWORDS.some((k) => text.includes(k));
+  // Base drink names (will be matched with or without size prefixes)
+  const drinkBases = [
+    // Sodas
+    "coke", "coca cola", "coca-cola", "diet coke", "coke zero",
+    "pepsi", "diet pepsi", "pepsi zero",
+    "sprite", "sprite zero", "fanta", "dr pepper", "dr. pepper",
+    "7up", "7-up", "mountain dew", "mtn dew", "ginger ale", "root beer",
+    "orange soda", "grape soda", "cream soda",
+    // Waters
+    "water", "bottled water", "sparkling water", "mineral water",
+    "dasani", "aquafina", "evian", "fiji", "perrier", "san pellegrino",
+    // Coffee
+    "coffee", "iced coffee", "hot coffee", "cold brew", "nitro cold brew",
+    "espresso", "latte", "iced latte", "cappuccino", "americano", "mocha", "macchiato",
+    "caramel latte", "vanilla latte", "pumpkin spice latte",
+    // Tea
+    "tea", "iced tea", "hot tea", "sweet tea", "unsweet tea", "unsweetened tea",
+    "green tea", "black tea", "chai", "chai latte", "matcha", "matcha latte",
+    // Lemonade & Juices
+    "lemonade", "pink lemonade", "strawberry lemonade", "arnold palmer",
+    "juice", "orange juice", "apple juice", "cranberry juice", "grape juice", "oj",
+    "fruit punch", "hi-c",
+    // Milk & Shakes
+    "milk", "chocolate milk", "strawberry milk", "whole milk", "skim milk", "2% milk",
+    "milkshake", "shake", "vanilla shake", "chocolate shake", "strawberry shake",
+    "oreo shake", "cookies and cream shake",
+    "frappe", "frappuccino", "mcflurry",
+    // Smoothies
+    "smoothie", "fruit smoothie", "mango smoothie", "strawberry smoothie", "banana smoothie",
+    // Energy drinks
+    "red bull", "redbull", "monster", "rockstar", "bang",
+    "gatorade", "powerade", "body armor", "vitamin water",
+    // Alcohol
+    "beer", "wine", "margarita", "mojito", "cocktail", "martini", "sangria",
+    "piña colada", "daiquiri", "cosmopolitan", "mimosa", "bellini",
+    // Generic
+    "soda", "soft drink", "fountain drink", "beverage", "drink"
+  ];
+
+  // Check exact match
+  if (drinkBases.includes(cleanName)) return true;
+
+  // Check if starts with size + drink (e.g., "Large Coke", "Small Coffee", "Medium Strawberry Shake")
+  const sizePattern = /^(small|medium|large|xl|extra\s*large|kids?|child|reg|regular|sm|md|lg)\s+/i;
+  const withoutSize = cleanName.replace(sizePattern, "");
+  if (drinkBases.includes(withoutSize)) return true;
+
+  // Check partial matches for drink bases that might have variations
+  const drinkPatterns = [
+    /\bcoke\b/i, /\bpepsi\b/i, /\bsprite\b/i, /\bfanta\b/i,
+    /\b(orange|grape|cream)\s*soda\b/i,
+    /\b(iced?|hot)\s*(coffee|tea)\b/i,
+    /\b(vanilla|chocolate|strawberry|caramel|oreo)\s*(shake|latte|frappe)\b/i,
+    /\bmilkshake\b/i, /\bsmoothie\b/i, /\bfrappuccino\b/i, /\bmcflurry\b/i,
+    /\blemonade\b/i, /\bjuice\b/i,
+    /\b(red\s*bull|monster|rockstar|gatorade|powerade)\b/i,
+    /\b(sparkling|mineral|bottled)\s*water\b/i,
+  ];
+
+  for (const pattern of drinkPatterns) {
+    if (pattern.test(cleanName)) {
+      // Make sure it's not part of a food item (e.g., "Orange Juice Glazed Chicken")
+      if (!/\b(chicken|pork|beef|steak|salmon|fish|shrimp|wings?|ribs?|glazed|braised|marinated)\b/i.test(cleanName)) {
+        return true;
+      }
+    }
+  }
+
+  // Check for oz/can/bottle patterns indicating drinks
+  if (/\b(12\s*oz|16\s*oz|20\s*oz|32\s*oz|2\s*l|2\s*liter|can|canned|bottle|bottled)\b/i.test(cleanName)) {
+    // But not if it's clearly food (e.g., "12 oz Ribeye")
+    if (!/\b(steak|ribeye|sirloin|filet|burger|chicken|pork|beef|fish|shrimp|salmon)\b/i.test(cleanName)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
-// Final hard blocklist — removes ANY item containing these tokens, no exceptions.
-const HARD_BLOCKLIST = [
-  // drinks / beverages
-  "oj",
-  "orange juice",
-  "juice",
-  "soda",
-  "redbull",
-  "red bull",
-  "perrier",
-  "sparkling",
-  "water",
-  "iced tea",
-  "tea",
-  "coffee",
-  "energy",
-  "drink",
+// Check if item is a utensil, packaging, or fee
+function isUtensilOrFee(name) {
+  const n = (name || "").toLowerCase().trim();
 
-  // merch / bottles / sauces only
-  "5oz",
-  "btl",
-  "bottle",
-  "merch",
+  const utensilPatterns = [
+    /^utensils?$/i,
+    /^(plastic|disposable)?\s*(fork|knife|spoon|spork|chopstick)s?$/i,
+    /^napkins?$/i,
+    /^straws?$/i,
+    /^cutlery$/i,
+    /^plasticware$/i,
+    /^silverware$/i,
+    /^cheese\s*grater$/i,  // Olive Garden sells cheese graters as merch
+    /^grater$/i,
+    /^(pizza|cookie|baking)\s*cutter$/i,
+    /^cutting\s*board$/i,
+    /^kitchen\s*(tool|utensil|gadget)s?$/i,
+  ];
 
-  // wings / boneless counted portions only (not platters)
-  "5 wings",
-  "10 wings",
-  "5 boneless",
-  "10 boneless",
-  "5 bone",
-  "10 bone",
+  const feePatterns = [
+    /fee$/i,
+    /charge$/i,
+    /surcharge$/i,
+    /^bag$/i,
+    /^packaging$/i,
+  ];
 
-  // pure sides that should NOT show unless part of a composed dish
-  "side of",
-  "side fries",
-  "side tots",
-  "side waffle",
-  "side chips",
-  "fries only",
-  "tots only",
+  for (const p of utensilPatterns) {
+    if (p.test(n)) return true;
+  }
+  for (const p of feePatterns) {
+    if (p.test(n)) return true;
+  }
 
-  // pure add-ons
-  "add cheese",
-  "extra",
-  "add-on"
-];
+  return false;
+}
 
+// Check if item is a pure condiment/sauce (not a dish with sauce)
+function isPureCondiment(name) {
+  const n = (name || "").toLowerCase().trim();
+
+  // Pure condiments (standalone, not as part of dish name)
+  const pureCondiments = [
+    "ketchup", "mustard", "mayo", "mayonnaise", "ranch", "ranch dressing",
+    "bbq sauce", "barbecue sauce", "hot sauce", "buffalo sauce", "honey mustard",
+    "tartar sauce", "cocktail sauce", "marinara", "soy sauce", "teriyaki sauce",
+    "sriracha", "salsa", "guacamole", "sour cream", "pico de gallo",
+    "blue cheese dressing", "caesar dressing", "italian dressing", "vinaigrette",
+    "relish", "pickles", "jalapenos", "onions", "lettuce", "tomato"
+  ];
+
+  // Only block if it's an exact match or "side of X" pattern
+  if (pureCondiments.includes(n)) return true;
+  if (n.startsWith("side of ") && pureCondiments.includes(n.slice(8))) return true;
+  if (n.startsWith("extra ") && pureCondiments.includes(n.slice(6))) return true;
+
+  // Packet/cup patterns
+  if (/\b(packet|cup|container)\s*(of)?\s*(ketchup|mustard|sauce|dressing|salsa)\b/i.test(n)) return true;
+
+  return false;
+}
+
+function isNoiseItem(name, description = "") {
+  const n = (name || "").toLowerCase().trim();
+
+  // Check specific noise categories
+  if (isStandaloneDrink(n)) return true;
+  if (isUtensilOrFee(n)) return true;
+  if (isPureCondiment(n)) return true;
+
+  // Merch items
+  if (/\bmerch(andise)?\b/i.test(n)) return true;
+  if (/\bgift\s*card\b/i.test(n)) return true;
+
+  return false;
+}
+
+// Hard block function using isNoiseItem (now smarter)
 function hardBlockItem(name, description = "") {
-  const text = `${name} ${description}`.toLowerCase();
-  return HARD_BLOCKLIST.some((k) => text.includes(k));
+  // Use the smarter noise detection
+  if (isNoiseItem(name, description)) return true;
+
+  const n = (name || "").toLowerCase().trim();
+
+  // Block very short generic names that are likely add-ons
+  if (n.length < 4) return true; // e.g., "Bag", "Ice"
+
+  // Block items that are clearly just add-ons or modifications
+  const addonPatterns = [
+    /^add\s+/i,       // "Add Cheese", "Add Bacon"
+    /^extra\s+/i,     // "Extra Cheese" (but not "Extra Large Pizza")
+    /^side\s+of\s+/i, // "Side of Ranch"
+    /^(small|large|medium)\s+(side|portion)\s+/i, // "Large Side of Fries"
+  ];
+
+  // Only block "Extra X" if X is a topping/condiment, not a size
+  if (/^extra\s+/i.test(n)) {
+    const afterExtra = n.replace(/^extra\s+/i, "");
+    const toppings = ["cheese", "bacon", "sauce", "pickles", "onions", "lettuce", "tomato", "mayo", "mustard"];
+    if (toppings.some(t => afterExtra.startsWith(t))) return true;
+  }
+
+  for (const p of addonPatterns) {
+    if (p.test(n) && !/pizza|burger|sandwich|wrap|bowl|plate|platter|meal|combo/i.test(n)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isLikelyDrink(name, section) {
   const n = (name || "").toLowerCase().trim();
   const s = (section || "").toLowerCase().trim();
 
+  // Check section first - if in drink section, it's a drink
   const drinkSections = [
-    "drinks",
-    "beverages",
-    "soft drinks",
-    "sodas",
-    "juices",
-    "coffee",
-    "tea",
-    "bar",
-    "cocktails",
-    "beer",
-    "wine"
+    "drinks", "beverages", "soft drinks", "sodas", "juices",
+    "coffee", "tea", "teas", "coffees", "bar", "cocktails", "beer", "wine", "wines", "beers",
+    "fountain drinks", "bottled drinks", "hot drinks", "cold drinks", "frozen drinks"
   ];
 
-  const drinkKeywords = [
-    "water",
-    "bottled water",
-    "sparkling water",
-    "mineral water",
-    "soda",
-    "soft drink",
-    "coke",
-    "coca cola",
-    "pepsi",
-    "sprite",
-    "fanta",
-    "ginger ale",
-    "root beer",
-    "juice",
-    "orange juice",
-    "apple juice",
-    "lemonade",
-    "iced tea",
-    "ice tea",
-    "tea",
-    "coffee",
-    "latte",
-    "espresso",
-    "cappuccino",
-    "mocha",
-    "hot chocolate",
-    "hot cocoa",
-    "milk",
-    "milkshake",
-    "shake",
-    "smoothie",
-    "energy drink",
-    "gatorade",
-    "powerade",
-    "sports drink",
-    "beer",
-    "wine",
-    "margarita",
-    "cocktail"
-  ];
+  if (drinkSections.some((w) => s === w || s.includes(w))) return true;
 
-  if (drinkSections.some((w) => s.includes(w))) return true;
-  if (drinkKeywords.some((w) => n === w || n.includes(w))) return true;
-
-  // Size/packaging hints
-  if (/\b(2 ?l|20 ?oz|16 ?oz|12 ?oz|bottle|can|canned)\b/.test(n)) return true;
+  // Use the smarter standalone drink detection
+  if (isStandaloneDrink(n)) return true;
 
   return false;
 }
@@ -2216,56 +2268,21 @@ function isLikelyUtensilOrPackaging(name, section) {
   const n = (name || "").toLowerCase().trim();
   const s = (section || "").toLowerCase().trim();
 
+  // Section-based detection
   const utensilSections = [
-    "utensils",
-    "cutlery",
-    "plasticware",
-    "plastic ware",
-    "silverware",
-    "napkins",
-    "packaging"
+    "utensils", "cutlery", "plasticware", "silverware", "napkins", "packaging"
   ];
 
-  const utensilKeywords = [
-    "utensil",
-    "utensils",
-    "plasticware",
-    "plastic ware",
-    "silverware",
-    "cutlery",
-    "fork",
-    "knife",
-    "spoon",
-    "spoons",
-    "chopsticks",
-    "chopstick",
-    "napkin",
-    "napkins",
-    "straw",
-    "straws",
-    "with utensils",
-    "without utensils",
-    "no utensils"
-  ];
+  if (utensilSections.some((w) => s === w || s.includes(w))) return true;
 
-  const feeKeywords = [
-    "service fee",
-    "delivery fee",
-    "packaging fee",
-    "bag fee",
-    "processing fee",
-    "surcharge",
-    "convenience fee",
-    "extra fee",
-    "misc fee",
-    "charge",
-    "charges"
-  ];
+  // Use the smarter utensil/fee detection
+  if (isUtensilOrFee(n)) return true;
 
-  if (utensilSections.some((w) => s.includes(w))) return true;
-  if (utensilKeywords.some((w) => n === w || n.includes(w))) return true;
-  if (feeKeywords.some((w) => n === w || n.includes(w) || s.includes(w)))
-    return true;
+  // Check for items that are just utensil requests
+  if (/\b(with|without|no|include|add)\s+(utensils?|cutlery|napkins?|straws?)\b/i.test(n)) {
+    // If the whole name is just about utensils, it's not a food item
+    if (n.length < 30) return true;
+  }
 
   return false;
 }
@@ -2273,66 +2290,29 @@ function isLikelyUtensilOrPackaging(name, section) {
 function isLikelySideOrAddon(name, section, description) {
   const n = (name || "").toLowerCase().trim();
   const s = (section || "").toLowerCase().trim();
-  const d = (description || "").toLowerCase().trim();
 
+  // Section-based detection - if in a side/addon section, it's likely a side
   const sideSections = [
-    "sides",
-    "side orders",
-    "extras",
-    "add-ons",
-    "addons",
-    "add ons",
-    "sauces",
-    "condiments",
-    "dressings"
+    "sides", "side orders", "extras", "add-ons", "addons", "add ons",
+    "sauces", "condiments", "dressings", "toppings", "modifications"
   ];
 
-  const sideKeywords = [
-    "side",
-    "side of",
-    "extra",
-    "add",
-    "add-on",
-    "addon",
-    "add on"
-  ];
+  if (sideSections.some((w) => s === w)) return true;
 
-  const pureCondiments = [
-    "sauce",
-    "ketchup",
-    "mustard",
-    "mayo",
-    "mayonnaise",
-    "aioli",
-    "ranch",
-    "bbq",
-    "barbecue",
-    "hot sauce",
-    "buffalo sauce",
-    "blue cheese",
-    "bleu cheese",
-    "chipotle",
-    "chipotle mayo",
-    "guacamole",
-    "sour cream",
-    "salsa",
-    "relish",
-    "relish packet",
-    "packet of relish"
-  ];
+  // Use the smarter pure condiment detection
+  if (isPureCondiment(n)) return true;
 
-  if (sideSections.some((w) => s.includes(w))) return true;
+  // Check if it's a standalone side (short name, in side section)
+  // But don't filter out full dishes that happen to have "side" in the name
+  if (n.startsWith("side of ")) {
+    // "Side of Fries" is a side, but "Side of Beef" might be a dish
+    const afterSideOf = n.slice(8);
+    const sideFoods = ["fries", "rice", "beans", "salad", "coleslaw", "bread", "tots", "chips", "vegetables", "veggies", "corn", "broccoli"];
+    if (sideFoods.some(sf => afterSideOf.includes(sf))) return true;
+  }
 
-  if (n.startsWith("side ") || n.startsWith("side of ")) return true;
-  if (n.startsWith("extra ") || n.startsWith("add ") || n.startsWith("add-on "))
-    return true;
-
-  const wordCount = n.split(/\s+/).filter(Boolean).length;
-  if (wordCount === 1 && !d && pureCondiments.includes(n)) return true;
-
-  if (pureCondiments.some((w) => n === w || n.includes(w))) return true;
-
-  if (n.includes("packet") || n.includes("sachet")) return true;
+  // Packet/sachet items are sides/condiments
+  if (/\b(packet|sachet|cup|container)\s+of\b/i.test(n)) return true;
 
   return false;
 }
@@ -3462,6 +3442,41 @@ function extractMenuItemsFromUber(raw, queryText = "") {
           score = keyWordMatch ? Math.round(60 * ratio) : Math.round(30 * ratio);
         }
       }
+
+      // Penalize non-restaurant variants (grocery stores, packaged goods, etc.)
+      // These are typically NOT the actual restaurant the user wants
+      const NON_RESTAURANT_PENALTIES = [
+        { pattern: /\bat\s*home\b/i, penalty: 50 },           // "At Home" packaged goods stores
+        { pattern: /\bgrocery\b/i, penalty: 40 },             // Grocery stores
+        { pattern: /\bmarket\b/i, penalty: 20 },              // Markets (less severe, could be food halls)
+        { pattern: /\bexpress\b/i, penalty: 10 },             // Express locations (smaller menus)
+        { pattern: /\bconvenience\b/i, penalty: 40 },         // Convenience stores
+        { pattern: /\bgas\s*station\b/i, penalty: 50 },       // Gas stations
+        { pattern: /\b(cvs|walgreens|walmart|target|costco|7-eleven|7eleven)\b/i, penalty: 60 }, // Retail chains
+        { pattern: /\bvending\b/i, penalty: 50 },             // Vending machines
+        { pattern: /\bdelivery\s*only\b/i, penalty: 5 },      // Delivery-only (ghost kitchens) - slight penalty
+        { pattern: /\bvirtual\s*kitchen\b/i, penalty: 15 },   // Virtual/ghost kitchens
+        { pattern: /\btm\b|\(tm\)|\btrademark\b/i, penalty: 30 }, // Trademark indicators (packaged goods)
+      ];
+
+      for (const { pattern, penalty } of NON_RESTAURANT_PENALTIES) {
+        if (pattern.test(name)) {
+          score -= penalty;
+        }
+      }
+
+      // Bonus for actual restaurant indicators
+      const RESTAURANT_BONUSES = [
+        { pattern: /\b(restaurant|ristorante|trattoria|bistro|brasserie|tavern|steakhouse|pizzeria|taqueria|cantina)\b/i, bonus: 10 },
+        { pattern: /\b(kitchen|cucina|cuisine|diner|eatery)\b/i, bonus: 5 },
+      ];
+
+      for (const { pattern, bonus } of RESTAURANT_BONUSES) {
+        if (pattern.test(name)) {
+          score += bonus;
+        }
+      }
+
       return { r, score };
     });
 
@@ -14680,7 +14695,7 @@ async function fetchMenuFromUberEats(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 15,
+  maxRows = 250,
   lat = null,
   lng = null,
   radius = 5000
@@ -20600,7 +20615,7 @@ const _worker_impl = {
         const addressRaw = searchParams.get("address") || "";
         const locale = searchParams.get("locale") || "en-US";
         const page = Number(searchParams.get("page") || 1);
-        const maxRows = parseInt(searchParams.get("maxRows") || "15", 10);
+        const maxRows = parseInt(searchParams.get("maxRows") || "250", 10);
         const lat = searchParams.get("lat");
         const lng = searchParams.get("lng");
         const radius = parseInt(searchParams.get("radius") || "5000", 10);
@@ -20938,7 +20953,9 @@ const _worker_impl = {
             }
 
             const fake = { data: { results: [chosen] } };
-            const flattenedItems = extractMenuItemsFromUber(fake, query);
+            const rawFlattenedItems = extractMenuItemsFromUber(fake, query);
+            // Apply filtering to remove drinks, utensils, extras, etc.
+            const flattenedItems = filterMenuForDisplay(rawFlattenedItems);
 
             // Optional: enqueue for analysis when requested
             const analyze = searchParams.get("analyze") === "1";
@@ -21117,7 +21134,9 @@ const _worker_impl = {
           }
 
           const fake = { data: { results: [chosen] } };
-          const flattenedItems = extractMenuItemsFromUber(fake, query);
+          const rawFlattenedItems = extractMenuItemsFromUber(fake, query);
+          // Apply filtering to remove drinks, utensils, extras, etc.
+          const flattenedItems = filterMenuForDisplay(rawFlattenedItems);
 
           // Optional analyze enqueue
           const analyze = searchParams.get("analyze") === "1";
@@ -21391,7 +21410,9 @@ const _worker_impl = {
         const usedHost = raw?._tier === "apify"
           ? "api.apify.com"
           : (env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com");
-        const flattenedItems = extractMenuItemsFromUber(raw, query);
+        const rawFlattenedItems = extractMenuItemsFromUber(raw, query);
+        // Apply filtering to remove drinks, utensils, extras, etc.
+        const flattenedItems = filterMenuForDisplay(rawFlattenedItems);
 
         if (debug === "rank") {
           const preview = rankTop(flattenedItems, 10).map((x) => ({
@@ -22968,7 +22989,7 @@ const _worker_impl = {
         const query = searchParams.get("query") || searchParams.get("q") || "";
         const addressRaw = searchParams.get("address") || "";
         const page = Number(searchParams.get("page") || 1);
-        const maxRows = parseInt(searchParams.get("maxRows") || "15", 10);
+        const maxRows = parseInt(searchParams.get("maxRows") || "250", 10);
 
         const lat = searchParams.get("lat");
         const lng = searchParams.get("lng");

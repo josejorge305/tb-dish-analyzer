@@ -4,26 +4,12 @@
 -- Adds mechanism explanations, pathways, citations, and dose-response data
 -- to enable "smart doctor" level reasoning without sacrificing speed
 
--- NOTE: ALTER TABLE statements below are commented out because these columns
--- already exist in production. SQLite doesn't support IF NOT EXISTS for ADD COLUMN.
--- The CREATE TABLE and CREATE INDEX statements use IF NOT EXISTS and are safe to re-run.
-
--- Enhance compounds table with category and mechanism summary
--- (Already applied - columns exist)
--- ALTER TABLE compounds ADD COLUMN category TEXT;
--- ALTER TABLE compounds ADD COLUMN mechanism_summary TEXT;
-
--- Enhance compound_organ_effects with medical reasoning
--- (Already applied - columns exist)
--- ALTER TABLE compound_organ_effects ADD COLUMN mechanism TEXT;
--- ALTER TABLE compound_organ_effects ADD COLUMN pathway TEXT;
--- ALTER TABLE compound_organ_effects ADD COLUMN explanation TEXT;
--- ALTER TABLE compound_organ_effects ADD COLUMN citations TEXT;
--- ALTER TABLE compound_organ_effects ADD COLUMN threshold_mg REAL;
--- ALTER TABLE compound_organ_effects ADD COLUMN optimal_mg REAL;
--- ALTER TABLE compound_organ_effects ADD COLUMN upper_limit_mg REAL;
--- ALTER TABLE compound_organ_effects ADD COLUMN dose_response TEXT;
--- ALTER TABLE compound_organ_effects ADD COLUMN population_notes TEXT;
+-- NOTE: The ALTER TABLE statements have been removed because:
+-- 1. SQLite doesn't support IF NOT EXISTS for ADD COLUMN
+-- 2. D1 migrations fail if column already exists
+-- 3. These columns should be added manually if needed via:
+--    wrangler d1 execute tb-database --command "ALTER TABLE compounds ADD COLUMN category TEXT;"
+--    (run only if column doesn't exist)
 
 -- Compound interactions table (synergies and antagonisms)
 CREATE TABLE IF NOT EXISTS compound_interactions (
@@ -66,4 +52,4 @@ CREATE INDEX IF NOT EXISTS idx_compound_interactions_a ON compound_interactions(
 CREATE INDEX IF NOT EXISTS idx_compound_interactions_b ON compound_interactions(compound_b_id);
 CREATE INDEX IF NOT EXISTS idx_ingredient_compounds_pattern ON ingredient_compounds(ingredient_pattern);
 CREATE INDEX IF NOT EXISTS idx_cooking_effects_compound ON cooking_effects(compound_id);
-CREATE INDEX IF NOT EXISTS idx_compounds_category ON compounds(category);
+-- Note: idx_compounds_category removed - category column not added in this migration

@@ -19,6 +19,18 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@sentry/cloudflare": "^10.32.1"
-  }
+    "@sentry/cloudflare": "^10.32.1",
+    "playwright": "^1.57.0"
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/josejorge305/tb-dish-analyzer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/josejorge305/tb-dish-analyzer/issues"
+  },
+  "homepage": "https://github.com/josejorge305/tb-dish-analyzer#readme"
 }
