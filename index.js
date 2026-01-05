@@ -9327,10 +9327,12 @@ async function lookupCachedBaseRecipe(env, dishName) {
   if (!env?.D1_DB || !dishName) return null;
 
   const normalized = normalizeDishNameForCache(dishName);
+  // Also try canonical normalization which strips fluff words like "classic", "signature", etc.
+  const canonicalNorm = normalizeDishNameCanonical(dishName);
   if (!normalized) return null;
 
   try {
-    // Check main recipes table first
+    // Check main recipes table first - try exact match
     let recipe = await env.D1_DB.prepare(`
       SELECT
         cr.id,
@@ -9355,12 +9357,31 @@ async function lookupCachedBaseRecipe(env, dishName) {
       WHERE cr.dish_name_normalized = ?
     `).bind(normalized).first();
 
-    // If not found, check aliases
+    // If not found, try canonical normalization (strips "classic", "signature", etc.)
+    if (!recipe && canonicalNorm && canonicalNorm !== normalized) {
+      recipe = await env.D1_DB.prepare(`
+        SELECT
+          cr.id, cr.dish_name_normalized, cr.dish_name_display,
+          cr.ingredients_json, cr.servings,
+          cr.calories_kcal, cr.protein_g, cr.carbs_g, cr.fat_g,
+          cr.fiber_g, cr.sugar_g, cr.sodium_mg,
+          cr.allergen_flags_json, cr.fodmap_flags_json, cr.diet_tags_json,
+          cr.source, cr.confidence, cr.times_used
+        FROM cached_recipes cr
+        WHERE cr.dish_name_normalized = ?
+      `).bind(canonicalNorm).first();
+
+      if (recipe) {
+        console.log(`[lookupCachedBaseRecipe] Canonical match: "${normalized}" → "${canonicalNorm}" → recipe #${recipe.id}`);
+      }
+    }
+
+    // If not found, check aliases with both normalizations
     if (!recipe) {
       const alias = await env.D1_DB.prepare(`
         SELECT recipe_id FROM recipe_aliases
-        WHERE alias_normalized = ?
-      `).bind(normalized).first();
+        WHERE alias_normalized = ? OR alias_normalized = ?
+      `).bind(normalized, canonicalNorm || normalized).first();
 
       if (alias?.recipe_id) {
         recipe = await env.D1_DB.prepare(`
@@ -27681,9 +27702,12 @@ function applyVisionCorrections(visionInsights, recipeData) {
   }
 
   // 5. ADD VISUAL-ONLY INGREDIENTS (seen but not in recipe)
+  // Include allergen-relevant and nutritionally-significant ingredients detected by vision
   const highConfidenceVisual = visualIngredients.filter(vi =>
     vi.confidence >= 0.8 &&
-    ["egg", "dairy", "shellfish", "nut", "sesame", "processed_meat"].includes(vi.category)
+    ["egg", "dairy", "shellfish", "nut", "sesame", "processed_meat",
+     "vegetable", "greens", "leafy_green", "cheese", "fish", "fruit",
+     "herb", "garnish", "sauce"].includes(vi.category)
   );
 
   for (const visual of highConfidenceVisual) {
