@@ -119,6 +119,79 @@ function buildDishCacheKey(body) {
   ].join("|");
 }
 
+// Simplified cache key for fallback lookups - ignores section/category
+// This allows cache hits when same dish is accessed from different menu sections
+function buildDishCacheKeySimple(body) {
+  const dishName = normalizeForKey(body.dishName || body.dish);
+  const restaurantName = normalizeForKey(body.restaurantName || body.restaurant);
+  const menuDescription = (body.menuDescription || body.description || "").trim();
+  const userFlags = body.user_flags || body.userFlags || [];
+  const userFlagsSignature = userFlags.length ? JSON.stringify(userFlags) : "";
+
+  const signature = menuDescription + "|" + userFlagsSignature;
+  const sigHash = hashShort(signature);
+
+  return [
+    "dish-analysis-simple",
+    PIPELINE_VERSION,
+    dishName || "no-dish",
+    restaurantName || "no-restaurant",
+    sigHash
+  ].join("|");
+}
+
+// ---- Enrich Menu Items with Generated Descriptions ----
+// When menu items don't have descriptions from Uber Eats, look up cached analysis
+// and use the generated_description (from recipe introduction) as a fallback
+async function enrichItemsWithGeneratedDescriptions(env, items, restaurantName) {
+  if (!env?.DISH_ANALYSIS_CACHE || !items?.length) return items;
+
+  // Only process items without descriptions (to save KV reads)
+  const itemsNeedingDescription = items.filter(it => !it.description || it.description.trim() === "");
+  if (itemsNeedingDescription.length === 0) return items;
+
+  // Batch lookup cached analyses for items without descriptions
+  const enrichmentPromises = itemsNeedingDescription.map(async (item) => {
+    try {
+      // Build simple cache key (more likely to hit since it ignores section)
+      const simpleKey = buildDishCacheKeySimple({
+        dishName: item.name,
+        restaurantName: restaurantName,
+        menuDescription: ""
+      });
+
+      const cached = await env.DISH_ANALYSIS_CACHE.get(simpleKey, "json");
+      if (cached?.generated_description) {
+        return { name: item.name, generated_description: cached.generated_description };
+      }
+    } catch (e) {
+      // Ignore cache read errors
+    }
+    return null;
+  });
+
+  const enrichments = await Promise.all(enrichmentPromises);
+
+  // Build a map of name -> generated_description
+  const descriptionMap = new Map();
+  for (const e of enrichments) {
+    if (e?.generated_description) {
+      descriptionMap.set(e.name.toLowerCase(), e.generated_description);
+    }
+  }
+
+  // Enrich the items
+  return items.map(item => {
+    if (!item.description || item.description.trim() === "") {
+      const generated = descriptionMap.get((item.name || "").toLowerCase());
+      if (generated) {
+        return { ...item, description: generated, description_source: "generated" };
+      }
+    }
+    return item;
+  });
+}
+
 // ---- In-House Menu Pipeline (bypasses legacy scraping) ----
 // Menus published via our own scraper pipeline are cached with key: inhouse:menu:{slug}
 // These menus are already normalized, validated, and categorized - NO FURTHER FILTERING NEEDED
@@ -13400,12 +13473,15 @@ async function processAndCacheDish(env, jobId, dishPayload) {
         result: result
       });
 
-      // Also cache in KV for fast access
+      // Also cache in KV for fast access (both full and simple keys)
       const cacheKey = buildDishCacheKey(dishPayload);
+      const simpleKey = buildDishCacheKeySimple(dishPayload);
       if (env?.DISH_ANALYSIS_CACHE) {
-        await env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(result), {
-          expirationTtl: 86400 * 30 // 30 days
-        });
+        const resultJson = JSON.stringify(result);
+        await Promise.all([
+          env.DISH_ANALYSIS_CACHE.put(cacheKey, resultJson, { expirationTtl: 86400 * 30 }),
+          env.DISH_ANALYSIS_CACHE.put(simpleKey, resultJson, { expirationTtl: 86400 * 30 })
+        ]);
       }
 
       return { ok: true, jobId, status: "completed", processing_ms: processingMs };
@@ -22216,6 +22292,9 @@ const _worker_impl = {
                 );
               }
 
+              // Enrich items without descriptions with generated descriptions from cached analysis
+              const enrichedItems = await enrichItemsWithGeneratedDescriptions(env, flattenedItems, query);
+
               return respondTB(
                 withBodyAnalytics(
                   {
@@ -22228,7 +22307,7 @@ const _worker_impl = {
                       query,
                       address,
                       forceUS,
-                      items: flattenedItems.slice(0, maxRows)
+                      items: enrichedItems.slice(0, maxRows)
                     },
                     enqueued,
                     hint: isStale ? "Cache is stale (>15 days). Refreshing in background. Add ?fresh=1 to force immediate refresh." : null,
@@ -22258,7 +22337,7 @@ const _worker_impl = {
           await bumpStatusKV(env, { inhouse_hit: 1 });
 
           // Map in-house items to expected response format (no filtering needed - already clean)
-          const items = inHouseMenu.items.map((it, idx) => ({
+          let items = inHouseMenu.items.map((it, idx) => ({
             id: it.id || it.source_id || `item-${idx + 1}`,
             name: it.name || "",
             description: it.description || "",
@@ -22271,6 +22350,10 @@ const _worker_impl = {
               (typeof it.calories === 'string' ? parseInt(it.calories.split('-')[0]) : null) ||
               (typeof it.calories === 'number' ? it.calories : null)
           }));
+
+          // Enrich items without descriptions with generated descriptions from cached analysis
+          const restaurantName = inHouseMenu.restaurant?.name || query;
+          items = await enrichItemsWithGeneratedDescriptions(env, items, restaurantName);
 
           return respondTB(
             withBodyAnalytics(
@@ -28733,10 +28816,24 @@ async function runDishAnalysis(env, body, ctx) {
     !devFlag && !forceReanalyze && !selectionComponentIdsInput;
 
   let cacheKey = null;
+  let cacheKeySimple = null;
   if (allowCache && env && env.DISH_ANALYSIS_CACHE) {
     try {
+      // Try full cache key first (includes section/category for exact match)
       cacheKey = buildDishCacheKey(body);
-      const cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+      let cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+      let usedSimpleKey = false;
+
+      // If no exact match, try simplified key (dish + restaurant + description only)
+      // This helps when same dish is accessed from different menu sections
+      if (!cached || !cached.ok) {
+        cacheKeySimple = buildDishCacheKeySimple(body);
+        cached = await env.DISH_ANALYSIS_CACHE.get(cacheKeySimple, "json");
+        if (cached && cached.ok) {
+          usedSimpleKey = true;
+        }
+      }
+
       if (cached && cached.ok) {
         // If fullRecipe is requested but cached result doesn't have it, skip cache
         // and regenerate to include the full_recipe data
@@ -28746,6 +28843,7 @@ async function runDishAnalysis(env, body, ctx) {
         } else {
           cached.debug = cached.debug || {};
           cached.debug.cache_hit_dish_analysis = true;
+          cached.debug.cache_key_type = usedSimpleKey ? "simple" : "full";
           cached.debug.pipeline_version = PIPELINE_VERSION;
           cached.debug.total_ms = Date.now() - tStart;
           return { status: 200, result: cached };
@@ -31709,6 +31807,10 @@ async function runDishAnalysis(env, body, ctx) {
     }
   }
 
+  // Generate fallback description from recipe introduction when no menu description available
+  // This provides a rich description for dish cards when Uber Eats doesn't have one
+  const generatedDescription = full_recipe?.full_recipe?.introduction || null;
+
   const result = {
     ok: true,
     apiVersion: "v1",
@@ -31720,6 +31822,8 @@ async function runDishAnalysis(env, body, ctx) {
     restaurantName,
     imageUrl: dishImageUrl,
     recipe_image: recipeImage,
+    // Fallback description from recipe introduction when menu description is empty
+    generated_description: generatedDescription,
     summary,
     recipe: correctedRecipeResult,
     likely_recipe,
@@ -31758,20 +31862,29 @@ async function runDishAnalysis(env, body, ctx) {
   // ---- store in KV cache (best-effort) ----
   // TTL: 30 days - dish analysis is stable (recipes, nutrition, allergens don't change)
   // The PIPELINE_VERSION in the cache key handles invalidation when logic changes
+  // We write to BOTH the full key (with section/category) AND the simple key
+  // This ensures cache hits whether the dish is accessed from same or different sections
   if (allowCache && cacheKey && env && env.DISH_ANALYSIS_CACHE) {
     try {
       const toCache = { ...result, debug: { ...result.debug } };
+      const toCacheJson = JSON.stringify(toCache);
       const ttl30Days = 60 * 60 * 24 * 30; // 30 days
+
+      // Also build simple key for fallback lookups
+      const simpleKey = buildDishCacheKeySimple(body);
+
       if (ctx && typeof ctx.waitUntil === "function") {
+        // Write to both keys in parallel using waitUntil
         ctx.waitUntil(
-          env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(toCache), {
-            expirationTtl: ttl30Days
-          })
+          Promise.all([
+            env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days }),
+            env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days })
+          ]).catch(e => console.error('[Cache] Write error:', e))
         );
       } else {
-        env.DISH_ANALYSIS_CACHE.put(cacheKey, JSON.stringify(toCache), {
-          expirationTtl: ttl30Days
-        });
+        // Without waitUntil, write both keys (non-blocking)
+        env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days });
+        env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days });
       }
     } catch (e) {
       // do not break response if cache write fails
