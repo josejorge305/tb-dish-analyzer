@@ -7150,8 +7150,10 @@ async function buildAssistantContext(env, userId) {
 /**
  * Build the system prompt for the AI Assistant
  * Includes superbrain knowledge for personalized food recommendations
+ * @param {Object} context - User context from buildAssistantContext
+ * @param {Object|null} menuContext - Restaurant menu context (optional)
  */
-function buildAssistantSystemPrompt(context) {
+function buildAssistantSystemPrompt(context, menuContext = null) {
   const { user, allergens, prioritized_organs, today, superbrain } = context;
 
   let systemPrompt = `You are a friendly, knowledgeable nutrition coach. Your role is to help users make better food choices based on their personal health profile, today's eating, and scientific knowledge about foods and their effects on the body.
@@ -7165,6 +7167,7 @@ IMPORTANT RULES:
 - Provide actionable, specific advice
 - If discussing medical conditions, add a brief disclaimer about consulting healthcare providers
 - Be encouraging and supportive, not judgmental
+- When the user is browsing a restaurant menu, recommend specific items FROM THAT MENU
 
 USER PROFILE:
 `;
@@ -7293,7 +7296,52 @@ USER PROFILE:
     }
   }
 
+  // ========================================
+  // RESTAURANT MENU CONTEXT (if user is browsing a menu)
+  // ========================================
+  if (menuContext && menuContext.menuItems && menuContext.menuItems.length > 0) {
+    systemPrompt += `\n========================================\n`;
+    systemPrompt += `CURRENT RESTAURANT MENU: ${menuContext.restaurantName}\n`;
+    systemPrompt += `========================================\n`;
+    systemPrompt += `The user is currently browsing this restaurant's menu. When they ask about recommendations, suggest SPECIFIC ITEMS from this menu.\n\n`;
+
+    // Group items by section for better organization
+    const sections = {};
+    for (const item of menuContext.menuItems) {
+      const sectionName = item.section || 'Other';
+      if (!sections[sectionName]) {
+        sections[sectionName] = [];
+      }
+      sections[sectionName].push(item);
+    }
+
+    // Output menu items by section
+    for (const [sectionName, items] of Object.entries(sections)) {
+      systemPrompt += `\n${sectionName.toUpperCase()}:\n`;
+      for (const item of items.slice(0, 15)) { // Limit items per section
+        let itemLine = `  • ${item.name}`;
+        if (item.price) itemLine += ` (${item.price})`;
+        if (item.calories) itemLine += ` - ${item.calories} cal`;
+        systemPrompt += itemLine + '\n';
+        if (item.description && item.description.length > 0 && item.description.length < 100) {
+          systemPrompt += `    ${item.description}\n`;
+        }
+      }
+    }
+
+    systemPrompt += `\nWhen recommending items from this menu:\n`;
+    systemPrompt += `- Check each item against the user's allergens before recommending\n`;
+    systemPrompt += `- Prioritize items that may benefit the user's priority organs\n`;
+    systemPrompt += `- Consider the user's calorie/macro targets when suggesting portion sizes\n`;
+    systemPrompt += `- Warn about items that may contain allergens based on typical ingredients\n`;
+    systemPrompt += `========================================\n`;
+  }
+
   systemPrompt += `\nWhen the user asks about food recommendations, USE THE SUPERBRAIN KNOWLEDGE above to suggest specific foods that benefit their priority organs while avoiding their allergens.`;
+
+  if (menuContext && menuContext.menuItems?.length > 0) {
+    systemPrompt += ` When browsing a restaurant, recommend specific menu items by name.`;
+  }
 
   return systemPrompt;
 }
@@ -7506,8 +7554,16 @@ async function getUserConversations(env, userId, limit = 10) {
 
 /**
  * Main chat handler - processes a user message and returns AI response
+ * @param {Object} env - Cloudflare environment
+ * @param {string} userId - User ID
+ * @param {string} message - User message
+ * @param {number|null} conversationId - Existing conversation ID (optional)
+ * @param {Object|null} menuContext - Restaurant menu context (optional)
+ *   - restaurantName: string
+ *   - restaurantId: string|null
+ *   - menuItems: Array<{name, description?, section?, price?, calories?}>
  */
-async function handleAssistantChat(env, userId, message, conversationId = null) {
+async function handleAssistantChat(env, userId, message, conversationId = null, menuContext = null) {
   if (!env?.D1_DB || !userId || !message) {
     return { ok: false, error: 'missing_params' };
   }
@@ -7539,8 +7595,8 @@ async function handleAssistantChat(env, userId, message, conversationId = null) 
     // Save user message
     await saveMessage(env, convId, userId, 'user', message);
 
-    // Build system prompt
-    const systemPrompt = buildAssistantSystemPrompt(contextResult.context);
+    // Build system prompt (now includes menu context if provided)
+    const systemPrompt = buildAssistantSystemPrompt(contextResult.context, menuContext);
 
     // Add current message to history
     historyMessages.push({ role: 'user', content: message });
@@ -7556,9 +7612,15 @@ async function handleAssistantChat(env, userId, message, conversationId = null) 
       };
     }
 
-    // Save assistant response
+    // Save assistant response (include menu context in snapshot for audit)
     await saveMessage(env, convId, userId, 'assistant', llmResult.content, {
-      context_snapshot: contextResult.context,
+      context_snapshot: {
+        ...contextResult.context,
+        menu_context: menuContext ? {
+          restaurantName: menuContext.restaurantName,
+          itemCount: menuContext.menuItems?.length || 0
+        } : null
+      },
       model_used: llmResult.model_used,
       tokens_used: llmResult.tokens_used,
       response_time_ms: llmResult.response_time_ms
@@ -15691,385 +15753,131 @@ async function handleRecipeResolve(env, request, url, ctx) {
   });
 }
 
-// ========== Uber Eats (Apify) — Tier 1 Scraper ==========
-// ========== Apify Async with Webhooks ==========
-// Start an async Apify run and get notified via webhook when complete
-async function startApifyRunAsync(env, query, address, maxRows = 500, locale = "en-US", jobId = null) {
-  const token = env.APIFY_TOKEN;
-  const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
-
-  if (!token) {
-    throw new Error("Apify: Missing APIFY_TOKEN");
-  }
-
-  // Generate a unique job ID if not provided
-  const apifyJobId = jobId || `apify_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  // Build webhook URL - this worker will receive the callback
-  const webhookUrl = `https://tb-dish-processor-production.tummybuddy.workers.dev/webhook/apify?jobId=${encodeURIComponent(apifyJobId)}`;
-
-  // Ad-hoc webhook config (base64 encoded)
-  const webhookConfig = [{
-    eventTypes: ["ACTOR.RUN.SUCCEEDED"],
-    requestUrl: webhookUrl,
-    payloadTemplate: `{"jobId": "${apifyJobId}", "runId": "{{resource.id}}", "datasetId": "{{resource.defaultDatasetId}}", "status": "{{resource.status}}"}`
-  }];
-  const webhooksParam = btoa(JSON.stringify(webhookConfig));
-
-  // Start async run (returns immediately with run info)
-  const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&memory=4096&webhooks=${webhooksParam}`;
-
-  const input = {
-    query: String(query || ""),
-    address: String(address),
-    locale: String(locale || "en-US"),
-    maxRows: Number(maxRows) || 15,
-    proxy: {
-      useApifyProxy: true,
-      apifyProxyGroups: ["RESIDENTIAL"]
-    }
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json"
-    },
-    body: JSON.stringify(input)
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Apify async start failed: ${res.status} - ${text.slice(0, 200)}`);
-  }
-
-  const runInfo = await res.json();
-
-  // Store job metadata in KV for tracking
-  if (env.MENUS_CACHE) {
-    await env.MENUS_CACHE.put(
-      `apify-job:${apifyJobId}`,
-      JSON.stringify({
-        jobId: apifyJobId,
-        runId: runInfo.data?.id,
-        status: "running",
-        query,
-        address,
-        maxRows,
-        startedAt: new Date().toISOString()
-      }),
-      { expirationTtl: 3600 } // 1 hour TTL
-    );
-  }
-
-  return {
-    jobId: apifyJobId,
-    runId: runInfo.data?.id,
-    status: "running",
-    pollUrl: `/api/apify-job/${apifyJobId}`
-  };
-}
-
-// Fetch dataset items from a completed Apify run
-async function fetchApifyDataset(env, datasetId) {
-  const token = env.APIFY_TOKEN;
-  const url = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${encodeURIComponent(token)}`;
-
-  const res = await fetch(url, {
-    headers: { Accept: "application/json" }
-  });
-
-  if (!res.ok) {
-    throw new Error(`Apify dataset fetch failed: ${res.status}`);
-  }
-
-  return res.json();
-}
-
-// Synchronous Apify call (original - kept for fallback/testing)
-async function fetchMenuFromApify(
-  env,
-  query,
-  address = "Miami, FL, USA",
-  maxRows = 500,  // TUNED: Increased from 250 for complete menus
-  locale = "en-US"
-) {
-  const token = env.APIFY_TOKEN;
-  const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
-
-  if (!token) {
-    throw new Error("Apify: Missing APIFY_TOKEN");
-  }
-
-  // Use synchronous endpoint with increased memory for faster response
-  // memory=4096 gives 1 full CPU core, timeout=60s to fail fast
-  const url = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}&memory=4096&timeout=60`;
-
-  const input = {
-    query: String(query || ""),
-    address: String(address),
-    locale: String(locale || "en-US"),
-    maxRows: Number(maxRows) || 500,  // TUNED: Increased from 15 for complete menus
-    proxy: {
-      useApifyProxy: true,
-      apifyProxyGroups: ["RESIDENTIAL"]
-    }
-  };
-
-  // Use AbortController for client-side timeout (15s) to fail fast to tier 2
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-  let res;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json"
-      },
-      body: JSON.stringify(input),
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  const text = await res.text();
-
-  if (res.status === 408) {
-    throw new Error("Apify: Request timeout (exceeded 300s)");
-  }
-  if (res.status === 400) {
-    throw new Error(`Apify: Bad request - ${text.slice(0, 200)}`);
-  }
-  if (!res.ok) {
-    throw new Error(`Apify ${res.status}: ${text.slice(0, 200)}`);
-  }
-
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("Apify: Response was not valid JSON");
-  }
-
-  // Apify returns dataset items as an array directly
-  // Normalize to match RapidAPI response structure for compatibility
-  if (Array.isArray(data)) {
-    return {
-      data: {
-        results: data
-      },
-      _source: "apify"
-    };
-  }
-
-  // If already in expected format
-  return { ...data, _source: "apify" };
-}
-
-// ========== Uber Eats Tiered Scraper — In-House (Tier 0) → RapidAPI (Tier 1) → Apify (Tier 2) ==========
+// ========== Uber Eats Scraper — In-House Only (Cloudflare Browser Rendering) ==========
+// Note: Apify and RapidAPI scrapers have been removed - only using in-house browser scraping
 async function fetchMenuFromUberEatsTiered(
   env,
   query,
   address = "Miami, FL, USA",
-  maxRows = 500,  // TUNED: Increased for complete menus
+  maxRows = 500,
   lat = null,
   lng = null,
   radius = 5000
 ) {
-  const inhouseEnabled = !!env.BROWSER; // Cloudflare Browser Rendering binding
-  const rapidEnabled = !!env.RAPIDAPI_KEY;
-  const apifyEnabled = !!env.APIFY_TOKEN;
-
-  // Tier 0: In-House Scraper (Cloudflare Browser Rendering - preferred, no external costs)
-  if (inhouseEnabled) {
-    try {
-      console.log(`[UberEats Tier0 InHouse] Attempting scrape for "${query}" @ "${address}"`);
-      const scrapeResult = await scrapeUberEatsMenu(env, query, address, { maxRows });
-
-      if (scrapeResult.ok && scrapeResult.items?.length > 0) {
-        // Transform to match expected format for franchise system
-        const menu = (scrapeResult.items || []).map((it, idx) => ({
-          id: it.id || `item-${idx + 1}`,
-          name: it.name || "",
-          description: it.description || "",
-          section: it.section || "mains",
-          price: it.price || null,
-          calories: it.calories ? parseInt(it.calories) : null,
-          image_url: it.image_url || null
-        }));
-
-        return {
-          ok: true,
-          restaurants: [{
-            name: scrapeResult.restaurant?.name || query,
-            store_id: scrapeResult.restaurant?.url?.match(/store\/[^/]+\/([^?]+)/)?.[1] || null,
-            address: address,
-            url: scrapeResult.store_url
-          }],
-          menu: menu,
-          _tier: "inhouse",
-          _source: "cloudflare_browser"
-        };
-      } else {
-        console.log(`[UberEats Tier0 InHouse] No results: ${scrapeResult.error || 'empty menu'}`);
-      }
-    } catch (err) {
-      const msg = String(err?.message || err);
-      console.error(`[UberEats Tier0 InHouse] Failed: ${msg}`);
-    }
+  // Only in-house scraper is supported (Apify and RapidAPI have been removed)
+  if (!env.BROWSER) {
+    throw new Error("UberEats: BROWSER binding not available - enable Cloudflare Browser Rendering in wrangler.toml");
   }
 
-  // Tier 1: RapidAPI (faster, ~9s typical response)
-  if (rapidEnabled) {
-    try {
-      const result = await fetchMenuFromUberEats(
-        env,
-        query,
-        address,
-        maxRows,
-        lat,
-        lng,
-        radius
-      );
-      result._tier = "rapidapi";
-      return result;
-    } catch (err) {
-      const msg = String(err?.message || err);
-      console.error(`[UberEats Tier1 RapidAPI] Failed: ${msg}`);
-      if (!apifyEnabled) {
-        throw err;
-      }
-    }
+  console.log(`[UberEats InHouse] Scraping "${query}" @ "${address}"`);
+  const scrapeResult = await scrapeUberEatsMenu(env, query, address, { maxRows });
+
+  if (scrapeResult.ok && scrapeResult.items?.length > 0) {
+    // Transform to match expected format for franchise system
+    const menu = (scrapeResult.items || []).map((it, idx) => ({
+      id: it.id || `item-${idx + 1}`,
+      name: it.name || "",
+      description: it.description || "",
+      section: it.section || "mains",
+      price: it.price || null,
+      calories: it.calories ? parseInt(it.calories) : null,
+      image_url: it.image_url || null
+    }));
+
+    return {
+      ok: true,
+      restaurants: [{
+        name: scrapeResult.restaurant?.name || query,
+        store_id: scrapeResult.restaurant?.url?.match(/store\/[^/]+\/([^?]+)/)?.[1] || null,
+        address: address,
+        url: scrapeResult.store_url
+      }],
+      menu: menu,
+      _tier: "inhouse",
+      _source: "cloudflare_browser"
+    };
   }
 
-  // Tier 2: Apify (fallback, slower but cleaner data)
-  if (apifyEnabled) {
-    const result = await fetchMenuFromApify(env, query, address, maxRows);
-    result._tier = "apify";
-    return result;
-  }
-
-  throw new Error("UberEats: No scraper tier available (missing BROWSER, RAPIDAPI_KEY, and APIFY_TOKEN)");
+  // Scrape failed or returned no items
+  throw new Error(`UberEats: ${scrapeResult.error || 'No menu items found'}`);
 }
 
-// ========== Uber Eats Tiered Job by Address — Race Apify & RapidAPI ==========
-// Returns same interface as postJobByAddress: { ok, immediate, raw, job_id?, _tier }
-// Runs both scrapers in parallel and returns the first successful response
+// ========== Uber Eats Job by Address — In-House Only ==========
+// Returns: { ok, immediate, raw, _tier }
 async function postJobByAddressTiered(
-  { query, address, maxRows = 500, locale = "en-US", page = 1, webhook = null },  // TUNED: 500 items
+  { query, address, maxRows = 500, locale = "en-US", page = 1, webhook = null },
   env
 ) {
-  const apifyEnabled = !!env.APIFY_TOKEN;
-  const rapidEnabled = !!env.RAPIDAPI_KEY;
-
-  if (!apifyEnabled && !rapidEnabled) {
-    throw new Error("UberEats: No scraper available (missing APIFY_TOKEN and RAPIDAPI_KEY)");
+  // Only in-house scraper is supported (Apify and RapidAPI have been removed)
+  if (!env.BROWSER) {
+    throw new Error("UberEats: BROWSER binding not available - enable Cloudflare Browser Rendering in wrangler.toml");
   }
 
-  // Build array of scraper promises
-  const scrapers = [];
+  console.log(`[UberEats InHouse] Job by address: "${query}" @ "${address}"`);
+  const scrapeResult = await scrapeUberEatsMenu(env, query, address, { maxRows });
 
-  if (rapidEnabled) {
-    // RapidAPI - generally faster, add first
-    scrapers.push(
-      postJobByAddress({ query, address, maxRows, locale, page, webhook }, env)
-        .then(result => ({ ...result, _tier: "rapidapi" }))
-        .catch(err => {
-          console.error(`[RapidAPI] Failed: ${err?.message || err}`);
-          return null;
-        })
-    );
+  if (scrapeResult.ok && scrapeResult.items?.length > 0) {
+    return {
+      ok: true,
+      immediate: true,
+      raw: {
+        returnvalue: {
+          data: scrapeResult.items.map((it, idx) => ({
+            id: it.id || `item-${idx + 1}`,
+            name: it.name || "",
+            description: it.description || "",
+            section: it.section || "mains",
+            price: it.price || null,
+            calories: it.calories ? parseInt(it.calories) : null,
+            image_url: it.image_url || null
+          }))
+        },
+        _source: "cloudflare_browser"
+      },
+      _tier: "inhouse"
+    };
   }
 
-  if (apifyEnabled) {
-    // Apify - cleaner data but slower
-    scrapers.push(
-      fetchMenuFromApify(env, query, address, maxRows, locale)
-        .then(apifyResult => {
-          const results = apifyResult?.data?.results || apifyResult?.results || [];
-          if (!results.length) return null; // Treat empty as failure
-          return {
-            ok: true,
-            immediate: true,
-            raw: { returnvalue: { data: results }, _source: "apify" },
-            _tier: "apify"
-          };
-        })
-        .catch(err => {
-          console.error(`[Apify] Failed: ${err?.message || err}`);
-          return null;
-        })
-    );
-  }
-
-  // Race: return first successful (non-null) result
-  // Use Promise.any-like behavior: resolve on first success, reject if all fail
-  return new Promise((resolve, reject) => {
-    let completed = 0;
-    let resolved = false;
-    const total = scrapers.length;
-
-    scrapers.forEach(promise => {
-      promise.then(result => {
-        completed++;
-        if (!resolved && result !== null && result.ok) {
-          resolved = true;
-          resolve(result);
-        } else if (completed === total && !resolved) {
-          reject(new Error("UberEats: All scrapers failed"));
-        }
-      });
-    });
-  });
+  throw new Error(`UberEats: ${scrapeResult.error || 'No menu items found'}`);
 }
 
-// ========== Uber Eats Tiered Job by Location (GPS) — Apify (Tier 1) → RapidAPI (Tier 2) ==========
-// Returns same interface as postJobByLocation: { ok, data/results, _tier }
+// ========== Uber Eats Job by Location (GPS) — In-House Only ==========
+// Returns: { ok, data/results, _tier }
 async function postJobByLocationTiered(
-  { query, lat, lng, radius = 6000, maxRows = 500 },  // TUNED: 500 items for complete menus
+  { query, lat, lng, radius = 6000, maxRows = 500 },
   env
 ) {
-  const tier1Enabled = !!env.APIFY_TOKEN;
-  const tier2Enabled = !!env.RAPIDAPI_KEY;
-
-  // Tier 1: Apify - use address from lat/lng (Apify doesn't support direct GPS)
-  // We'll reverse-geocode or use a generic address format
-  if (tier1Enabled && lat != null && lng != null) {
-    try {
-      // Apify doesn't support GPS directly, but we can try with coordinates as address
-      const gpsAddress = `${lat},${lng}`;
-      const apifyResult = await fetchMenuFromApify(env, query, gpsAddress, maxRows);
-      const results = apifyResult?.data?.results || apifyResult?.results || [];
-      return {
-        ok: true,
-        data: { results },
-        results,
-        _tier: "apify"
-      };
-    } catch (err) {
-      const msg = String(err?.message || err);
-      console.error(`[postJobByLocationTiered Tier1 Apify] Failed: ${msg}`);
-      if (!tier2Enabled) {
-        throw err;
-      }
-    }
+  // Only in-house scraper is supported (Apify and RapidAPI have been removed)
+  if (!env.BROWSER) {
+    throw new Error("UberEats: BROWSER binding not available - enable Cloudflare Browser Rendering in wrangler.toml");
   }
 
-  // Tier 2: RapidAPI (fallback)
-  if (tier2Enabled) {
-    const result = await postJobByLocation(
-      { query, lat, lng, radius, maxRows },
-      env
-    );
-    result._tier = "rapidapi";
-    return result;
+  // Use GPS coordinates as address for the in-house scraper
+  const gpsAddress = `${lat},${lng}`;
+  console.log(`[UberEats InHouse] Job by location: "${query}" @ GPS(${lat}, ${lng})`);
+
+  const scrapeResult = await scrapeUberEatsMenu(env, query, gpsAddress, { maxRows });
+
+  if (scrapeResult.ok && scrapeResult.items?.length > 0) {
+    const results = scrapeResult.items.map((it, idx) => ({
+      id: it.id || `item-${idx + 1}`,
+      name: it.name || "",
+      description: it.description || "",
+      section: it.section || "mains",
+      price: it.price || null,
+      calories: it.calories ? parseInt(it.calories) : null,
+      image_url: it.image_url || null
+    }));
+
+    return {
+      ok: true,
+      data: { results },
+      results,
+      _tier: "inhouse"
+    };
   }
 
-  throw new Error("UberEats: No scraper tier available (missing APIFY_TOKEN and RAPIDAPI_KEY)");
+  throw new Error(`UberEats: ${scrapeResult.error || 'No menu items found'}`);
 }
 
 // ========== Uber Eats (RapidAPI) — Address + GPS job/search, retries & polling — TIER 2 ==========
@@ -17562,7 +17370,12 @@ const _worker_impl = {
     const pathname = normPathname(url);
     const searchParams = url.searchParams;
 
-    if (!(pathname === "/healthz" && request.method === "GET")) {
+    // Exempt health check and batch status polling from rate limiting
+    const isExemptFromRateLimit =
+      (pathname === "/healthz" && request.method === "GET") ||
+      (pathname === "/api/analyze/batch/status" && request.method === "GET");
+
+    if (!isExemptFromRateLimit) {
       const limited = await rateLimit(env, request, { limit: 60 });
       if (limited) return limited;
     }
@@ -19207,168 +19020,19 @@ const _worker_impl = {
       }
     }
 
-    // --- DEBUG: RapidAPI health check ---
-    if (pathname === "/debug/rapid") {
-      const host =
-        env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
-      const key = env.RAPIDAPI_KEY || "";
-      let status = 0,
-        text = "",
-        probe;
-
-      async function tryPath(p) {
-        const res = await fetch(`https://${host}${p}`, {
-          headers: {
-            "x-rapidapi-key": key,
-            "x-rapidapi-host": host,
-            accept: "application/json"
-          }
-        });
-        return { status: res.status, text: await res.text(), path: p };
-      }
-
-      try {
-        probe = await tryPath("/health");
-        if (probe.status === 404) probe = await tryPath("/health/public");
-        status = probe.status;
-        text = probe.text;
-      } catch (e) {
-        text = String(e);
-      }
-
-      return new Response(
-        JSON.stringify(
-          {
-            ok: status >= 200 && status < 400,
-            used_host: host,
-            has_key: !!key,
-            upstream_path: probe?.path || null,
-            upstream_status: status,
-            upstream_text: text.slice(0, 400)
-          },
-          null,
-          2
-        ),
-        { headers: { "content-type": "application/json" } }
-      );
-    }
-
-    // --- DEBUG: direct RapidAPI POST to /api/job ---
-    if (pathname === "/debug/rapid-job") {
-      const host =
-        env.UBER_RAPID_HOST || "uber-eats-scraper-api.p.rapidapi.com";
-      const key = env.RAPIDAPI_KEY || "";
-
-      const q = searchParams.get("query") || "seafood";
-      const addr = searchParams.get("address") || "South Miami, FL, USA";
-      const max = Number(searchParams.get("maxRows") || 3);
-      const locale = searchParams.get("locale") || "en-US";
-      const page = Number(searchParams.get("page") || 1);
-
-      const body = {
-        scraper: { maxRows: max, query: q, address: addr, locale, page }
-      };
-
-      let status = 0,
-        text = "",
-        js = null;
-      try {
-        const res = await fetch(`https://${host}/api/job`, {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-            "x-rapidapi-key": key,
-            "x-rapidapi-host": host
-          },
-          body: JSON.stringify(body)
-        });
-        status = res.status;
-        text = await res.text();
-        try {
-          js = JSON.parse(text);
-        } catch {}
-      } catch (e) {
-        text = String(e);
-      }
-
-      return new Response(
-        JSON.stringify(
-          {
-            used_host: host,
-            has_key: !!key,
-            sent_body: body,
-            upstream_status: status,
-            upstream_json: js ?? null,
-            upstream_text_sample: text.slice(0, 400)
-          },
-          null,
-          2
-        ),
-        { headers: { "content-type": "application/json" } }
-      );
-    }
-
-    // --- DEBUG: Apify Uber Eats scraper (Tier 1) ---
-    if (pathname === "/debug/apify") {
-      const token = env.APIFY_TOKEN || "";
-      const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
-
+    // --- DEBUG: In-house scraper test (replaces legacy Apify/RapidAPI debug endpoints) ---
+    if (pathname === "/debug/scraper" || pathname === "/debug/uber-tiered") {
       const q = searchParams.get("query") || "pizza";
       const addr = searchParams.get("address") || "Miami, FL, USA";
       const max = Number(searchParams.get("maxRows") || 3);
 
-      if (!token) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            error: "Missing APIFY_TOKEN secret",
-            hint: "Run: wrangler secret put APIFY_TOKEN --env production"
-          }, null, 2),
-          { headers: { "content-type": "application/json" } }
-        );
-      }
-
-      let status = 0, js = null, text = "";
-      try {
-        const result = await fetchMenuFromApify(env, q, addr, max);
-        js = result;
-        status = 200;
-      } catch (e) {
-        text = String(e?.message || e);
-        status = 500;
-      }
-
-      return new Response(
-        JSON.stringify({
-          ok: status === 200,
-          actor_id: actorId,
-          has_token: !!token,
-          query: q,
-          address: addr,
-          maxRows: max,
-          status,
-          result: js ?? null,
-          error: text || null
-        }, null, 2),
-        { headers: { "content-type": "application/json" } }
-      );
-    }
-
-    // --- DEBUG: Tiered scraper test (Apify → RapidAPI fallback) ---
-    if (pathname === "/debug/uber-tiered") {
-      const q = searchParams.get("query") || "pizza";
-      const addr = searchParams.get("address") || "Miami, FL, USA";
-      const max = Number(searchParams.get("maxRows") || 3);
-
-      const hasApify = !!env.APIFY_TOKEN;
-      const hasRapid = !!env.RAPIDAPI_KEY;
+      const hasBrowser = !!env.BROWSER;
 
       let status = 0, js = null, text = "", tier = null;
       try {
         const result = await fetchMenuFromUberEatsTiered(env, q, addr, max);
         js = result;
-        tier = result?._tier || "unknown";
+        tier = result?._tier || "inhouse";
         status = 200;
       } catch (e) {
         text = String(e?.message || e);
@@ -19378,10 +19042,8 @@ const _worker_impl = {
       return new Response(
         JSON.stringify({
           ok: status === 200,
-          tiers: {
-            tier1_apify: hasApify,
-            tier2_rapidapi: hasRapid
-          },
+          scraper: "inhouse",
+          browser_enabled: hasBrowser,
           used_tier: tier,
           query: q,
           address: addr,
@@ -19390,7 +19052,7 @@ const _worker_impl = {
           result_preview: js ? {
             _tier: js._tier,
             _source: js._source,
-            has_results: !!(js?.returnvalue?.data?.length || js?.data?.results?.length || js?.results?.length)
+            has_results: !!(js?.menu?.length || js?.restaurants?.length)
           } : null,
           error: text || null
         }, null, 2),
@@ -19398,476 +19060,7 @@ const _worker_impl = {
       );
     }
 
-    // ========== APIFY WEBHOOK RECEIVER ==========
-    // Called by Apify when async run completes
-    if (pathname === "/webhook/apify" && request.method === "POST") {
-      try {
-        const payload = await request.json();
-        const jobId = searchParams.get("jobId") || payload.jobId;
-
-        console.log(`[Apify Webhook] Received payload for jobId=${jobId}:`, JSON.stringify(payload).slice(0, 500));
-
-        if (!jobId) {
-          return new Response(JSON.stringify({ ok: false, error: "Missing jobId" }), {
-            status: 400,
-            headers: { "content-type": "application/json" }
-          });
-        }
-
-        // Get existing job data from KV (contains real runId from when job was started)
-        const existing = env.MENUS_CACHE ? await env.MENUS_CACHE.get(`apify-job:${jobId}`, "json") : null;
-        console.log(`[Apify Webhook] Existing job data:`, JSON.stringify(existing || {}).slice(0, 300));
-
-        // Extract run info - prefer stored runId (real ID), then try payload
-        // 1. Stored runId from job start (most reliable)
-        // 2. Apify default format: { resource: { id, defaultDatasetId, ... } }
-        // 3. Our template (if interpolated): { jobId, runId, datasetId, status }
-        let runId = existing?.runId; // First priority: stored real runId
-        let datasetId = null;
-
-        // Try to get from Apify's default webhook format (resource object)
-        if (payload.resource) {
-          if (!runId) runId = payload.resource.id;
-          datasetId = payload.resource.defaultDatasetId;
-        }
-
-        // Fallback to template payload values if they're not placeholders
-        if (!runId && payload.runId && !payload.runId.includes("{{")) {
-          runId = payload.runId;
-        }
-        if (!datasetId && payload.datasetId && !payload.datasetId.includes("{{")) {
-          datasetId = payload.datasetId;
-        }
-
-        console.log(`[Apify Webhook] Using runId=${runId}, datasetId=${datasetId}`);
-
-        // If we still don't have datasetId but have runId, fetch run info from Apify
-        if (!datasetId && runId && env.APIFY_TOKEN) {
-          try {
-            console.log(`[Apify Webhook] Fetching run info for runId=${runId}`);
-            const runInfoRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${env.APIFY_TOKEN}`);
-            if (runInfoRes.ok) {
-              const runInfo = await runInfoRes.json();
-              datasetId = runInfo.data?.defaultDatasetId;
-              console.log(`[Apify Webhook] Got datasetId=${datasetId} from Apify API`);
-            } else {
-              console.error(`[Apify Webhook] Apify API returned ${runInfoRes.status}`);
-            }
-          } catch (e) {
-            console.error(`[Apify Webhook] Failed to fetch run info: ${e.message}`);
-          }
-        }
-
-        // Fetch the actual data from the dataset
-        let data = [];
-        if (datasetId) {
-          try {
-            data = await fetchApifyDataset(env, datasetId);
-            console.log(`[Apify Webhook] Fetched ${data.length} items from dataset`);
-          } catch (e) {
-            console.error(`[Apify Webhook] Failed to fetch dataset: ${e.message}`);
-          }
-        } else {
-          console.error(`[Apify Webhook] No datasetId available to fetch results`);
-        }
-
-        // ======= VALIDATE & TRANSFORM DATA =======
-        // Find the best matching restaurant and transform to frontend format
-        let validationResult = null;
-        let transformedData = null;
-        let jobStatus = "completed";
-
-        if (Array.isArray(data) && data.length > 0 && existing?.query) {
-          const expectedName = existing.query;
-          const expectedAddress = existing.address || "";
-
-          // Score each result based on name similarity
-          const scored = data.map((restaurant, idx) => {
-            const restName = restaurant.title || restaurant.sanitizedTitle || restaurant.name || "";
-            const restAddr = restaurant.location?.address || restaurant.location?.streetAddress || "";
-
-            // Normalize names for comparison (remove ®, ™, apostrophes, and extract core name)
-            // Include all types of apostrophes and quotes: ', ', `, ʼ, ʻ
-            const normQuery = expectedName.toLowerCase().replace(/[®™''`ʼʻ'\-]/g, "").replace(/\s+/g, " ").trim();
-            // For result: extract everything before the first parenthesis (removes location suffix)
-            let normResult = restName.toLowerCase();
-            const parenIdx = normResult.indexOf('(');
-            if (parenIdx > 0) {
-              normResult = normResult.substring(0, parenIdx);
-            }
-            normResult = normResult.replace(/[®™''`ʼʻ'\-]/g, "").replace(/\s+/g, " ").trim();
-
-            // Match if:
-            // 1. Exact match after normalization
-            // 2. Query is contained in result (chain restaurant with location suffix)
-            // 3. Result starts with query (e.g., "McDonalds" matches "McDonalds Sunset Blvd")
-            // 4. strictNameMatch passes (token-based)
-            const exactMatch = normQuery === normResult;
-            const queryContained = normResult.includes(normQuery) || normQuery.includes(normResult);
-            const startsWithQuery = normResult.startsWith(normQuery);
-            const strictMatch = strictNameMatch(expectedName, restName);
-
-            const nameMatch = exactMatch || queryContained || startsWithQuery || strictMatch;
-
-            // Calculate similarity score for ranking (higher is better)
-            // For chain restaurants, if query is fully contained in result, that's a strong match
-            let nameSim;
-            if (exactMatch) {
-              nameSim = 1.0;
-            } else if (queryContained) {
-              // Query fully contained: high confidence (0.90-0.98 based on length ratio)
-              const lengthRatio = normQuery.length / normResult.length;
-              nameSim = 0.90 + (lengthRatio * 0.08); // e.g., "starbucks" in "starbucks (580 california)" = 0.93
-            } else if (startsWithQuery) {
-              nameSim = 0.85;
-            } else {
-              nameSim = normalizedSimilarity(expectedName, restName);
-            }
-            const addrSim = normalizedSimilarity(expectedAddress, restAddr);
-            const combinedScore = nameSim * 0.8 + addrSim * 0.2; // Weight name match more heavily
-
-            return {
-              index: idx,
-              restaurant,
-              nameMatch,
-              nameSim, // Used for confidence reporting
-              scores: { name: nameSim, address: addrSim, combined: combinedScore },
-              restName,
-              restAddr,
-            };
-          });
-
-          // Sort by combined score
-          scored.sort((a, b) => b.scores.combined - a.scores.combined);
-
-          // Find best match (must pass name check)
-          const bestMatch = scored.find(s => s.nameMatch);
-          const rejected = scored.filter(s => !s.nameMatch);
-
-          console.log(`[Apify Webhook] Validation: ${scored.length} results, best match: ${bestMatch?.restName || 'none'}`);
-
-          if (bestMatch) {
-            // Transform the matched restaurant to frontend format
-            const r = bestMatch.restaurant;
-            let sections = [];
-            let totalItems = 0;
-            let availableItems = 0;
-
-            // Transform menu - Uber Eats format has menu as array of catalog sections
-            // Structure: r.menu = [{ catalogName, catalogItems: [...] }, ...]
-            // NOW: Filter noise items and reorganize by canonical categories
-            const menuData = Array.isArray(r.menu) ? r.menu : (r.menu?.categories || []);
-
-            // Collect all valid items with their canonical categories
-            const allValidItems = [];
-            let filteredCount = 0;
-
-            menuData.forEach((cat, catIdx) => {
-              const items = cat.catalogItems || cat.items || [];
-              const sectionName = cat.catalogName || cat.name || cat.title || "Menu";
-
-              // Skip entire banned sections (drinks, utensils, fees, etc.)
-              if (isBannedSectionName(sectionName)) {
-                console.log(`[Apify Webhook] Skipping banned section: "${sectionName}"`);
-                filteredCount += items.length;
-                return;
-              }
-
-              items.forEach((item, itemIdx) => {
-                const itemName = item.title || item.name || item.labelPrimary || "";
-                const itemDescription = item.description || "";
-
-                // Filter out noise items: drinks, utensils, sides, add-ons
-                if (isLikelyDrink(itemName, sectionName)) {
-                  filteredCount++;
-                  return;
-                }
-                if (isLikelyUtensilOrPackaging(itemName, sectionName)) {
-                  filteredCount++;
-                  return;
-                }
-                if (hardBlockItem(itemName, itemDescription)) {
-                  filteredCount++;
-                  return;
-                }
-
-                totalItems++;
-                const isAvailable = item.isAvailable !== false && !item.isSoldOut;
-                if (isAvailable) availableItems++;
-
-                // Price handling - Uber returns price in cents
-                let priceText = item.priceTagline || item.priceString || item.priceFormatted || "";
-                if (!priceText && item.price) {
-                  priceText = `$${(item.price / 100).toFixed(2)}`;
-                }
-
-                // Classify item into canonical category
-                const itemObj = {
-                  name: itemName,
-                  section: sectionName,
-                  description: itemDescription,
-                };
-
-                // Try multiple classifiers in order of specificity
-                let canonicalCategory = classifyWingPlatter(itemObj)
-                  || classifyBowl(itemObj)
-                  || classifyWrapQuesadilla(itemObj)
-                  || classifyBySectionFallback(itemObj)
-                  || classifyCanonicalCategory(itemObj)
-                  || "Other";
-
-                allValidItems.push({
-                  id: item.uuid || item.id || `item-${catIdx}-${itemIdx}`,
-                  name: itemName,
-                  description: itemDescription,
-                  menuDescription: itemDescription,
-                  priceText: priceText,
-                  priceCents: item.price || 0,
-                  imageUrl: item.imageUrl || item.image || null,
-                  available: isAvailable,
-                  soldOut: !!item.isSoldOut,
-                  popular: !!item.titleBadge || !!item.popular,
-                  rating: null,
-                  hasCustomizations: !!item.hasCustomizations,
-                  canonicalCategory: canonicalCategory,
-                  originalSection: sectionName,
-                });
-              });
-            });
-
-            console.log(`[Apify Webhook] Filtered ${filteredCount} noise items, kept ${allValidItems.length} valid items`);
-
-            // Group items by canonical category in proper order
-            sections = groupItemsIntoSections(allValidItems);
-
-            // Build transformed data in ValidatedMenuData format
-            transformedData = {
-              restaurant: {
-                id: r.id || r.uuid || "",
-                name: r.title || r.sanitizedTitle || r.name || "",
-                address: r.location?.address || r.location?.streetAddress || "",
-                city: r.location?.city || "",
-                state: r.location?.state || "",
-                postalCode: r.location?.postalCode || r.location?.zipCode || "",
-                phone: r.phoneNumber || "",
-                imageUrl: r.heroImageUrl || r.imageUrl || null,
-                rating: r.rating?.ratingValue || null,
-                reviewCount: r.rating?.reviewCount || "0",
-                cuisines: r.categories || [],
-                isOpen: r.isOpen !== false,
-                hours: [],
-                deliveryEta: r.etaRange?.text || "",
-                deliveryFee: r.deliveryFee?.text || "",
-                url: r.url || "",
-              },
-              sections,
-              meta: {
-                totalSections: sections.length,
-                totalItems,
-                availableItems,
-                source: "apify",
-                scrapedAt: new Date().toISOString(),
-              },
-            };
-
-            validationResult = {
-              confidence: bestMatch.nameSim, // Use name similarity for confidence (not combined)
-              matchedName: bestMatch.restName,
-              requestedName: expectedName,
-              matchCount: scored.filter(s => s.nameMatch).length,
-              rejectedCount: rejected.length,
-              rejectedReasons: rejected.slice(0, 5).map(r => ({
-                name: r.restName,
-                reason: `Name similarity too low (${(r.scores.name * 100).toFixed(0)}%)`,
-              })),
-            };
-
-            console.log(`[Apify Webhook] Match found: "${bestMatch.restName}" with ${sections.length} sections, ${totalItems} items`);
-          } else {
-            // No match found
-            jobStatus = "completed_no_match";
-            validationResult = {
-              confidence: 0,
-              matchedName: "",
-              requestedName: expectedName,
-              matchCount: 0,
-              rejectedCount: scored.length,
-              reason: `No matching restaurant found for "${expectedName}"`,
-              rejectedReasons: scored.slice(0, 5).map(r => ({
-                name: r.restName,
-                reason: `Name similarity too low (${(r.scores.name * 100).toFixed(0)}%)`,
-              })),
-            };
-            console.log(`[Apify Webhook] No match found for "${expectedName}"`);
-          }
-        } else if (Array.isArray(data) && data.length === 0) {
-          jobStatus = "completed_no_match";
-          validationResult = {
-            confidence: 0,
-            matchedName: "",
-            requestedName: existing?.query || "",
-            matchCount: 0,
-            rejectedCount: 0,
-            reason: "No results returned from scraper",
-          };
-        }
-
-        // Helper: normalized string similarity (Levenshtein-based)
-        function normalizedSimilarity(str1, str2) {
-          if (!str1 || !str2) return 0;
-          const s1 = str1.toLowerCase().trim();
-          const s2 = str2.toLowerCase().trim();
-          if (s1 === s2) return 1;
-          const maxLen = Math.max(s1.length, s2.length);
-          if (maxLen === 0) return 1;
-          // Simple char-based similarity for speed
-          let matches = 0;
-          const shorter = s1.length < s2.length ? s1 : s2;
-          const longer = s1.length < s2.length ? s2 : s1;
-          for (const char of shorter) {
-            if (longer.includes(char)) matches++;
-          }
-          return matches / maxLen;
-        }
-
-        // Update job status in KV with validated/transformed results
-        if (env.MENUS_CACHE) {
-          await env.MENUS_CACHE.put(
-            `apify-job:${jobId}`,
-            JSON.stringify({
-              ...(existing || {}),
-              status: jobStatus,
-              datasetId: datasetId,
-              runId: runId,
-              completedAt: new Date().toISOString(),
-              resultCount: Array.isArray(data) ? data.length : 0,
-              _rawResultCount: Array.isArray(data) ? data.length : 0,
-              validation: validationResult,
-              transformedData: transformedData,
-              data: data // Keep raw data for debugging
-            }),
-            { expirationTtl: 3600 }
-          );
-
-          // ALSO cache under menu/ key for readMenuFromCache lookups
-          if (existing?.query && existing?.address && Array.isArray(data) && data.length > 0) {
-            const menuCacheKey = cacheKeyForMenu(existing.query, existing.address, false);
-            // Flatten menu items from Apify response
-            const flattenedItems = data.flatMap(store => {
-              if (!store?.menu?.categories) return [];
-              return store.menu.categories.flatMap(cat =>
-                (cat.items || []).map(item => ({
-                  name: item.title || item.name,
-                  description: item.description || '',
-                  price: item.price || null,
-                  category: cat.name || cat.title || 'Uncategorized',
-                  imageUrl: item.imageUrl || null
-                }))
-              );
-            });
-            if (flattenedItems.length > 0) {
-              await writeMenuToCache(env, menuCacheKey, {
-                query: existing.query,
-                address: existing.address,
-                forceUS: false,
-                items: flattenedItems
-              });
-              console.log(`[Apify Webhook] Cached ${flattenedItems.length} menu items under ${menuCacheKey}`);
-            }
-          }
-        }
-
-        // Return 200 to acknowledge webhook
-        return new Response(JSON.stringify({ ok: true, jobId, received: true, datasetId, resultCount: data.length }), {
-          headers: { "content-type": "application/json" }
-        });
-      } catch (e) {
-        console.error(`Apify webhook error: ${e.message}`);
-        return new Response(JSON.stringify({ ok: false, error: e.message }), {
-          status: 500,
-          headers: { "content-type": "application/json" }
-        });
-      }
-    }
-
-    // ========== APIFY JOB STATUS / RESULTS ==========
-    // GET /api/apify-job/:jobId - Check status and get results
-    if (pathname.startsWith("/api/apify-job/")) {
-      const jobId = pathname.replace("/api/apify-job/", "");
-
-      if (!jobId) {
-        return new Response(JSON.stringify({ ok: false, error: "Missing jobId" }), {
-          status: 400,
-          headers: { "content-type": "application/json" }
-        });
-      }
-
-      const job = await env.MENUS_CACHE?.get(`apify-job:${jobId}`, "json");
-
-      if (!job) {
-        return new Response(JSON.stringify({ ok: false, error: "Job not found", jobId }), {
-          status: 404,
-          headers: { "content-type": "application/json" }
-        });
-      }
-
-      // Format response for frontend consumption
-      // Frontend expects: { ok, status, data: ValidatedMenuData, validation: MenuValidation }
-      const isCompleted = job.status === "completed" || job.status === "completed_no_match";
-      const hasValidData = job.status === "completed" && !!job.transformedData;
-
-      // Build validation object in frontend-expected format
-      const validationInfo = job.validation ? {
-        confidence: job.validation.confidence || 0,
-        matchedName: job.validation.matchedName || "",
-        requestedName: job.validation.requestedName || job.query || "",
-        alternativeMatches: job.validation.matchCount || 0,
-        rejectedCount: job.validation.rejectedCount || 0,
-      } : null;
-
-      // Build debug info for troubleshooting (only if there were rejections)
-      const debugInfo = job.validation?.rejectedCount > 0 ? {
-        query: job.query || job.expectedRestaurantName || "",
-        resultsCount: job._rawResultCount || 0,
-        rejected: (job.validation.rejectedReasons || []).slice(0, 5).map(r => ({
-          name: r.name,
-          reason: r.reason,
-        })),
-      } : undefined;
-
-      // If validation failed (completed_no_match), return error response
-      if (job.status === "completed_no_match") {
-        return new Response(JSON.stringify({
-          ok: false,
-          status: "completed",
-          error: job.validation?.reason || "No matching restaurant found",
-          validation: validationInfo,
-          debug: debugInfo,
-          jobId,
-        }, null, 2), {
-          headers: { "content-type": "application/json" }
-        });
-      }
-
-      // Return formatted response with transformed data
-      return new Response(JSON.stringify({
-        ok: hasValidData,
-        status: job.status || "pending",
-        jobId,
-        runId: job.runId,
-        datasetId: job.datasetId,
-        resultCount: job.resultCount,
-        // Return transformed data in frontend-expected format (ValidatedMenuData)
-        data: hasValidData ? job.transformedData : undefined,
-        // Include validation info when job is completed
-        validation: isCompleted ? validationInfo : undefined,
-        debug: debugInfo,
-        // Include error message if completed but no valid data
-        error: !hasValidData && isCompleted ? (job.validation?.reason || "No data available") : undefined,
-      }, null, 2), {
-        headers: { "content-type": "application/json" }
-      });
-    }
+    // Legacy Apify endpoints removed - only in-house scraper is used now
 
     // ========== DISH IMAGE LOOKUP ==========
     // GET /api/dish-image?dish=Chicken%20Alfredo - Fetch dish image from providers
@@ -21124,6 +20317,7 @@ const _worker_impl = {
       const userId = body?.user_id || url.searchParams.get("user_id");
       const message = body?.message;
       const conversationId = body?.conversation_id || null;
+      const menuContext = body?.menu_context || null; // Restaurant menu context (optional)
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -21139,7 +20333,7 @@ const _worker_impl = {
         });
       }
 
-      const result = await handleAssistantChat(env, userId, message.trim(), conversationId);
+      const result = await handleAssistantChat(env, userId, message.trim(), conversationId, menuContext);
 
       return new Response(JSON.stringify(result, null, 2), {
         status: result.ok ? 200 : 500,
@@ -21200,153 +20394,7 @@ const _worker_impl = {
 
     // ========== END USER TRACKING API ENDPOINTS ==========
 
-    // ========== START ASYNC APIFY JOB ==========
-    // POST /api/apify-start - Start an async Apify scrape with webhook callback
-    if (pathname === "/api/apify-start" && request.method === "POST") {
-      try {
-        const body = await request.json().catch(() => ({}));
-        // Support both 'restaurantName' (frontend) and 'query' (legacy) parameters
-        const query = body.restaurantName || body.query || searchParams.get("query") || searchParams.get("restaurantName");
-        const address = body.address || searchParams.get("address");
-        const maxRows = Number(body.maxRows || searchParams.get("maxRows") || 3);
-
-        if (!query) {
-          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: restaurantName or query" }), {
-            status: 400,
-            headers: { "content-type": "application/json" }
-          });
-        }
-        if (!address) {
-          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: address" }), {
-            status: 400,
-            headers: { "content-type": "application/json" }
-          });
-        }
-
-        const result = await startApifyRunAsync(env, query, address, maxRows);
-
-        return new Response(JSON.stringify({
-          ok: true,
-          message: "Apify job started - poll for results",
-          ...result
-        }, null, 2), {
-          headers: { "content-type": "application/json" }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ ok: false, error: e.message }), {
-          status: 500,
-          headers: { "content-type": "application/json" }
-        });
-      }
-    }
-
-    // GET /api/apify-start - Start via GET for easy testing
-    if (pathname === "/api/apify-start" && request.method === "GET") {
-      try {
-        const query = searchParams.get("restaurantName") || searchParams.get("query");
-        const address = searchParams.get("address");
-        const maxRows = Number(searchParams.get("maxRows") || 3);
-
-        if (!query) {
-          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: restaurantName or query" }), {
-            status: 400,
-            headers: { "content-type": "application/json" }
-          });
-        }
-        if (!address) {
-          return new Response(JSON.stringify({ ok: false, error: "Missing required parameter: address" }), {
-            status: 400,
-            headers: { "content-type": "application/json" }
-          });
-        }
-
-        const result = await startApifyRunAsync(env, query, address, maxRows);
-
-        return new Response(JSON.stringify({
-          ok: true,
-          message: "Apify job started - poll for results",
-          ...result
-        }, null, 2), {
-          headers: { "content-type": "application/json" }
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ ok: false, error: e.message }), {
-          status: 500,
-          headers: { "content-type": "application/json" }
-        });
-      }
-    }
-
-    // --- DEBUG: Test individual scrapers with timing ---
-    if (pathname === "/debug/scraper-timing") {
-      const q = searchParams.get("query") || "pizza";
-      const addr = searchParams.get("address") || "Miami, FL, USA";
-      const max = Number(searchParams.get("maxRows") || 3);
-      const testApify = searchParams.get("apify") !== "0";
-      const testRapid = searchParams.get("rapid") !== "0";
-
-      const results = {
-        query: q,
-        address: addr,
-        maxRows: max,
-        apify: null,
-        rapidapi: null
-      };
-
-      // Test Apify
-      if (testApify && env.APIFY_TOKEN) {
-        const startApify = Date.now();
-        try {
-          const apifyResult = await fetchMenuFromApify(env, q, addr, max);
-          const elapsed = Date.now() - startApify;
-          const dataCount = apifyResult?.data?.results?.length || 0;
-          results.apify = {
-            ok: true,
-            elapsed_ms: elapsed,
-            data_count: dataCount,
-            has_data: dataCount > 0
-          };
-        } catch (e) {
-          const elapsed = Date.now() - startApify;
-          results.apify = {
-            ok: false,
-            elapsed_ms: elapsed,
-            error: String(e?.message || e)
-          };
-        }
-      } else if (!env.APIFY_TOKEN) {
-        results.apify = { ok: false, error: "APIFY_TOKEN not set" };
-      }
-
-      // Test RapidAPI
-      if (testRapid && env.RAPIDAPI_KEY) {
-        const startRapid = Date.now();
-        try {
-          const rapidResult = await fetchMenuFromUberEats(env, q, addr, max);
-          const elapsed = Date.now() - startRapid;
-          const dataCount = rapidResult?.returnvalue?.data?.length || rapidResult?.data?.results?.length || 0;
-          results.rapidapi = {
-            ok: true,
-            elapsed_ms: elapsed,
-            data_count: dataCount,
-            has_data: dataCount > 0
-          };
-        } catch (e) {
-          const elapsed = Date.now() - startRapid;
-          results.rapidapi = {
-            ok: false,
-            elapsed_ms: elapsed,
-            error: String(e?.message || e)
-          };
-        }
-      } else if (!env.RAPIDAPI_KEY) {
-        results.rapidapi = { ok: false, error: "RAPIDAPI_KEY not set" };
-      }
-
-      return new Response(JSON.stringify(results, null, 2), {
-        headers: { "content-type": "application/json" }
-      });
-    }
+    // Legacy Apify/RapidAPI endpoints removed - use in-house scraper via /debug/scraper
 
     // --- DEBUG: Menu cache management ---
     if (pathname === "/debug/menu-cache/list") {
