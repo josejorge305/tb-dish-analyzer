@@ -17140,7 +17140,7 @@ async function extractMenuGateway(
   const normalizedFinal = finalNormalizeCategories(hardFiltered);
   const sections = groupItemsIntoSections(normalizedFinal);
 
-  return {
+  const menuResult = {
     ok: true,
     source: "uber_gateway_menu",
     restaurant: {
@@ -17153,6 +17153,15 @@ async function extractMenuGateway(
     },
     sections
   };
+
+  // Cache the menu by placeId for quick retrieval on revisit
+  try {
+    await writeRestaurantMenuToCache(env, placeId, menuResult);
+  } catch (e) {
+    console.error(`[extractMenuGateway] Failed to cache menu for placeId ${placeId}:`, e.message);
+  }
+
+  return menuResult;
 }
 
 // ---- POST /api/job exactly like the working debug route ----
@@ -21112,15 +21121,72 @@ const _worker_impl = {
       const lat = latParam != null ? Number(latParam) : undefined;
       const lng = lngParam != null ? Number(lngParam) : undefined;
 
+      // New params for cache-first approach and enrichment
+      const useCache = url.searchParams.get("useCache") === "1";
+      const enrich = url.searchParams.get("enrich") === "1";
+
       try {
-        const result = await extractMenuGateway(env, {
-          placeId,
-          url: urlParam,
-          lat,
-          lng,
-          restaurantName,
-          address
-        });
+        let result = null;
+        let cacheUsed = false;
+
+        // Try to read cached menu first when useCache=1
+        if (useCache && placeId) {
+          const cachedMenu = await readRestaurantMenuFromCache(env, placeId);
+          if (cachedMenu && cachedMenu.ok && cachedMenu.sections) {
+            result = {
+              ok: cachedMenu.ok,
+              source: cachedMenu.source || "restaurant_menu_cache",
+              restaurant: cachedMenu.restaurant,
+              sections: cachedMenu.sections,
+              cacheHit: true,
+              cacheAgeSeconds: cachedMenu.ageSeconds || 0
+            };
+            cacheUsed = true;
+            console.log(`[/menu/extract] Cache hit for placeId: ${placeId} (age: ${cachedMenu.ageSeconds}s)`);
+          }
+        }
+
+        // If no cached menu or cache not requested, fetch fresh
+        if (!result) {
+          result = await extractMenuGateway(env, {
+            placeId,
+            url: urlParam,
+            lat,
+            lng,
+            restaurantName,
+            address
+          });
+          result.cacheHit = false;
+        }
+
+        // Enrich with cached analysis when enrich=1
+        if (enrich && result.ok && result.sections) {
+          const restName = result.restaurant?.name || restaurantName || "";
+          const enrichedSections = await enrichMenuWithCachedAnalysis(
+            env,
+            result.sections,
+            restName
+          );
+
+          // Count how many items have cached analysis
+          let totalItems = 0;
+          let cachedItems = 0;
+          for (const sec of enrichedSections) {
+            for (const item of sec.items || []) {
+              totalItems++;
+              if (item.cachedAnalysis?.ok) cachedItems++;
+            }
+          }
+
+          result.sections = enrichedSections;
+          result.enrichment = {
+            enabled: true,
+            totalItems,
+            cachedItems,
+            cacheRate: totalItems > 0 ? Math.round((cachedItems / totalItems) * 100) : 0
+          };
+          console.log(`[/menu/extract] Enriched ${cachedItems}/${totalItems} items with cached analysis`);
+        }
 
         return okJson(result);
       } catch (err) {
@@ -25490,6 +25556,121 @@ async function writeMenuToCache(env, key, data) {
     console.error(`[MenuCache] Write FAILED for key ${key}:`, e.message);
     return false;
   }
+}
+
+// === Restaurant Menu Cache by PlaceId =======================================
+// Caches the full extracted menu by placeId for quick retrieval on revisit.
+function restaurantMenuCacheKey(placeId) {
+  return `restaurant-menu:${placeId}`;
+}
+
+async function readRestaurantMenuFromCache(env, placeId) {
+  if (!env?.MENUS_CACHE || !placeId) return null;
+  try {
+    const key = restaurantMenuCacheKey(placeId);
+    const raw = await env.MENUS_CACHE.get(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const savedAt = parsed.savedAt ? new Date(parsed.savedAt).getTime() : 0;
+    const ageSeconds = savedAt ? Math.floor((Date.now() - savedAt) / 1000) : 0;
+    return { ...parsed, ageSeconds };
+  } catch (e) {
+    console.error(`[RestaurantMenuCache] Read error for placeId ${placeId}:`, e.message);
+    return null;
+  }
+}
+
+async function writeRestaurantMenuToCache(env, placeId, menuData) {
+  if (!env?.MENUS_CACHE || !placeId) return false;
+  try {
+    const key = restaurantMenuCacheKey(placeId);
+    const body = JSON.stringify({
+      savedAt: new Date().toISOString(),
+      ...menuData
+    });
+    await env.MENUS_CACHE.put(key, body, { expirationTtl: MENU_TTL_SECONDS });
+    console.log(`[RestaurantMenuCache] Cached menu for placeId: ${placeId}`);
+    return true;
+  } catch (e) {
+    console.error(`[RestaurantMenuCache] Write error for placeId ${placeId}:`, e.message);
+    return false;
+  }
+}
+
+// === Enrich Menu Items with Cached Analysis =================================
+// For each menu item, looks up DISH_ANALYSIS_CACHE and attaches cached analysis.
+// This allows the frontend to display pills, nutrition, allergens immediately.
+async function enrichMenuWithCachedAnalysis(env, sections, restaurantName) {
+  if (!env?.DISH_ANALYSIS_CACHE || !sections || !Array.isArray(sections)) {
+    return sections;
+  }
+
+  const enrichedSections = [];
+
+  for (const section of sections) {
+    const sectionName = section.section || section.name || "";
+    const items = section.items || [];
+
+    const enrichedItems = await Promise.all(
+      items.map(async (item) => {
+        try {
+          // Build cache key using dish details
+          const cacheKeyPayload = {
+            dishName: item.name || "",
+            restaurantName: restaurantName || "",
+            menuSection: item.section || sectionName || "",
+            canonicalCategory: item.canonicalCategory || "",
+            menuDescription: item.description || ""
+          };
+
+          const cacheKey = buildDishCacheKey(cacheKeyPayload);
+          const cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+
+          if (cached && cached.ok) {
+            // Extract the most useful fields for immediate display
+            return {
+              ...item,
+              cachedAnalysis: {
+                ok: true,
+                cacheHit: true,
+                allergen_flags: cached.allergen_flags || [],
+                diet_tags: cached.diet_tags || [],
+                fodmap_traffic_light: cached.fodmap_traffic_light || null,
+                fodmap_score: cached.fodmap_score ?? null,
+                ibs_friendliness: cached.ibs_friendliness || null,
+                nutrition: cached.nutrition || null,
+                nutrition_summary: cached.nutrition_summary || null,
+                healthScore: cached.healthScore ?? null,
+                confidence: cached.confidence ?? null,
+                full_recipe: cached.full_recipe || null,
+                organs: cached.organs || null
+              }
+            };
+          }
+
+          // No cached analysis - return item as-is
+          return {
+            ...item,
+            cachedAnalysis: null
+          };
+        } catch (e) {
+          // On error, return item without cached analysis
+          return {
+            ...item,
+            cachedAnalysis: null
+          };
+        }
+      })
+    );
+
+    enrichedSections.push({
+      ...section,
+      items: enrichedItems
+    });
+  }
+
+  return enrichedSections;
 }
 
 // Background refresh: fetch fresh menu data and update cache (non-blocking).
