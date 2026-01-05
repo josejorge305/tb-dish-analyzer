@@ -15773,7 +15773,7 @@ async function fetchMenuFromApify(
   return { ...data, _source: "apify" };
 }
 
-// ========== Uber Eats Tiered Scraper — RapidAPI (Tier 1, faster) → Apify (Tier 2, fallback) ==========
+// ========== Uber Eats Tiered Scraper — In-House (Tier 0) → RapidAPI (Tier 1) → Apify (Tier 2) ==========
 async function fetchMenuFromUberEatsTiered(
   env,
   query,
@@ -15783,8 +15783,48 @@ async function fetchMenuFromUberEatsTiered(
   lng = null,
   radius = 5000
 ) {
+  const inhouseEnabled = !!env.BROWSER; // Cloudflare Browser Rendering binding
   const rapidEnabled = !!env.RAPIDAPI_KEY;
   const apifyEnabled = !!env.APIFY_TOKEN;
+
+  // Tier 0: In-House Scraper (Cloudflare Browser Rendering - preferred, no external costs)
+  if (inhouseEnabled) {
+    try {
+      console.log(`[UberEats Tier0 InHouse] Attempting scrape for "${query}" @ "${address}"`);
+      const scrapeResult = await scrapeUberEatsMenu(env, query, address, { maxRows });
+
+      if (scrapeResult.ok && scrapeResult.items?.length > 0) {
+        // Transform to match expected format for franchise system
+        const menu = (scrapeResult.items || []).map((it, idx) => ({
+          id: it.id || `item-${idx + 1}`,
+          name: it.name || "",
+          description: it.description || "",
+          section: it.section || "mains",
+          price: it.price || null,
+          calories: it.calories ? parseInt(it.calories) : null,
+          image_url: it.image_url || null
+        }));
+
+        return {
+          ok: true,
+          restaurants: [{
+            name: scrapeResult.restaurant?.name || query,
+            store_id: scrapeResult.restaurant?.url?.match(/store\/[^/]+\/([^?]+)/)?.[1] || null,
+            address: address,
+            url: scrapeResult.store_url
+          }],
+          menu: menu,
+          _tier: "inhouse",
+          _source: "cloudflare_browser"
+        };
+      } else {
+        console.log(`[UberEats Tier0 InHouse] No results: ${scrapeResult.error || 'empty menu'}`);
+      }
+    } catch (err) {
+      const msg = String(err?.message || err);
+      console.error(`[UberEats Tier0 InHouse] Failed: ${msg}`);
+    }
+  }
 
   // Tier 1: RapidAPI (faster, ~9s typical response)
   if (rapidEnabled) {
@@ -15816,7 +15856,7 @@ async function fetchMenuFromUberEatsTiered(
     return result;
   }
 
-  throw new Error("UberEats: No scraper tier available (missing RAPIDAPI_KEY and APIFY_TOKEN)");
+  throw new Error("UberEats: No scraper tier available (missing BROWSER, RAPIDAPI_KEY, and APIFY_TOKEN)");
 }
 
 // ========== Uber Eats Tiered Job by Address — Race Apify & RapidAPI ==========
@@ -17893,7 +17933,11 @@ const _worker_impl = {
         // Queue each uncached dish for background processing via Cloudflare Queue
         // This is more reliable than ctx.waitUntil() for long-running tasks
         console.log(`[BATCH] Queueing ${uncachedJobs.length} dishes for background processing`);
-        if (env?.ANALYSIS_QUEUE && uncachedJobs.length > 0) {
+
+        // In local development, queues don't process automatically - use waitUntil instead
+        const isLocalDev = env?.ENV === 'development' || !env?.ENV;
+
+        if (env?.ANALYSIS_QUEUE && uncachedJobs.length > 0 && !isLocalDev) {
           try {
             // Queue jobs in batches (max 100 messages per send)
             const queueMessages = uncachedJobs.map(job => ({
@@ -17922,8 +17966,8 @@ const _worker_impl = {
             }
           }
         } else if (ctx && uncachedJobs.length > 0) {
-          // Fallback if queue not available
-          console.log(`[BATCH] Queue not available, using waitUntil for batch ${batchId}`);
+          // Use waitUntil in local dev or if queue not available
+          console.log(`[BATCH] Using waitUntil for batch ${batchId} (${isLocalDev ? 'local dev' : 'no queue'})`);
           ctx.waitUntil(
             processBatchInBackground(env, batchId, uncachedJobs, { concurrency })
               .catch(err => console.error("[BATCH] Background error:", err?.message || err))
