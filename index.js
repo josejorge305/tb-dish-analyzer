@@ -22702,18 +22702,26 @@ Only return the JSON object, no other text.`
 
         if (!scrapeResult.ok) {
           await bumpStatusKV(env, { scraper_error: 1 });
+          // Determine appropriate status code based on error type
+          const errorMsg = (scrapeResult.error || "").toLowerCase();
+          const isTimeout = errorMsg.includes("timeout") || errorMsg.includes("timed out");
+          const isNotFound = errorMsg.includes("not found") || errorMsg.includes("no restaurant") || errorMsg.includes("no matching");
+          const statusCode = isTimeout ? 504 : (isNotFound ? 404 : 503);
+
           return errorResponseWith(
             {
               ok: false,
               error: scrapeResult.error || "Menu scraping failed",
-              hint: "The restaurant may be unavailable or closed. Try a different location.",
+              hint: isTimeout
+                ? "The request timed out. The restaurant's menu may be slow to load or unavailable."
+                : "The restaurant may be unavailable or closed. Try a different location.",
               source: "inhouse_scraper",
               elapsed_ms: scrapeResult.elapsed_ms,
               store_url: scrapeResult.store_url,
               restaurant: scrapeResult.restaurant,
               debug: scrapeResult.debug
             },
-            404,
+            statusCode,
             ctx,
             {
               "X-TB-Source": "inhouse-scraper",
