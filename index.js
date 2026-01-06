@@ -2138,24 +2138,6 @@ function mapSectionToCategory(sectionName) {
   return 'mains';
 }
 
-// ---- fetch with timeout helper ----
-async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    return res;
-  } catch (err) {
-    if (err && err.name === "AbortError") {
-      throw new Error(`fetch-timeout-${timeoutMs}ms`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(id);
-  }
-}
-
 // --- Simple Premium Gate (KV-backed) ---
 // Usage: add ?user_id=alice  AND set KV key: tier/user:alice -> "premium"
 // Dev override: ?dev=1 bypasses the check for quick testing.
@@ -23891,7 +23873,7 @@ Estimate based on ACTUAL visible portions. Only return JSON.`
         if (searchParams.get("debug") === "ratelimit") {
           const secs = Number(searchParams.get("after") || 42);
           trace.used_path = "debug-ratelimit";
-          return rateLimitResponse(ctx, rid, trace, secs, "debug-ratelimit");
+          return upstreamRateLimitResponse(ctx, rid, trace, secs, "debug-ratelimit");
         }
         // [39.1a] Early validation: require ?query for address/GPS search
         if (!isNonEmptyString(query)) {
@@ -34571,8 +34553,8 @@ function errorResponseWith(
     }
   });
 }
-// [40.1] — friendly 429 response with Retry-After header
-function rateLimitResponse(
+// [40.1] — friendly 429 response with Retry-After header (for upstream rate limits)
+function upstreamRateLimitResponse(
   ctxOrEnv,
   rid,
   trace,
