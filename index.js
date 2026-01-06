@@ -5729,17 +5729,55 @@ function adjustOrganScoreForAge(baseScore, organ, age) {
 }
 
 // Infer meal type from hour of day
-function inferMealType(hour) {
-  if (hour == null) hour = new Date().getHours();
+// If timezone is provided, calculates local hour; otherwise uses provided hour or UTC
+function inferMealType(hour, timezone) {
+  if (hour == null) {
+    hour = timezone ? getLocalHour(timezone) : new Date().getUTCHours();
+  }
   if (hour < 10) return 'breakfast';
   if (hour < 14) return 'lunch';
   if (hour < 17) return 'snack';
   return 'dinner';
 }
 
-// Get today's date as ISO string (YYYY-MM-DD)
-function getTodayISO() {
-  return new Date().toISOString().slice(0, 10);
+// Get today's date as ISO string (YYYY-MM-DD) in the specified timezone
+// If no timezone provided, uses UTC (legacy behavior)
+function getTodayISO(timezone) {
+  if (!timezone) {
+    return new Date().toISOString().slice(0, 10);
+  }
+  try {
+    // Use Intl.DateTimeFormat to get the date in the user's timezone
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return formatter.format(new Date()); // Returns YYYY-MM-DD format
+  } catch (e) {
+    console.error('Invalid timezone, falling back to UTC:', timezone, e?.message);
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+// Get current hour (0-23) in the specified timezone
+// If no timezone provided, uses UTC (legacy behavior)
+function getLocalHour(timezone) {
+  if (!timezone) {
+    return new Date().getUTCHours();
+  }
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      hour12: false
+    });
+    return parseInt(formatter.format(new Date()), 10);
+  } catch (e) {
+    console.error('Invalid timezone, falling back to UTC:', timezone, e?.message);
+    return new Date().getUTCHours();
+  }
 }
 
 // Population defaults when no profile exists
@@ -6115,9 +6153,9 @@ async function logMeal(env, userId, mealData) {
   if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
 
   const now = Math.floor(Date.now() / 1000);
-  const mealDate = mealData.meal_date || getTodayISO();
-  const hour = new Date().getHours();
-  const mealType = mealData.meal_type || inferMealType(hour);
+  const timezone = mealData.timezone || null; // e.g., "America/New_York"
+  const mealDate = mealData.meal_date || getTodayISO(timezone);
+  const mealType = mealData.meal_type || inferMealType(null, timezone);
 
   try {
     // Ensure user profile exists (foreign key requirement)
@@ -6196,9 +6234,9 @@ async function logMeal(env, userId, mealData) {
   }
 }
 
-async function getMealsForDate(env, userId, date, includeFullAnalysis = true) {
+async function getMealsForDate(env, userId, date, includeFullAnalysis = true, timezone = null) {
   if (!env?.D1_DB || !userId) return [];
-  const targetDate = date || getTodayISO();
+  const targetDate = date || getTodayISO(timezone);
 
   try {
     const { results } = await env.D1_DB.prepare(`
@@ -6265,10 +6303,10 @@ async function deleteMeal(env, userId, mealId) {
 
 // ---- Daily Summary ----
 
-async function updateDailySummary(env, userId, date) {
+async function updateDailySummary(env, userId, date, timezone = null) {
   if (!env?.D1_DB || !userId) return;
 
-  const targetDate = date || getTodayISO();
+  const targetDate = date || getTodayISO(timezone);
 
   try {
     // Aggregate meals for the day (no need for full_analysis here)
@@ -6397,9 +6435,9 @@ function generateDailyInsight(totals, targets) {
   return parts.join(' ');
 }
 
-async function getDailySummary(env, userId, date) {
+async function getDailySummary(env, userId, date, timezone = null) {
   if (!env?.D1_DB || !userId) return null;
-  const targetDate = date || getTodayISO();
+  const targetDate = date || getTodayISO(timezone);
 
   try {
     let row = await env.D1_DB.prepare(
@@ -6428,13 +6466,15 @@ async function getDailySummary(env, userId, date) {
   }
 }
 
-async function getWeeklySummaries(env, userId, days = 7) {
+async function getWeeklySummaries(env, userId, days = 7, timezone = null) {
   if (!env?.D1_DB || !userId) return [];
 
   try {
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-    const startISO = startDate.toISOString().slice(0, 10);
+    // Calculate start date relative to user's local "today"
+    const today = getTodayISO(timezone);
+    const todayDate = new Date(today + 'T00:00:00Z');
+    todayDate.setUTCDate(todayDate.getUTCDate() - days);
+    const startISO = todayDate.toISOString().slice(0, 10);
 
     const { results } = await env.D1_DB.prepare(`
       SELECT * FROM daily_summaries
@@ -6529,8 +6569,9 @@ async function removeSavedDish(env, userId, dishId) {
 /**
  * Get water intake for a specific date
  * Returns total glasses, target, hydration score, and organ impacts
+ * @param {string} timezone - IANA timezone string (e.g., "America/New_York")
  */
-async function getWaterForDate(env, userId, date) {
+async function getWaterForDate(env, userId, date, timezone = null) {
   if (!env?.D1_DB || !userId) {
     return {
       ok: false,
@@ -6542,7 +6583,7 @@ async function getWaterForDate(env, userId, date) {
     };
   }
 
-  const targetDate = date || getTodayISO();
+  const targetDate = date || getTodayISO(timezone);
 
   try {
     // Check if user has a custom water target from daily_water_summaries
@@ -6645,13 +6686,14 @@ function calculateWaterOrganImpacts(hydrationScore) {
 
 /**
  * Set total water glasses for a date (replaces existing value)
+ * @param {string} timezone - IANA timezone string (e.g., "America/New_York")
  */
-async function setWaterForDate(env, userId, glasses, date) {
+async function setWaterForDate(env, userId, glasses, date, timezone = null) {
   if (!env?.D1_DB || !userId || glasses < 0) {
     return { ok: false, error: 'invalid_params' };
   }
 
-  const targetDate = date || getTodayISO();
+  const targetDate = date || getTodayISO(timezone);
   const totalMl = glasses * 240; // 240ml per glass
   const now = Math.floor(Date.now() / 1000);
 
@@ -6691,13 +6733,14 @@ async function setWaterForDate(env, userId, glasses, date) {
 
 /**
  * Log additional water intake (adds to existing)
+ * @param {string} timezone - IANA timezone string (e.g., "America/New_York")
  */
-async function logWaterIntake(env, userId, glasses = 1, source = 'manual') {
+async function logWaterIntake(env, userId, glasses = 1, source = 'manual', timezone = null) {
   if (!env?.D1_DB || !userId || glasses < 0) {
     return { ok: false, error: 'invalid_params' };
   }
 
-  const targetDate = getTodayISO();
+  const targetDate = getTodayISO(timezone);
   const mlAmount = glasses * 240;
   const now = Math.floor(Date.now() / 1000);
 
@@ -6978,13 +7021,14 @@ async function getAdditiveWarnings(env) {
  * Build context for AI Assistant from user data
  * Gathers profile, today's meals, summary, allergens, organ priorities
  * NOW INCLUDES: Superbrain knowledge for personalized recommendations
+ * @param {string} timezone - IANA timezone string (e.g., "America/New_York")
  */
-async function buildAssistantContext(env, userId) {
+async function buildAssistantContext(env, userId, timezone = null) {
   if (!env?.D1_DB || !userId) {
     return { ok: false, error: 'missing_db_or_user' };
   }
 
-  const today = getTodayISO();
+  const today = getTodayISO(timezone);
 
   try {
     // Gather all user context in parallel
@@ -7562,15 +7606,16 @@ async function getUserConversations(env, userId, limit = 10) {
  *   - restaurantName: string
  *   - restaurantId: string|null
  *   - menuItems: Array<{name, description?, section?, price?, calories?}>
+ * @param {string|null} timezone - IANA timezone string (e.g., "America/New_York")
  */
-async function handleAssistantChat(env, userId, message, conversationId = null, menuContext = null) {
+async function handleAssistantChat(env, userId, message, conversationId = null, menuContext = null, timezone = null) {
   if (!env?.D1_DB || !userId || !message) {
     return { ok: false, error: 'missing_params' };
   }
 
   try {
     // Build user context
-    const contextResult = await buildAssistantContext(env, userId);
+    const contextResult = await buildAssistantContext(env, userId, timezone);
     if (!contextResult.ok) {
       return { ok: false, error: contextResult.error };
     }
@@ -20007,7 +20052,8 @@ const _worker_impl = {
     // GET /api/meals - Get meals for a date
     if (pathname === "/api/meals" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
-      const date = url.searchParams.get("date") || getTodayISO();
+      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
+      const date = url.searchParams.get("date") || getTodayISO(timezone);
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20059,7 +20105,8 @@ const _worker_impl = {
     // GET /api/tracker/daily - Get daily tracker summary
     if (pathname === "/api/tracker/daily" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
-      const date = url.searchParams.get("date") || getTodayISO();
+      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
+      const date = url.searchParams.get("date") || getTodayISO(timezone);
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20069,11 +20116,11 @@ const _worker_impl = {
       }
 
       const [summary, targets, meals, organPriorities, water] = await Promise.all([
-        getDailySummary(env, userId, date),
+        getDailySummary(env, userId, date, timezone),
         getUserTargets(env, userId),
         getMealsForDate(env, userId, date),
         getUserOrganPriorities(env, userId),
-        getWaterForDate(env, userId, date)
+        getWaterForDate(env, userId, date, timezone)
       ]);
 
       // Sort organ impacts by user priority
@@ -20117,6 +20164,7 @@ const _worker_impl = {
     if (pathname === "/api/tracker/weekly" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
       const days = parseInt(url.searchParams.get("days") || "7", 10);
+      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20126,7 +20174,7 @@ const _worker_impl = {
       }
 
       const [summaries, targets] = await Promise.all([
-        getWeeklySummaries(env, userId, days),
+        getWeeklySummaries(env, userId, days, timezone),
         getUserTargets(env, userId)
       ]);
 
@@ -20181,7 +20229,8 @@ const _worker_impl = {
     // GET /api/water - Get water intake for a date
     if (pathname === "/api/water" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
-      const date = url.searchParams.get("date") || getTodayISO();
+      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
+      const date = url.searchParams.get("date") || getTodayISO(timezone);
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20190,7 +20239,7 @@ const _worker_impl = {
         });
       }
 
-      const result = await getWaterForDate(env, userId, date);
+      const result = await getWaterForDate(env, userId, date, timezone);
 
       return new Response(JSON.stringify(result, null, 2), {
         headers: { "content-type": "application/json", ...CORS_ALL }
@@ -20203,6 +20252,7 @@ const _worker_impl = {
       const userId = body?.user_id || url.searchParams.get("user_id");
       const glasses = body?.glasses ?? 1;
       const source = body?.source || 'manual';
+      const timezone = body?.timezone || null; // e.g., "America/New_York"
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20211,7 +20261,7 @@ const _worker_impl = {
         });
       }
 
-      const result = await logWaterIntake(env, userId, glasses, source);
+      const result = await logWaterIntake(env, userId, glasses, source, timezone);
 
       return new Response(JSON.stringify(result, null, 2), {
         status: result.ok ? 200 : 400,
@@ -20224,6 +20274,8 @@ const _worker_impl = {
       const body = await readJsonSafe(request);
       const userId = body?.user_id || url.searchParams.get("user_id");
       const glasses = body?.glasses ?? 0;
+      const date = body?.date || null; // Optional specific date
+      const timezone = body?.timezone || null; // e.g., "America/New_York"
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20239,7 +20291,7 @@ const _worker_impl = {
         });
       }
 
-      const result = await setWaterForDate(env, userId, glasses);
+      const result = await setWaterForDate(env, userId, glasses, date, timezone);
 
       return new Response(JSON.stringify(result, null, 2), {
         status: result.ok ? 200 : 400,
@@ -20327,6 +20379,7 @@ const _worker_impl = {
       const message = body?.message;
       const conversationId = body?.conversation_id || null;
       const menuContext = body?.menu_context || null; // Restaurant menu context (optional)
+      const timezone = body?.timezone || null; // e.g., "America/New_York"
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20342,7 +20395,7 @@ const _worker_impl = {
         });
       }
 
-      const result = await handleAssistantChat(env, userId, message.trim(), conversationId, menuContext);
+      const result = await handleAssistantChat(env, userId, message.trim(), conversationId, menuContext, timezone);
 
       return new Response(JSON.stringify(result, null, 2), {
         status: result.ok ? 200 : 500,
@@ -20384,6 +20437,7 @@ const _worker_impl = {
     // GET /api/assistant/context - Get current user context (for debugging/preview)
     if (pathname === "/api/assistant/context" && request.method === "GET") {
       const userId = url.searchParams.get("user_id");
+      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
 
       if (!userId) {
         return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
@@ -20392,7 +20446,7 @@ const _worker_impl = {
         });
       }
 
-      const result = await buildAssistantContext(env, userId);
+      const result = await buildAssistantContext(env, userId, timezone);
 
       return new Response(JSON.stringify(result, null, 2), {
         headers: { "content-type": "application/json", ...CORS_ALL }
