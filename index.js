@@ -25601,6 +25601,7 @@ async function writeRestaurantMenuToCache(env, placeId, menuData) {
 // === Enrich Menu Items with Cached Analysis =================================
 // For each menu item, looks up DISH_ANALYSIS_CACHE and attaches cached analysis.
 // This allows the frontend to display pills, nutrition, allergens immediately.
+// Uses two-tier lookup: full key first, then simple key fallback (ignores section/category).
 async function enrichMenuWithCachedAnalysis(env, sections, restaurantName) {
   if (!env?.DISH_ANALYSIS_CACHE || !sections || !Array.isArray(sections)) {
     return sections;
@@ -25624,8 +25625,21 @@ async function enrichMenuWithCachedAnalysis(env, sections, restaurantName) {
             menuDescription: item.description || ""
           };
 
+          // Try full cache key first (includes section/category for exact match)
           const cacheKey = buildDishCacheKey(cacheKeyPayload);
-          const cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+          let cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+          let usedSimpleKey = false;
+
+          // Fallback to simple key if full key misses
+          // Simple key ignores section/category - more likely to hit when same dish
+          // is accessed from different menu views or section names changed
+          if (!cached || !cached.ok) {
+            const simpleKey = buildDishCacheKeySimple(cacheKeyPayload);
+            cached = await env.DISH_ANALYSIS_CACHE.get(simpleKey, "json");
+            if (cached && cached.ok) {
+              usedSimpleKey = true;
+            }
+          }
 
           if (cached && cached.ok) {
             // Extract the most useful fields for immediate display
@@ -25634,6 +25648,7 @@ async function enrichMenuWithCachedAnalysis(env, sections, restaurantName) {
               cachedAnalysis: {
                 ok: true,
                 cacheHit: true,
+                cacheKeyType: usedSimpleKey ? "simple" : "full",
                 allergen_flags: cached.allergen_flags || [],
                 diet_tags: cached.diet_tags || [],
                 fodmap_traffic_light: cached.fodmap_traffic_light || null,
