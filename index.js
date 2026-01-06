@@ -5917,7 +5917,42 @@ async function getUserAllergens(env, userId) {
 async function setUserAllergens(env, userId, allergens) {
   if (!env?.D1_DB || !userId) return { ok: false, error: 'missing_db_or_user' };
 
+  // Validate input is an array
+  if (!Array.isArray(allergens)) {
+    return { ok: false, error: 'allergens_must_be_array' };
+  }
+
   try {
+    // Fetch valid allergen codes from database
+    const { results: validAllergens } = await env.D1_DB.prepare(
+      'SELECT allergen_code FROM allergen_definitions'
+    ).all();
+    const validCodes = new Set((validAllergens || []).map(a => a.allergen_code));
+
+    // Valid severity values
+    const validSeverities = new Set(['avoid', 'limit', 'monitor']);
+
+    // Validate and normalize allergen entries
+    const normalizedAllergens = [];
+    for (const item of allergens) {
+      const code = typeof item === 'string' ? item : item?.allergen_code;
+      const severity = (typeof item === 'object' && item.severity) ? item.severity : 'avoid';
+
+      if (!code) {
+        return { ok: false, error: 'invalid_allergen_entry', details: 'Missing allergen_code' };
+      }
+
+      if (!validCodes.has(code)) {
+        return { ok: false, error: 'invalid_allergen_code', details: `Unknown allergen: ${code}`, valid_codes: Array.from(validCodes) };
+      }
+
+      if (!validSeverities.has(severity)) {
+        return { ok: false, error: 'invalid_severity', details: `Invalid severity: ${severity}`, valid_severities: Array.from(validSeverities) };
+      }
+
+      normalizedAllergens.push({ code, severity });
+    }
+
     // Ensure user profile exists (foreign key requirement)
     const existing = await getUserProfile(env, userId);
     if (!existing) {
@@ -5935,20 +5970,17 @@ async function setUserAllergens(env, userId, allergens) {
 
     // Insert new allergens
     const now = Math.floor(Date.now() / 1000);
-    for (const item of (allergens || [])) {
-      const code = typeof item === 'string' ? item : item.allergen_code;
-      const severity = (typeof item === 'object' && item.severity) ? item.severity : 'avoid';
-
+    for (const { code, severity } of normalizedAllergens) {
       await env.D1_DB.prepare(`
         INSERT INTO user_allergens (user_id, allergen_code, severity, created_at)
         VALUES (?, ?, ?, ?)
       `).bind(userId, code, severity, now).run();
     }
 
-    return { ok: true };
+    return { ok: true, count: normalizedAllergens.length };
   } catch (e) {
     console.error('setUserAllergens error:', e);
-    return { ok: false, error: String(e?.message || e) };
+    return { ok: false, error: 'database_error', details: String(e?.message || e) };
   }
 }
 
