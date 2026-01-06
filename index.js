@@ -18555,12 +18555,21 @@ const _worker_impl = {
             skip_organs: false // Include organs for complete health analysis (needed for tracker)
           };
 
-          // Check if already cached
+          // Check if already cached - try full key first, then simple key
           const cacheKey = buildDishCacheKey(payload);
+          const simpleKey = buildDishCacheKeySimple(payload);
           let cached = null;
+          let usedSimpleKey = false;
           if (env?.DISH_ANALYSIS_CACHE) {
             try {
               cached = await env.DISH_ANALYSIS_CACHE.get(cacheKey, "json");
+              // If no match with full key, try simple key (ignores section/category)
+              if (!cached || !cached.ok) {
+                cached = await env.DISH_ANALYSIS_CACHE.get(simpleKey, "json");
+                if (cached && cached.ok) {
+                  usedSimpleKey = true;
+                }
+              }
             } catch (e) { /* ignore cache errors */ }
           }
 
@@ -18586,6 +18595,7 @@ const _worker_impl = {
             payload,
             cached: isCacheValid ? true : false,
             cachedResult: isCacheValid ? cached : null,
+            cacheKeyType: usedSimpleKey ? "simple" : "full",
             // Flag to indicate if organs need to be fetched
             needsOrgans: hasBasicData && !hasOrgans
           });
