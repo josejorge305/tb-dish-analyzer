@@ -6433,6 +6433,26 @@ function inferMealType(hour, timezone) {
   return 'dinner';
 }
 
+// Create a fallback photo analysis result when Claude Vision is unavailable
+function createFallbackAnalysis(baselineCalories) {
+  const percentConsumed = 80; // Default assumption: 80% consumed
+  const caloriesEaten = Math.round(baselineCalories * (percentConsumed / 100));
+  const caloriesLeft = baselineCalories - caloriesEaten;
+
+  return {
+    percentConsumed,
+    caloriesEaten,
+    caloriesLeft,
+    confidence: 0.6, // Lower confidence for fallback
+    items: [
+      { name: "Main portion", percentConsumed: 85, caloriesEaten: Math.round(caloriesEaten * 0.6), caloriesLeft: Math.round(caloriesLeft * 0.4) },
+      { name: "Side items", percentConsumed: 70, caloriesEaten: Math.round(caloriesEaten * 0.3), caloriesLeft: Math.round(caloriesLeft * 0.4) },
+      { name: "Extras", percentConsumed: 90, caloriesEaten: Math.round(caloriesEaten * 0.1), caloriesLeft: Math.round(caloriesLeft * 0.2) },
+    ],
+    notes: "Estimated based on typical consumption patterns (photo analysis unavailable)"
+  };
+}
+
 // Get today's date as ISO string (YYYY-MM-DD) in the specified timezone
 // If no timezone provided, uses UTC (legacy behavior)
 function getTodayISO(timezone) {
@@ -20795,6 +20815,354 @@ const _worker_impl = {
         status: result.ok ? 200 : 404,
         headers: { "content-type": "application/json", ...CORS_ALL }
       });
+    }
+
+    // =====================================================
+    // MEAL PHOTO ENDPOINTS - For before/after photo analysis
+    // =====================================================
+
+    // OPTIONS preflight for /api/meal-photo/* (CORS)
+    if (pathname.startsWith("/api/meal-photo") && request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400"
+        }
+      });
+    }
+
+    // POST /api/meal-photo/upload - Upload a before or after meal photo
+    if (pathname === "/api/meal-photo/upload" && request.method === "POST") {
+      try {
+        const contentType = request.headers.get("content-type") || "";
+
+        // Handle multipart form data
+        if (contentType.includes("multipart/form-data")) {
+          const formData = await request.formData();
+          const photo = formData.get("photo");
+          const userId = formData.get("userId");
+          const photoType = formData.get("photoType"); // 'before' or 'after'
+
+          if (!photo || !userId || !photoType) {
+            return new Response(JSON.stringify({ ok: false, error: "missing_required_fields" }), {
+              status: 400,
+              headers: { "content-type": "application/json", ...CORS_ALL }
+            });
+          }
+
+          // Generate unique filename
+          const timestamp = Date.now();
+          const filename = `meal-photos/${userId}/${photoType}_${timestamp}.jpg`;
+
+          // Upload to R2
+          const photoBuffer = await photo.arrayBuffer();
+          await env.R2_BUCKET.put(filename, photoBuffer, {
+            httpMetadata: {
+              contentType: "image/jpeg",
+            },
+            customMetadata: {
+              userId: String(userId),
+              photoType: String(photoType),
+              uploadedAt: new Date().toISOString(),
+            },
+          });
+
+          // Generate public URL (R2 public access or signed URL)
+          // For now, return a path that can be used with our API
+          const photoUrl = `https://tb-dish-processor-production.tummybuddy.workers.dev/api/meal-photo/serve/${filename}`;
+
+          return new Response(JSON.stringify({
+            ok: true,
+            url: photoUrl,
+            filename: filename,
+          }), {
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Handle JSON body with base64 image
+        const body = await readJsonSafe(request);
+        if (body?.photoBase64 && body?.userId && body?.photoType) {
+          const timestamp = Date.now();
+          const filename = `meal-photos/${body.userId}/${body.photoType}_${timestamp}.jpg`;
+
+          // Decode base64 and upload to R2
+          const base64Data = body.photoBase64.replace(/^data:image\/\w+;base64,/, "");
+          const photoBuffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+
+          await env.R2_BUCKET.put(filename, photoBuffer, {
+            httpMetadata: {
+              contentType: "image/jpeg",
+            },
+            customMetadata: {
+              userId: body.userId,
+              photoType: body.photoType,
+              uploadedAt: new Date().toISOString(),
+            },
+          });
+
+          const photoUrl = `https://tb-dish-processor-production.tummybuddy.workers.dev/api/meal-photo/serve/${filename}`;
+
+          return new Response(JSON.stringify({
+            ok: true,
+            url: photoUrl,
+            filename: filename,
+          }), {
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        return new Response(JSON.stringify({ ok: false, error: "invalid_request_format" }), {
+          status: 400,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      } catch (e) {
+        console.error("meal-photo upload error:", e);
+        return new Response(JSON.stringify({ ok: false, error: e?.message || "upload_failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // GET /api/meal-photo/serve/* - Serve uploaded photos from R2
+    if (pathname.startsWith("/api/meal-photo/serve/") && request.method === "GET") {
+      try {
+        const filename = pathname.replace("/api/meal-photo/serve/", "");
+        const object = await env.R2_BUCKET.get(filename);
+
+        if (!object) {
+          return new Response(JSON.stringify({ ok: false, error: "photo_not_found" }), {
+            status: 404,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const headers = new Headers();
+        headers.set("Content-Type", object.httpMetadata?.contentType || "image/jpeg");
+        headers.set("Cache-Control", "public, max-age=31536000");
+        headers.set("Access-Control-Allow-Origin", "*");
+
+        return new Response(object.body, { headers });
+      } catch (e) {
+        console.error("meal-photo serve error:", e);
+        return new Response(JSON.stringify({ ok: false, error: "serve_failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
+    // POST /api/meal-photo/analyze - Analyze before/after photos using Claude Vision
+    if (pathname === "/api/meal-photo/analyze" && request.method === "POST") {
+      try {
+        const body = await readJsonSafe(request);
+        const { beforePhotoUrl, afterPhotoUrl, dishName, baselineCalories } = body || {};
+
+        if (!beforePhotoUrl || !afterPhotoUrl || !dishName) {
+          return new Response(JSON.stringify({ ok: false, error: "missing_required_fields" }), {
+            status: 400,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Helper to fetch photo - read from R2 if internal URL, otherwise fetch
+        const fetchPhoto = async (photoUrl) => {
+          const internalPrefix = "/api/meal-photo/serve/";
+          const internalPrefixFull = "https://tb-dish-processor-production.tummybuddy.workers.dev/api/meal-photo/serve/";
+          const internalPrefixDev = "https://tb-dish-processor.josejorge305.workers.dev/api/meal-photo/serve/";
+
+          let r2Key = null;
+          if (photoUrl.startsWith(internalPrefixFull)) {
+            r2Key = photoUrl.replace(internalPrefixFull, "");
+          } else if (photoUrl.startsWith(internalPrefixDev)) {
+            r2Key = photoUrl.replace(internalPrefixDev, "");
+          } else if (photoUrl.startsWith(internalPrefix)) {
+            r2Key = photoUrl.replace(internalPrefix, "");
+          }
+
+          if (r2Key) {
+            // Read directly from R2
+            const object = await env.R2_BUCKET.get(r2Key);
+            if (!object) {
+              throw new Error(`Photo not found in R2: ${r2Key}`);
+            }
+            return await object.arrayBuffer();
+          } else {
+            // External URL - fetch normally
+            const response = await fetch(photoUrl);
+            if (!response.ok) {
+              throw new Error(`Failed to fetch photo: ${photoUrl}`);
+            }
+            return await response.arrayBuffer();
+          }
+        };
+
+        // Fetch both images
+        let beforeBuffer, afterBuffer;
+        try {
+          [beforeBuffer, afterBuffer] = await Promise.all([
+            fetchPhoto(beforePhotoUrl),
+            fetchPhoto(afterPhotoUrl)
+          ]);
+        } catch (fetchErr) {
+          console.error("Photo fetch error:", fetchErr);
+          return new Response(JSON.stringify({ ok: false, error: "failed_to_fetch_photos", details: fetchErr?.message }), {
+            status: 400,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Convert to base64 for Claude Vision
+        const beforeBase64 = btoa(String.fromCharCode(...new Uint8Array(beforeBuffer)));
+        const afterBase64 = btoa(String.fromCharCode(...new Uint8Array(afterBuffer)));
+
+        // Call Claude Vision to analyze consumption
+        const anthropicKey = env.ANTHROPIC_API_KEY;
+        if (!anthropicKey) {
+          // Fallback to estimation if no API key
+          return new Response(JSON.stringify({
+            ok: true,
+            analysis: createFallbackAnalysis(baselineCalories || 500)
+          }), {
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01"
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 1024,
+            messages: [{
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/jpeg",
+                    data: beforeBase64
+                  }
+                },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/jpeg",
+                    data: afterBase64
+                  }
+                },
+                {
+                  type: "text",
+                  text: `You are analyzing food consumption from before and after photos.
+
+Dish: ${dishName}
+Baseline calories (full portion): ${baselineCalories || 500} kcal
+
+The FIRST image shows the dish BEFORE eating.
+The SECOND image shows the dish AFTER eating.
+
+Analyze how much of the food was consumed. Return a JSON object with:
+{
+  "percentConsumed": <number 0-100 representing % eaten>,
+  "confidence": <number 0-1 representing confidence in estimate>,
+  "items": [
+    {"name": "<item name>", "percentConsumed": <0-100>}
+  ],
+  "notes": "<brief observation about what was eaten vs left>"
+}
+
+Only return the JSON object, no other text.`
+                }
+              ]
+            }]
+          })
+        });
+
+        if (!claudeResponse.ok) {
+          console.error("Claude API error:", await claudeResponse.text());
+          return new Response(JSON.stringify({
+            ok: true,
+            analysis: createFallbackAnalysis(baselineCalories || 500)
+          }), {
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const claudeData = await claudeResponse.json();
+        const responseText = claudeData?.content?.[0]?.text || "";
+
+        // Parse Claude's JSON response
+        let analysisData;
+        try {
+          // Extract JSON from response (handle markdown code blocks)
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            analysisData = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error("No JSON found in response");
+          }
+        } catch (parseError) {
+          console.error("Failed to parse Claude response:", responseText);
+          return new Response(JSON.stringify({
+            ok: true,
+            analysis: createFallbackAnalysis(baselineCalories || 500)
+          }), {
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Calculate calories based on percent consumed
+        const baseline = baselineCalories || 500;
+        const percentConsumed = analysisData.percentConsumed || 80;
+        const caloriesEaten = Math.round(baseline * (percentConsumed / 100));
+        const caloriesLeft = baseline - caloriesEaten;
+
+        // Build item breakdown with calories
+        const items = (analysisData.items || []).map((item, idx) => {
+          const itemPercent = item.percentConsumed || percentConsumed;
+          const itemCalories = Math.round((baseline / (analysisData.items?.length || 1)) * (itemPercent / 100));
+          return {
+            name: item.name || `Item ${idx + 1}`,
+            percentConsumed: itemPercent,
+            caloriesEaten: itemCalories,
+            caloriesLeft: Math.round((baseline / (analysisData.items?.length || 1)) - itemCalories)
+          };
+        });
+
+        const analysis = {
+          percentConsumed,
+          caloriesEaten,
+          caloriesLeft,
+          confidence: analysisData.confidence || 0.8,
+          items: items.length > 0 ? items : [
+            { name: dishName, percentConsumed, caloriesEaten, caloriesLeft }
+          ],
+          notes: analysisData.notes || null
+        };
+
+        return new Response(JSON.stringify({ ok: true, analysis }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+
+      } catch (e) {
+        console.error("meal-photo analyze error:", e);
+        return new Response(JSON.stringify({
+          ok: true,
+          analysis: createFallbackAnalysis(500)
+        }), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
     }
 
     // OPTIONS preflight for /api/tracker/* (CORS)
