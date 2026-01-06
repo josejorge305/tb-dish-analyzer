@@ -34,9 +34,7 @@ function tbWhoami(env) {
     headers: { "content-type": "application/json", ...tbWhoamiHeaders(env) }
   });
 }
-function cid(h) {
-  return h.get("x-correlation-id") || crypto.randomUUID();
-}
+// Get correlation ID from request headers or generate a new one
 const _cid = (h) => h.get("x-correlation-id") || crypto.randomUUID();
 
 // ---- Structured Logging Utility ----
@@ -565,6 +563,201 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 30000) {
   }
 }
 
+// ---- Retry Logic for Transient Failures ----
+
+/**
+ * Determine if an error is retryable (transient)
+ * @param {Error} error - The error to check
+ * @returns {boolean}
+ */
+function isRetryableError(error) {
+  const message = (error?.message || '').toLowerCase();
+
+  // Network/connection errors
+  if (message.includes('network') ||
+      message.includes('timeout') ||
+      message.includes('abort') ||
+      message.includes('econnreset') ||
+      message.includes('socket hang up') ||
+      message.includes('connection refused')) {
+    return true;
+  }
+
+  // Rate limiting
+  if (error?.status === 429 || message.includes('rate limit')) {
+    return true;
+  }
+
+  // Server errors (5xx)
+  if (error?.status >= 500 && error?.status < 600) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Execute an async function with exponential backoff retry
+ * @param {Function} fn - Async function to execute
+ * @param {Object} options - Retry options
+ * @param {number} [options.maxRetries=3] - Maximum number of retry attempts
+ * @param {number} [options.initialDelayMs=1000] - Initial delay in milliseconds
+ * @param {number} [options.maxDelayMs=10000] - Maximum delay between retries
+ * @param {number} [options.backoffMultiplier=2] - Multiplier for exponential backoff
+ * @param {Function} [options.shouldRetry] - Custom function to determine if retry should happen
+ * @param {Function} [options.onRetry] - Callback function called before each retry
+ * @returns {Promise<any>} - Result of the function
+ */
+async function withRetry(fn, options = {}) {
+  const {
+    maxRetries = 3,
+    initialDelayMs = 1000,
+    maxDelayMs = 10000,
+    backoffMultiplier = 2,
+    shouldRetry = isRetryableError,
+    onRetry = null
+  } = options;
+
+  let lastError;
+  let delay = initialDelayMs;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Check if we should retry
+      if (attempt >= maxRetries || !shouldRetry(error)) {
+        throw error;
+      }
+
+      // Call onRetry callback if provided
+      if (onRetry) {
+        onRetry({ attempt, error, delay });
+      }
+
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      // Exponential backoff with jitter
+      const jitter = Math.random() * 0.3 * delay; // Up to 30% jitter
+      delay = Math.min(delay * backoffMultiplier + jitter, maxDelayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Fetch with retry - combines timeout and retry logic
+ * @param {string} url - The URL to fetch
+ * @param {Object} options - Fetch options
+ * @param {number} [timeoutMs=30000] - Timeout per request in milliseconds
+ * @param {Object} [retryOptions] - Options for retry behavior
+ * @returns {Promise<Response>}
+ */
+async function fetchWithRetry(url, options = {}, timeoutMs = 30000, retryOptions = {}) {
+  return withRetry(
+    () => fetchWithTimeout(url, options, timeoutMs),
+    {
+      maxRetries: 2,
+      initialDelayMs: 1000,
+      ...retryOptions,
+      onRetry: ({ attempt, error, delay }) => {
+        console.warn(`[fetchWithRetry] Retry ${attempt + 1} for ${url}: ${error?.message}, waiting ${delay}ms`);
+      }
+    }
+  );
+}
+
+// ---- Safe JSON Body Parsing with Size Limits ----
+
+/**
+ * Maximum allowed request body sizes per endpoint type (in bytes)
+ */
+const MAX_BODY_SIZES = {
+  default: 100 * 1024,      // 100KB for most endpoints
+  photo_upload: 10 * 1024 * 1024,  // 10MB for photo uploads
+  batch_analysis: 500 * 1024,      // 500KB for batch operations
+  menu_import: 1024 * 1024         // 1MB for menu imports
+};
+
+/**
+ * Safely parse JSON from request body with size limits
+ * @param {Request} request - The incoming request
+ * @param {Object} options - Options
+ * @param {number} [options.maxSize] - Maximum body size in bytes (default: 100KB)
+ * @param {string} [options.endpointType] - Endpoint type for size limit lookup
+ * @returns {Promise<{ok: boolean, data?: any, error?: string}>}
+ */
+async function safeParseRequestBody(request, options = {}) {
+  const endpointType = options.endpointType || 'default';
+  const maxSize = options.maxSize || MAX_BODY_SIZES[endpointType] || MAX_BODY_SIZES.default;
+
+  // Check Content-Length header first (fast rejection)
+  const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+  if (contentLength > maxSize) {
+    return {
+      ok: false,
+      error: `Request body too large. Maximum size is ${Math.round(maxSize / 1024)}KB`,
+      code: 'BODY_TOO_LARGE'
+    };
+  }
+
+  try {
+    // Read body as text first to check actual size
+    const bodyText = await request.text();
+
+    if (bodyText.length > maxSize) {
+      return {
+        ok: false,
+        error: `Request body too large. Maximum size is ${Math.round(maxSize / 1024)}KB`,
+        code: 'BODY_TOO_LARGE'
+      };
+    }
+
+    // Empty body is valid for some endpoints
+    if (!bodyText.trim()) {
+      return { ok: true, data: {} };
+    }
+
+    // Parse JSON
+    const data = JSON.parse(bodyText);
+    return { ok: true, data };
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return {
+        ok: false,
+        error: 'Invalid JSON in request body',
+        code: 'INVALID_JSON'
+      };
+    }
+    return {
+      ok: false,
+      error: err.message || 'Failed to parse request body',
+      code: 'PARSE_ERROR'
+    };
+  }
+}
+
+/**
+ * Create error response for body parsing failures
+ * @param {Object} parseResult - Result from safeParseRequestBody
+ * @returns {Response}
+ */
+function bodyParseErrorResponse(parseResult) {
+  const status = parseResult.code === 'BODY_TOO_LARGE' ? 413 : 400;
+  return new Response(JSON.stringify({
+    ok: false,
+    error: parseResult.error,
+    code: parseResult.code
+  }), {
+    status,
+    headers: { 'content-type': 'application/json', ...CORS_ALL }
+  });
+}
+
 // ---- Pipeline versioning & cache helpers ----
 const PIPELINE_VERSION = "analysis-v0.4"; // bump this when prompts/logic change - v0.4: verified nutrition table + dish name normalization
 
@@ -708,14 +901,15 @@ function buildInHouseMenuKey(query, address) {
   return `inhouse:menu:${restaurantSlug}:${locationSlug}`;
 }
 
-async function getInHouseMenu(env, query, address) {
+async function getInHouseMenu(env, query, address, correlationId = null) {
   if (!env?.MENUS_CACHE) return null;
+  const log = createLogger(correlationId || 'cache', 'InHouseMenu');
 
   const key = buildInHouseMenuKey(query, address);
   try {
     const cached = await env.MENUS_CACHE.get(key, "json");
     if (cached && cached.items && cached.items.length > 0) {
-      console.log(`[InHouseMenu] HIT for ${key} (${cached.items.length} items)`);
+      log.info('Cache HIT', { key, itemCount: cached.items.length });
       return {
         ok: true,
         source: "inhouse_pipeline",
@@ -727,7 +921,7 @@ async function getInHouseMenu(env, query, address) {
       };
     }
   } catch (e) {
-    console.log(`[InHouseMenu] Error reading ${key}:`, e?.message);
+    log.warn('Cache read error', { key, error: e?.message });
   }
 
   // Also try without location for single-location restaurants
@@ -735,7 +929,7 @@ async function getInHouseMenu(env, query, address) {
   try {
     const cached = await env.MENUS_CACHE.get(keyNoLocation, "json");
     if (cached && cached.items && cached.items.length > 0) {
-      console.log(`[InHouseMenu] HIT for ${keyNoLocation} (${cached.items.length} items)`);
+      log.info('Cache HIT (no location)', { key: keyNoLocation, itemCount: cached.items.length });
       return {
         ok: true,
         source: "inhouse_pipeline",
@@ -753,8 +947,9 @@ async function getInHouseMenu(env, query, address) {
   return null;
 }
 
-async function putInHouseMenu(env, query, address, menuData) {
+async function putInHouseMenu(env, query, address, menuData, correlationId = null) {
   if (!env?.MENUS_CACHE || !menuData?.items) return false;
+  const log = createLogger(correlationId || 'cache', 'InHouseMenu');
 
   const key = buildInHouseMenuKey(query, address);
   try {
@@ -770,10 +965,10 @@ async function putInHouseMenu(env, query, address, menuData) {
     };
     // 30-day TTL for in-house menus (longer than legacy cache)
     await env.MENUS_CACHE.put(key, JSON.stringify(payload), { expirationTtl: 30 * 24 * 3600 });
-    console.log(`[InHouseMenu] Stored ${key} (${menuData.items.length} items)`);
+    log.info('Cache stored', { key, itemCount: menuData.items.length });
     return true;
   } catch (e) {
-    console.log(`[InHouseMenu] Store failed for ${key}:`, e?.message);
+    log.warn('Cache store failed', { key, error: e?.message });
     return false;
   }
 }
@@ -894,6 +1089,8 @@ function generatePlParam(address, coords) {
 async function scrapeUberEatsMenu(env, query, address, options = {}) {
   const startTime = Date.now();
   const maxRows = options.maxRows || 500;
+  const correlationId = options.correlationId || crypto.randomUUID();
+  const log = createLogger(correlationId, 'InHouseScraper');
 
   if (!env.BROWSER) {
     return {
@@ -906,7 +1103,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
   let browser = null;
 
   try {
-    console.log(`[InHouseScraper] Starting scrape for "${query}" @ "${address}"`);
+    log.info('Starting scrape', { query, address });
 
     // Launch browser session
     browser = await puppeteer.launch(env.BROWSER);
@@ -919,7 +1116,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Generate location parameter (pl) for address - this is crucial for store access
     const locationCoords = getLocationCoords(address);
     const plParam = generatePlParam(address, locationCoords);
-    console.log(`[InHouseScraper] Using location: ${locationCoords.lat}, ${locationCoords.lng}`);
+    log.info('Using location', { lat: locationCoords.lat, lng: locationCoords.lng });
 
     // Set multiple location-related cookies before navigating
     const locationCookie = {
@@ -950,7 +1147,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
     // Step 1: First visit the feed page with location to establish session
     const feedUrl = `https://www.ubereats.com/feed?pl=${plParam}`;
-    console.log(`[InHouseScraper] Establishing session via feed: ${feedUrl}`);
+    log.info('Establishing session via feed', { url: feedUrl });
     // Use 'domcontentloaded' instead of 'networkidle0' - Uber Eats makes constant API calls
     // that prevent networkidle0 from ever completing
     await page.goto(feedUrl, {
@@ -962,7 +1159,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
     // Step 2: Now search for the restaurant
     const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}&pl=${plParam}`;
-    console.log(`[InHouseScraper] Navigating to search: ${searchUrl}`);
+    log.info('Navigating to search', { url: searchUrl });
 
     await page.goto(searchUrl, {
       waitUntil: 'domcontentloaded',
@@ -973,7 +1170,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     await wait(3000);
 
     // Step 3: Find and click on the first matching restaurant
-    console.log(`[InHouseScraper] Looking for restaurant matching "${query}"`);
+    log.info('Looking for restaurant match', { query });
 
     // Wait for search results
     await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => null);
@@ -1039,13 +1236,17 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       .filter(l => l.similarity >= MIN_SIMILARITY)
       .sort((a, b) => b.similarity - a.similarity);
 
-    console.log(`[InHouseScraper] Scored ${scoredLinks.length} results for "${query}":`);
-    scoredLinks.slice(0, 5).forEach((l, i) => {
-      console.log(`  ${i + 1}. "${l.text}" - similarity: ${(l.similarity * 100).toFixed(0)}% (${l.matchedWords}/${l.totalQueryWords} words)`);
+    log.info('Scored results', {
+      count: scoredLinks.length,
+      query,
+      topMatches: scoredLinks.slice(0, 5).map(l => ({
+        name: l.text,
+        similarity: Math.round(l.similarity * 100)
+      }))
     });
 
     if (!sortedLinks.length) {
-      console.log(`[InHouseScraper] No restaurants found matching "${query}" (none above ${MIN_SIMILARITY * 100}% similarity)`);
+      log.warn('No restaurants found', { query, threshold: MIN_SIMILARITY * 100 });
       await browser.close();
       return {
         ok: false,
@@ -1058,7 +1259,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     }
 
     const bestMatch = sortedLinks[0];
-    console.log(`[InHouseScraper] Best match: "${bestMatch.text}" with ${(bestMatch.similarity * 100).toFixed(0)}% similarity`);
+    log.info('Best match found', { name: bestMatch.text, similarity: Math.round(bestMatch.similarity * 100) });
 
     // Navigate to best matching store
     // Add pl param to store URL to maintain location context
@@ -1067,7 +1268,7 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       const separator = storeUrl.includes('?') ? '&' : '?';
       storeUrl = `${storeUrl}${separator}pl=${plParam}`;
     }
-    console.log(`[InHouseScraper] Navigating to: ${storeUrl}`);
+    log.info('Navigating to store', { url: storeUrl });
 
     await page.goto(storeUrl, {
       waitUntil: 'domcontentloaded',
@@ -1080,12 +1281,11 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Check if we got redirected to location picker
     const currentUrl = page.url();
     const pageTitle = await page.title();
-    console.log(`[InHouseScraper] Current URL: ${currentUrl}`);
-    console.log(`[InHouseScraper] Page title: ${pageTitle}`);
+    log.info('Page loaded', { url: currentUrl, title: pageTitle });
 
     // If on location picker, try going back to store with direct URL
     if (currentUrl.includes('/location') || pageTitle.includes('All Cities')) {
-      console.log(`[InHouseScraper] Detected location picker redirect, retrying with direct navigation...`);
+      log.warn('Detected location picker redirect, retrying');
 
       // Try setting location via localStorage before retry
       await page.evaluate((locData) => {
@@ -1102,11 +1302,11 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       await wait(4000);
 
       const retryUrl = page.url();
-      console.log(`[InHouseScraper] Retry URL: ${retryUrl}`);
+      log.info('Retry navigation complete', { url: retryUrl });
     }
 
     // Dismiss any modals/overlays that might be blocking the page
-    console.log(`[InHouseScraper] Checking for and dismissing modals...`);
+    log.info('Checking for modals');
     await page.evaluate(() => {
       // Try to close common modal types
       const closeButtons = document.querySelectorAll(
@@ -1133,35 +1333,35 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     await wait(1000);
 
     // Wait for menu content to actually load
-    console.log(`[InHouseScraper] Waiting for menu content...`);
+    log.info('Waiting for menu content');
     try {
       await page.waitForSelector('[data-testid^="store-item-"], [data-testid*="menu-item"], [data-testid*="catalog-item"]', {
         timeout: 10000
       });
-      console.log(`[InHouseScraper] Menu items detected`);
+      log.info('Menu items detected');
     } catch (e) {
-      console.log(`[InHouseScraper] Menu items not found with standard selectors, trying broader approach...`);
+      log.warn('Menu items not found with standard selectors, trying broader approach');
       // Wait a bit longer for SPA to settle
       await wait(3000);
     }
 
     // Step 4: Scroll to load lazy content (first pass)
-    console.log(`[InHouseScraper] Scrolling to load all menu items (pass 1)...`);
+    log.info('Scrolling to load menu items (pass 1)');
     await autoScrollPage(page);
 
     // Step 5: Expand collapsed sections
-    console.log(`[InHouseScraper] Expanding collapsed sections...`);
+    log.info('Expanding collapsed sections');
     const expandedCount = await expandSections(page);
-    console.log(`[InHouseScraper] Clicked ${expandedCount} expand buttons`);
+    log.info('Expanded sections', { count: expandedCount });
 
     // Step 6: Second scroll pass after expanding (slower, more thorough)
-    console.log(`[InHouseScraper] Scrolling again after expansion (pass 2)...`);
+    log.info('Scrolling after expansion (pass 2)');
     await autoScrollPage(page, { slow: true });
 
     // Step 7: One more expand pass in case new buttons appeared
     const expandedCount2 = await expandSections(page);
     if (expandedCount2 > 0) {
-      console.log(`[InHouseScraper] Found ${expandedCount2} more expand buttons, scrolling again...`);
+      log.info('Found more expand buttons', { count: expandedCount2 });
       await autoScrollPage(page, { slow: true, skipFinalSweep: true });
     }
 
@@ -1171,11 +1371,10 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Debug: Check where we are before extraction
     const finalUrl = page.url();
     const finalTitle = await page.title();
-    console.log(`[InHouseScraper] Before extraction - URL: ${finalUrl.slice(0, 100)}...`);
-    console.log(`[InHouseScraper] Before extraction - Title: ${finalTitle}`);
+    log.info('Before extraction', { url: finalUrl.slice(0, 100), title: finalTitle });
 
     // Step 8: Extract menu data from DOM
-    console.log(`[InHouseScraper] Extracting menu data...`);
+    log.info('Extracting menu data');
 
     const menuData = await page.evaluate(() => {
       const result = {
@@ -1686,13 +1885,13 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
     const elapsed = Date.now() - startTime;
 
-    // IMPROVED: Enhanced logging
-    console.log(`[InHouseScraper] === EXTRACTION RESULTS ===`);
-    console.log(`[InHouseScraper] Total items: ${menuData.items.length}`);
-    console.log(`[InHouseScraper] Sections found: ${menuData.debug?.sectionsFound || 0}`);
-    console.log(`[InHouseScraper] Section names: ${menuData.debug?.sectionNames?.join(', ') || 'none'}`);
-    console.log(`[InHouseScraper] Items per section: ${menuData.sections?.map(s => `${s.name}(${s.items.length})`).join(', ') || 'none'}`);
-    console.log(`[InHouseScraper] Elapsed: ${elapsed}ms`);
+    // Log extraction results
+    log.info('Extraction complete', {
+      totalItems: menuData.items.length,
+      sectionsFound: menuData.debug?.sectionsFound || 0,
+      sectionNames: menuData.debug?.sectionNames || [],
+      elapsedMs: elapsed
+    });
 
     if (menuData.items.length === 0) {
       return {
@@ -1743,10 +1942,10 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     };
 
   } catch (error) {
-    console.log(`[InHouseScraper] Error: ${error.message}`);
+    log.error('Scraper error', { error: error.message, stack: error.stack });
     if (browser) {
       try { await browser.close(); } catch (closeErr) {
-        console.warn('[InHouseScraper] Failed to close browser:', closeErr?.message || closeErr);
+        log.warn('Failed to close browser', { error: closeErr?.message || closeErr });
       }
     }
     return {
@@ -3984,9 +4183,35 @@ async function handleDebugEcho(url, request) {
 // [38.10] — shared CORS headers  (HOISTED so it's available everywhere)
 const CORS_ALL = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization"
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Correlation-ID, X-Request-ID",
+  "Access-Control-Max-Age": "86400", // Cache preflight for 24 hours
+  "Access-Control-Expose-Headers": "X-Correlation-ID, X-RateLimit-Remaining, X-RateLimit-Reset"
 };
+
+/**
+ * Handle OPTIONS preflight request
+ * @param {Request} request - The incoming request
+ * @returns {Response}
+ */
+function handleCorsOptions(request) {
+  // Check if this is a preflight request
+  const origin = request.headers.get('Origin');
+  const requestMethod = request.headers.get('Access-Control-Request-Method');
+
+  if (origin && requestMethod) {
+    return new Response(null, {
+      status: 204,
+      headers: CORS_ALL
+    });
+  }
+
+  // Not a preflight, return 405
+  return new Response('Method Not Allowed', {
+    status: 405,
+    headers: { 'Allow': 'GET, POST, PUT, DELETE, OPTIONS' }
+  });
+}
 
 // Build a safe preview object for debug=1 (no CORS needed)
 function buildDebugPreview(raw, env, rowsUS = null, titles = null) {
@@ -27475,7 +27700,8 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
   let interactions = [];
   if (foundCompoundIds.size > 1) {
     try {
-      const idList = Array.from(foundCompoundIds).join(',');
+      const ids = Array.from(foundCompoundIds);
+      const placeholders = ids.map(() => '?').join(', ');
       const interRes = await env.D1_DB.prepare(
         `SELECT ci.*,
                 ca.name as compound_a_name, ca.common_name as compound_a_common,
@@ -27483,9 +27709,9 @@ async function getOrganEffectsForIngredients(env, ingredients = []) {
          FROM compound_interactions ci
          JOIN compounds ca ON ca.id = ci.compound_a_id
          JOIN compounds cb ON cb.id = ci.compound_b_id
-         WHERE ci.compound_a_id IN (${idList}) AND ci.compound_b_id IN (${idList})
+         WHERE ci.compound_a_id IN (${placeholders}) AND ci.compound_b_id IN (${placeholders})
          LIMIT 10`
-      ).all();
+      ).bind(...ids, ...ids).all();
       interactions = (interRes?.results || []).map(i => ({
         compounds: [
           i.compound_a_common || i.compound_a_name,
