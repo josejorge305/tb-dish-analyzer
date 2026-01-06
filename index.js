@@ -7315,14 +7315,41 @@ USER PROFILE:
       sections[sectionName].push(item);
     }
 
-    // Output menu items by section
+    // Output menu items by section with analysis data when available
     for (const [sectionName, items] of Object.entries(sections)) {
       systemPrompt += `\n${sectionName.toUpperCase()}:\n`;
-      for (const item of items.slice(0, 15)) { // Limit items per section
+      for (const item of items.slice(0, 20)) { // Limit items per section
         let itemLine = `  • ${item.name}`;
         if (item.price) itemLine += ` (${item.price})`;
         if (item.calories) itemLine += ` - ${item.calories} cal`;
+
+        // Add health score if analyzed
+        if (item.analyzed && item.healthScore != null) {
+          itemLine += ` [Health: ${item.healthScore}/100]`;
+        }
+
+        // Add FODMAP warning if relevant
+        if (item.fodmapScore != null && item.fodmapScore > 5) {
+          itemLine += ` [High FODMAP]`;
+        }
+
         systemPrompt += itemLine + '\n';
+
+        // Add allergen flags if present
+        if (item.allergenFlags && item.allergenFlags.length > 0) {
+          const presentAllergens = item.allergenFlags
+            .filter(a => a.present === 'yes' || a.present === 'likely')
+            .map(a => a.kind);
+          if (presentAllergens.length > 0) {
+            systemPrompt += `    ⚠️ Contains: ${presentAllergens.join(', ')}\n`;
+          }
+        }
+
+        // Add diet tags if present
+        if (item.dietTags && item.dietTags.length > 0) {
+          systemPrompt += `    🏷️ ${item.dietTags.slice(0, 5).join(', ')}\n`;
+        }
+
         if (item.description && item.description.length > 0 && item.description.length < 100) {
           systemPrompt += `    ${item.description}\n`;
         }
@@ -7330,10 +7357,13 @@ USER PROFILE:
     }
 
     systemPrompt += `\nWhen recommending items from this menu:\n`;
-    systemPrompt += `- Check each item against the user's allergens before recommending\n`;
-    systemPrompt += `- Prioritize items that may benefit the user's priority organs\n`;
+    systemPrompt += `- Items with [Health: X/100] have been analyzed - prefer higher scores\n`;
+    systemPrompt += `- Items marked with ⚠️ Contains: X have confirmed allergens - CHECK against user's allergens\n`;
+    systemPrompt += `- Items with 🏷️ tags show diet compatibility (vegan, gluten-free, etc.)\n`;
+    systemPrompt += `- [High FODMAP] items should be avoided for users with IBS/FODMAP sensitivity\n`;
+    systemPrompt += `- For items without analysis data, use your knowledge of typical ingredients\n`;
+    systemPrompt += `- Prioritize items that benefit the user's priority organs\n`;
     systemPrompt += `- Consider the user's calorie/macro targets when suggesting portion sizes\n`;
-    systemPrompt += `- Warn about items that may contain allergens based on typical ingredients\n`;
     systemPrompt += `========================================\n`;
   }
 
@@ -7553,6 +7583,74 @@ async function getUserConversations(env, userId, limit = 10) {
 }
 
 /**
+ * Fetch restaurant menu context for AI Assistant
+ * Auto-fetches from cache when placeId is provided, enriches with cached analysis
+ * @param {Object} env - Cloudflare environment
+ * @param {Object} menuContext - Partial menu context with placeId or restaurantName
+ * @returns {Object|null} - Enriched menu context with all items
+ */
+async function fetchMenuContextForAssistant(env, menuContext) {
+  if (!menuContext) return null;
+
+  // If menuItems already provided with items, use as-is
+  if (menuContext.menuItems && menuContext.menuItems.length > 0) {
+    return menuContext;
+  }
+
+  const placeId = menuContext.placeId || menuContext.restaurantId;
+  const restaurantName = menuContext.restaurantName || "";
+
+  // Try to fetch from cache by placeId
+  if (placeId && env?.MENUS_CACHE) {
+    try {
+      const cachedMenu = await readRestaurantMenuFromCache(env, placeId);
+      if (cachedMenu && cachedMenu.sections && cachedMenu.sections.length > 0) {
+        // Enrich sections with cached analysis
+        const enrichedSections = await enrichMenuWithCachedAnalysis(
+          env,
+          cachedMenu.sections,
+          cachedMenu.restaurant?.name || restaurantName
+        );
+
+        // Flatten all items from all sections for the AI context
+        const menuItems = [];
+        for (const section of enrichedSections) {
+          for (const item of section.items || []) {
+            menuItems.push({
+              name: item.name,
+              description: item.description || "",
+              section: section.section || section.name || "",
+              price: item.price || null,
+              calories: item.calories || item.cachedAnalysis?.nutrition?.calories || null,
+              // Include analysis summary if available
+              analyzed: item.cachedAnalysis?.ok || false,
+              healthScore: item.cachedAnalysis?.healthScore || null,
+              allergenFlags: item.cachedAnalysis?.allergen_flags || [],
+              dietTags: item.cachedAnalysis?.diet_tags || [],
+              fodmapScore: item.cachedAnalysis?.fodmap_score || null
+            });
+          }
+        }
+
+        console.log(`[AI Assistant] Auto-fetched menu for ${restaurantName || placeId}: ${menuItems.length} items`);
+
+        return {
+          restaurantName: cachedMenu.restaurant?.name || restaurantName,
+          placeId,
+          menuItems,
+          autoFetched: true
+        };
+      }
+    } catch (e) {
+      console.error(`[AI Assistant] Menu fetch error for placeId ${placeId}:`, e.message);
+    }
+  }
+
+  // Return original context (possibly with no items)
+  return menuContext;
+}
+
+/**
  * Main chat handler - processes a user message and returns AI response
  * @param {Object} env - Cloudflare environment
  * @param {string} userId - User ID
@@ -7560,8 +7658,8 @@ async function getUserConversations(env, userId, limit = 10) {
  * @param {number|null} conversationId - Existing conversation ID (optional)
  * @param {Object|null} menuContext - Restaurant menu context (optional)
  *   - restaurantName: string
- *   - restaurantId: string|null
- *   - menuItems: Array<{name, description?, section?, price?, calories?}>
+ *   - placeId: string (if provided, will auto-fetch full menu from cache)
+ *   - menuItems: Array<{name, description?, section?, price?, calories?}> (optional if placeId provided)
  */
 async function handleAssistantChat(env, userId, message, conversationId = null, menuContext = null) {
   if (!env?.D1_DB || !userId || !message) {
@@ -7569,6 +7667,9 @@ async function handleAssistantChat(env, userId, message, conversationId = null, 
   }
 
   try {
+    // Auto-fetch menu context if placeId provided but menuItems missing
+    const enrichedMenuContext = await fetchMenuContextForAssistant(env, menuContext);
+
     // Build user context
     const contextResult = await buildAssistantContext(env, userId);
     if (!contextResult.ok) {
@@ -7596,7 +7697,7 @@ async function handleAssistantChat(env, userId, message, conversationId = null, 
     await saveMessage(env, convId, userId, 'user', message);
 
     // Build system prompt (now includes menu context if provided)
-    const systemPrompt = buildAssistantSystemPrompt(contextResult.context, menuContext);
+    const systemPrompt = buildAssistantSystemPrompt(contextResult.context, enrichedMenuContext);
 
     // Add current message to history
     historyMessages.push({ role: 'user', content: message });
@@ -7616,9 +7717,10 @@ async function handleAssistantChat(env, userId, message, conversationId = null, 
     await saveMessage(env, convId, userId, 'assistant', llmResult.content, {
       context_snapshot: {
         ...contextResult.context,
-        menu_context: menuContext ? {
-          restaurantName: menuContext.restaurantName,
-          itemCount: menuContext.menuItems?.length || 0
+        menu_context: enrichedMenuContext ? {
+          restaurantName: enrichedMenuContext.restaurantName,
+          itemCount: enrichedMenuContext.menuItems?.length || 0,
+          autoFetched: enrichedMenuContext.autoFetched || false
         } : null
       },
       model_used: llmResult.model_used,
