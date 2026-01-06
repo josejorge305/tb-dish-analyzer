@@ -1152,10 +1152,10 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // that prevent networkidle0 from ever completing
     await page.goto(feedUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: 25000
+      timeout: 45000
     });
     // Wait for initial SPA hydration
-    await wait(3000);
+    await wait(2000);
 
     // Step 2: Now search for the restaurant
     const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}&pl=${plParam}`;
@@ -1163,11 +1163,11 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
     await page.goto(searchUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: 25000
+      timeout: 45000
     });
 
     // Wait for page to settle
-    await wait(3000);
+    await wait(2000);
 
     // Step 3: Find and click on the first matching restaurant
     log.info('Looking for restaurant match', { query });
@@ -1272,11 +1272,11 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
     await page.goto(storeUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: 25000
+      timeout: 45000
     });
 
     // Wait for SPA to hydrate and menu to render
-    await wait(4000);
+    await wait(3000);
 
     // Check if we got redirected to location picker
     const currentUrl = page.url();
@@ -1297,9 +1297,9 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       // Retry navigation
       await page.goto(storeUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 25000
+        timeout: 45000
       });
-      await wait(4000);
+      await wait(3000);
 
       const retryUrl = page.url();
       log.info('Retry navigation complete', { url: retryUrl });
