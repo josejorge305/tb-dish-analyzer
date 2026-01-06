@@ -38,6 +38,39 @@ function cid(h) {
   return h.get("x-correlation-id") || crypto.randomUUID();
 }
 const _cid = (h) => h.get("x-correlation-id") || crypto.randomUUID();
+
+// ---- Structured Logging Utility ----
+/**
+ * Create a structured logger with correlation ID support
+ * @param {string} correlationId - Request correlation ID
+ * @param {string} component - Component name for log context
+ * @returns {Object} Logger with info, warn, error methods
+ */
+function createLogger(correlationId, component = 'worker') {
+  const formatLog = (level, message, data = {}) => {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      level,
+      correlationId,
+      component,
+      message,
+      ...data
+    };
+    return JSON.stringify(logEntry);
+  };
+
+  return {
+    info: (message, data) => console.log(formatLog('INFO', message, data)),
+    warn: (message, data) => console.warn(formatLog('WARN', message, data)),
+    error: (message, data) => console.error(formatLog('ERROR', message, data)),
+    debug: (message, data) => {
+      // Only log debug in development
+      if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') {
+        console.log(formatLog('DEBUG', message, data));
+      }
+    }
+  };
+}
 function isBinaryContentType(contentType = "") {
   if (!contentType) return false;
   const ct = contentType.toLowerCase();
@@ -79,6 +112,457 @@ function providerOrder(env) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// ---- Input Validation Utilities ----
+// Sanitize and validate user inputs to prevent injection attacks
+
+/**
+ * Validates and sanitizes a string input
+ * @param {any} value - The value to validate
+ * @param {Object} options - Validation options
+ * @param {number} [options.maxLength=1000] - Maximum string length
+ * @param {boolean} [options.required=false] - Whether the field is required
+ * @param {string} [options.fieldName='value'] - Field name for error messages
+ * @returns {{valid: boolean, value: string|null, error?: string}}
+ */
+function validateString(value, options = {}) {
+  const { maxLength = 1000, required = false, fieldName = 'value' } = options;
+
+  if (value === undefined || value === null || value === '') {
+    if (required) {
+      return { valid: false, value: null, error: `${fieldName} is required` };
+    }
+    return { valid: true, value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { valid: false, value: null, error: `${fieldName} must be a string` };
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    return { valid: false, value: null, error: `${fieldName} exceeds maximum length of ${maxLength}` };
+  }
+
+  return { valid: true, value: trimmed };
+}
+
+/**
+ * Validates a user ID (UUID format or Apple anonymous ID)
+ * @param {any} userId - The user ID to validate
+ * @returns {{valid: boolean, value: string|null, error?: string}}
+ */
+function validateUserId(userId) {
+  if (!userId || typeof userId !== 'string') {
+    return { valid: false, value: null, error: 'user_id is required' };
+  }
+
+  const trimmed = userId.trim();
+
+  // Allow UUID format or Apple anonymous IDs (alphanumeric with dashes, max 100 chars)
+  const validPattern = /^[a-zA-Z0-9_-]{1,100}$/;
+  if (!validPattern.test(trimmed)) {
+    return { valid: false, value: null, error: 'user_id contains invalid characters' };
+  }
+
+  return { valid: true, value: trimmed };
+}
+
+/**
+ * Validates a positive integer
+ * @param {any} value - The value to validate
+ * @param {Object} options - Validation options
+ * @param {number} [options.min=0] - Minimum value
+ * @param {number} [options.max=Number.MAX_SAFE_INTEGER] - Maximum value
+ * @param {boolean} [options.required=false] - Whether the field is required
+ * @param {string} [options.fieldName='value'] - Field name for error messages
+ * @returns {{valid: boolean, value: number|null, error?: string}}
+ */
+function validateInteger(value, options = {}) {
+  const { min = 0, max = Number.MAX_SAFE_INTEGER, required = false, fieldName = 'value' } = options;
+
+  if (value === undefined || value === null || value === '') {
+    if (required) {
+      return { valid: false, value: null, error: `${fieldName} is required` };
+    }
+    return { valid: true, value: null };
+  }
+
+  const num = parseInt(value, 10);
+  if (isNaN(num)) {
+    return { valid: false, value: null, error: `${fieldName} must be a valid integer` };
+  }
+
+  if (num < min || num > max) {
+    return { valid: false, value: null, error: `${fieldName} must be between ${min} and ${max}` };
+  }
+
+  return { valid: true, value: num };
+}
+
+/**
+ * Validates an ISO date string (YYYY-MM-DD)
+ * @param {any} value - The value to validate
+ * @param {boolean} [required=false] - Whether the field is required
+ * @returns {{valid: boolean, value: string|null, error?: string}}
+ */
+function validateDate(value, required = false) {
+  if (!value || value === '') {
+    if (required) {
+      return { valid: false, value: null, error: 'date is required' };
+    }
+    return { valid: true, value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { valid: false, value: null, error: 'date must be a string' };
+  }
+
+  // Strict ISO date format
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!datePattern.test(value)) {
+    return { valid: false, value: null, error: 'date must be in YYYY-MM-DD format' };
+  }
+
+  // Validate it's a real date
+  const parsed = new Date(value);
+  if (isNaN(parsed.getTime())) {
+    return { valid: false, value: null, error: 'date is not a valid date' };
+  }
+
+  return { valid: true, value };
+}
+
+/**
+ * Validates a URL
+ * @param {any} value - The value to validate
+ * @param {boolean} [required=false] - Whether the field is required
+ * @returns {{valid: boolean, value: string|null, error?: string}}
+ */
+function validateUrl(value, required = false) {
+  if (!value || value === '') {
+    if (required) {
+      return { valid: false, value: null, error: 'URL is required' };
+    }
+    return { valid: true, value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { valid: false, value: null, error: 'URL must be a string' };
+  }
+
+  try {
+    const url = new URL(value);
+    // Only allow http/https
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return { valid: false, value: null, error: 'URL must use http or https protocol' };
+    }
+    return { valid: true, value: value.trim() };
+  } catch {
+    return { valid: false, value: null, error: 'Invalid URL format' };
+  }
+}
+
+/**
+ * Validates an email address
+ * @param {any} value - The value to validate
+ * @param {boolean} [required=false] - Whether the field is required
+ * @returns {{valid: boolean, value: string|null, error?: string}}
+ */
+function validateEmail(value, required = false) {
+  if (!value || value === '') {
+    if (required) {
+      return { valid: false, value: null, error: 'email is required' };
+    }
+    return { valid: true, value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { valid: false, value: null, error: 'email must be a string' };
+  }
+
+  // Basic email validation (not exhaustive, but catches most issues)
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailPattern.test(value) || value.length > 254) {
+    return { valid: false, value: null, error: 'Invalid email format' };
+  }
+
+  return { valid: true, value: value.trim().toLowerCase() };
+}
+
+/**
+ * Creates a validation error response
+ * @param {string} error - Error message
+ * @param {number} [status=400] - HTTP status code
+ * @returns {Response}
+ */
+function validationErrorResponse(error, status = 400) {
+  return new Response(JSON.stringify({
+    ok: false,
+    error: 'validation_error',
+    message: error
+  }), {
+    status,
+    headers: { 'content-type': 'application/json', ...CORS_ALL }
+  });
+}
+
+/**
+ * Standardized API error response
+ * Use this for all API error responses to ensure consistent format
+ * @param {string} errorCode - Machine-readable error code (e.g., 'not_found', 'invalid_input')
+ * @param {string} message - Human-readable error message
+ * @param {number} [status=400] - HTTP status code
+ * @param {Object} [details=null] - Additional error details for debugging
+ * @returns {Response}
+ */
+function apiErrorResponse(errorCode, message, status = 400, details = null) {
+  const body = {
+    ok: false,
+    error: errorCode,
+    message
+  };
+  if (details) {
+    body.details = details;
+  }
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json', ...CORS_ALL }
+  });
+}
+
+/**
+ * Standardized API success response
+ * Use this for all API success responses to ensure consistent format
+ * @param {Object} data - Response data
+ * @param {number} [status=200] - HTTP status code
+ * @returns {Response}
+ */
+function apiSuccessResponse(data, status = 200) {
+  return new Response(JSON.stringify({
+    ok: true,
+    ...data
+  }), {
+    status,
+    headers: { 'content-type': 'application/json', ...CORS_ALL }
+  });
+}
+
+/**
+ * Standard error codes for consistent API responses
+ */
+const ERROR_CODES = {
+  // Client errors (4xx)
+  VALIDATION_ERROR: 'validation_error',
+  MISSING_REQUIRED_FIELD: 'missing_required_field',
+  INVALID_INPUT: 'invalid_input',
+  NOT_FOUND: 'not_found',
+  UNAUTHORIZED: 'unauthorized',
+  FORBIDDEN: 'forbidden',
+  RATE_LIMITED: 'rate_limit_exceeded',
+  DUPLICATE: 'duplicate',
+
+  // Server errors (5xx)
+  INTERNAL_ERROR: 'internal_error',
+  SERVICE_UNAVAILABLE: 'service_unavailable',
+  EXTERNAL_API_ERROR: 'external_api_error',
+  TIMEOUT: 'timeout',
+  DATABASE_ERROR: 'database_error'
+};
+
+// ---- Rate Limiting Utilities ----
+// Uses KV for distributed rate limiting across Workers
+
+/**
+ * Rate limit configuration per endpoint type
+ */
+const RATE_LIMITS = {
+  // Public endpoints - stricter limits
+  menu_scrape: { requests: 10, windowSec: 60 },       // 10 req/min for scraping
+  dish_analysis: { requests: 30, windowSec: 60 },    // 30 req/min for analysis
+  photo_upload: { requests: 20, windowSec: 60 },     // 20 req/min for photo uploads
+  // User endpoints - more lenient
+  user_api: { requests: 100, windowSec: 60 },        // 100 req/min for user APIs
+  // Default fallback
+  default: { requests: 60, windowSec: 60 }           // 60 req/min default
+};
+
+/**
+ * Check and update rate limit for a given key
+ * Uses KV for distributed counting with TTL-based sliding window
+ * @param {Object} env - Worker environment with KV bindings
+ * @param {string} identifier - Unique identifier (IP, user ID, etc.)
+ * @param {string} endpointType - Type of endpoint for limit lookup
+ * @returns {Promise<{allowed: boolean, remaining: number, resetAt: number}>}
+ */
+async function checkRateLimit(env, identifier, endpointType = 'default') {
+  // Skip rate limiting if KV not available
+  if (!env?.MENUS_CACHE) {
+    return { allowed: true, remaining: -1, resetAt: 0 };
+  }
+
+  const config = RATE_LIMITS[endpointType] || RATE_LIMITS.default;
+  const { requests: maxRequests, windowSec } = config;
+  const key = `ratelimit:${endpointType}:${identifier}`;
+
+  try {
+    // Get current count
+    const data = await env.MENUS_CACHE.get(key, { type: 'json' });
+    const now = Date.now();
+
+    if (!data) {
+      // First request in window
+      await env.MENUS_CACHE.put(key, JSON.stringify({
+        count: 1,
+        windowStart: now
+      }), { expirationTtl: windowSec });
+
+      return {
+        allowed: true,
+        remaining: maxRequests - 1,
+        resetAt: now + (windowSec * 1000)
+      };
+    }
+
+    // Check if window has expired
+    const windowExpiry = data.windowStart + (windowSec * 1000);
+    if (now > windowExpiry) {
+      // Window expired, start new window
+      await env.MENUS_CACHE.put(key, JSON.stringify({
+        count: 1,
+        windowStart: now
+      }), { expirationTtl: windowSec });
+
+      return {
+        allowed: true,
+        remaining: maxRequests - 1,
+        resetAt: now + (windowSec * 1000)
+      };
+    }
+
+    // Check if limit exceeded
+    if (data.count >= maxRequests) {
+      return {
+        allowed: false,
+        remaining: 0,
+        resetAt: windowExpiry
+      };
+    }
+
+    // Increment counter
+    await env.MENUS_CACHE.put(key, JSON.stringify({
+      count: data.count + 1,
+      windowStart: data.windowStart
+    }), { expirationTtl: windowSec });
+
+    return {
+      allowed: true,
+      remaining: maxRequests - data.count - 1,
+      resetAt: windowExpiry
+    };
+  } catch (err) {
+    // On error, allow request but log warning
+    console.warn(`[RateLimit] Error checking rate limit: ${err?.message}`);
+    return { allowed: true, remaining: -1, resetAt: 0 };
+  }
+}
+
+/**
+ * Get client identifier from request (IP address or user ID)
+ * @param {Request} request - The incoming request
+ * @param {string} [userId] - Optional user ID to use instead of IP
+ * @returns {string}
+ */
+function getClientIdentifier(request, userId = null) {
+  if (userId) {
+    return `user:${userId}`;
+  }
+
+  // Cloudflare provides CF-Connecting-IP header
+  const ip = request.headers.get('CF-Connecting-IP') ||
+             request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+             request.headers.get('X-Real-IP') ||
+             'unknown';
+
+  return `ip:${ip}`;
+}
+
+/**
+ * Create a rate limit exceeded response
+ * @param {number} resetAt - When the rate limit resets (timestamp)
+ * @returns {Response}
+ */
+function rateLimitResponse(resetAt) {
+  const retryAfter = Math.ceil((resetAt - Date.now()) / 1000);
+  return new Response(JSON.stringify({
+    ok: false,
+    error: 'rate_limit_exceeded',
+    message: 'Too many requests. Please try again later.',
+    retry_after_seconds: retryAfter > 0 ? retryAfter : 1
+  }), {
+    status: 429,
+    headers: {
+      'content-type': 'application/json',
+      'Retry-After': String(retryAfter > 0 ? retryAfter : 1),
+      ...CORS_ALL
+    }
+  });
+}
+
+// ---- Fetch with Timeout Utility ----
+// Wraps fetch with AbortController for timeout handling
+
+/**
+ * Fetch with timeout - wraps native fetch with AbortController
+ * @param {string} url - The URL to fetch
+ * @param {Object} options - Fetch options
+ * @param {number} [timeoutMs=30000] - Timeout in milliseconds (default 30s)
+ * @returns {Promise<Response>}
+ * @throws {Error} Throws on timeout with message "Request timeout"
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    return response;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeoutMs}ms: ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Fetch JSON with timeout - convenience wrapper
+ * @param {string} url - The URL to fetch
+ * @param {Object} options - Fetch options
+ * @param {number} [timeoutMs=30000] - Timeout in milliseconds
+ * @returns {Promise<{ok: boolean, data?: any, error?: string, status?: number}>}
+ */
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 30000) {
+  try {
+    const response = await fetchWithTimeout(url, options, timeoutMs);
+    const data = await response.json();
+    return {
+      ok: response.ok,
+      status: response.status,
+      data
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err.message || String(err)
+    };
+  }
 }
 
 // ---- Pipeline versioning & cache helpers ----
@@ -467,19 +951,22 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     // Step 1: First visit the feed page with location to establish session
     const feedUrl = `https://www.ubereats.com/feed?pl=${plParam}`;
     console.log(`[InHouseScraper] Establishing session via feed: ${feedUrl}`);
+    // Use 'domcontentloaded' instead of 'networkidle0' - Uber Eats makes constant API calls
+    // that prevent networkidle0 from ever completing
     await page.goto(feedUrl, {
-      waitUntil: 'networkidle0',
-      timeout: 30000
+      waitUntil: 'domcontentloaded',
+      timeout: 25000
     });
-    await wait(2000);
+    // Wait for initial SPA hydration
+    await wait(3000);
 
     // Step 2: Now search for the restaurant
     const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}&pl=${plParam}`;
     console.log(`[InHouseScraper] Navigating to search: ${searchUrl}`);
 
     await page.goto(searchUrl, {
-      waitUntil: 'networkidle0',
-      timeout: 30000
+      waitUntil: 'domcontentloaded',
+      timeout: 25000
     });
 
     // Wait for page to settle
@@ -583,12 +1070,12 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
     console.log(`[InHouseScraper] Navigating to: ${storeUrl}`);
 
     await page.goto(storeUrl, {
-      waitUntil: 'networkidle0',
-      timeout: 30000
+      waitUntil: 'domcontentloaded',
+      timeout: 25000
     });
 
-    // Wait for menu to load
-    await wait(3000);
+    // Wait for SPA to hydrate and menu to render
+    await wait(4000);
 
     // Check if we got redirected to location picker
     const currentUrl = page.url();
@@ -609,10 +1096,10 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 
       // Retry navigation
       await page.goto(storeUrl, {
-        waitUntil: 'networkidle0',
-        timeout: 30000
+        waitUntil: 'domcontentloaded',
+        timeout: 25000
       });
-      await wait(3000);
+      await wait(4000);
 
       const retryUrl = page.url();
       console.log(`[InHouseScraper] Retry URL: ${retryUrl}`);
@@ -1258,7 +1745,9 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
   } catch (error) {
     console.log(`[InHouseScraper] Error: ${error.message}`);
     if (browser) {
-      try { await browser.close(); } catch (e) {}
+      try { await browser.close(); } catch (closeErr) {
+        console.warn('[InHouseScraper] Failed to close browser:', closeErr?.message || closeErr);
+      }
     }
     return {
       ok: false,
@@ -1633,9 +2122,12 @@ async function migrateUserData(env, oldUserId, newUserId) {
       "UPDATE saved_dishes SET user_id = ? WHERE user_id = ?"
     ).bind(newUserId, oldUserId).run();
 
-    // Migrate water_intake
+    // Migrate water tracking data (both summary and logs tables)
     await env.D1_DB.prepare(
-      "UPDATE water_intake SET user_id = ? WHERE user_id = ?"
+      "UPDATE daily_water_summaries SET user_id = ? WHERE user_id = ?"
+    ).bind(newUserId, oldUserId).run();
+    await env.D1_DB.prepare(
+      "UPDATE water_logs SET user_id = ? WHERE user_id = ?"
     ).bind(newUserId, oldUserId).run();
 
     // Migrate weight_history
@@ -4980,9 +5472,9 @@ Rules:
   try {
     let result = null;
 
-    // Try OpenAI first
+    // Try OpenAI first (with 30s timeout)
     if (env.OPENAI_API_KEY) {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -4994,7 +5486,7 @@ Rules:
           temperature: 0.3,
           max_tokens: 500
         })
-      });
+      }, 30000);
 
       if (response.ok) {
         const data = await response.json();
@@ -6935,8 +7427,12 @@ async function logMeal(env, userId, mealData) {
         user_id, dish_id, dish_name, restaurant_name, logged_at, meal_date,
         meal_type, portion_factor, calories, protein_g, carbs_g, fat_g,
         fiber_g, sugar_g, sodium_mg, organ_impacts, risk_flags,
-        analysis_confidence, analysis_version, r2_analysis_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        analysis_confidence, analysis_version, r2_analysis_key,
+        photo_status, before_photo_url, after_photo_url,
+        portion_percent, shared_with_count,
+        baseline_calories, baseline_protein_g, baseline_carbs_g, baseline_fat_g,
+        baseline_fiber_g, baseline_sugar_g, baseline_sodium_mg, baseline_organ_impacts
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       userId,
       mealData.dish_id || null,
@@ -6957,7 +7453,20 @@ async function logMeal(env, userId, mealData) {
       mealData.risk_flags ? JSON.stringify(mealData.risk_flags) : null,
       mealData.analysis_confidence || null,
       mealData.analysis_version || PIPELINE_VERSION,
-      r2AnalysisKey
+      r2AnalysisKey,
+      mealData.photo_status || null,
+      mealData.before_photo_url || null,
+      mealData.after_photo_url || null,
+      mealData.portion_percent || 100,
+      mealData.shared_with_count || null,
+      mealData.baseline_calories || mealData.calories || null,
+      mealData.baseline_protein_g || mealData.protein_g || null,
+      mealData.baseline_carbs_g || mealData.carbs_g || null,
+      mealData.baseline_fat_g || mealData.fat_g || null,
+      mealData.baseline_fiber_g || mealData.fiber_g || null,
+      mealData.baseline_sugar_g || mealData.sugar_g || null,
+      mealData.baseline_sodium_mg || mealData.sodium_mg || null,
+      mealData.baseline_organ_impacts ? JSON.stringify(mealData.baseline_organ_impacts) : (mealData.organ_impacts ? JSON.stringify(mealData.organ_impacts) : null)
     ).run();
 
     // Update daily summary
@@ -7042,6 +7551,67 @@ async function deleteMeal(env, userId, mealId) {
     return { ok: true };
   } catch (e) {
     console.error('deleteMeal error:', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+async function updateMeal(env, userId, mealId, updates) {
+  if (!env?.D1_DB || !userId || !mealId) return { ok: false, error: 'missing_params' };
+
+  try {
+    // Get meal to verify ownership and get meal_date for summary update
+    const meal = await env.D1_DB.prepare(
+      'SELECT * FROM logged_meals WHERE id = ? AND user_id = ?'
+    ).bind(mealId, userId).first();
+
+    if (!meal) return { ok: false, error: 'meal_not_found' };
+
+    // Build dynamic UPDATE query based on provided fields
+    const allowedFields = [
+      'photo_status', 'before_photo_url', 'after_photo_url',
+      'portion_percent', 'portion_multiplier', 'shared_with_count',
+      'calories', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg',
+      'organ_impacts', 'photo_analysis_result'
+    ];
+
+    const setClauses = [];
+    const values = [];
+
+    for (const field of allowedFields) {
+      if (updates[field] !== undefined) {
+        setClauses.push(`${field} = ?`);
+        // JSON-stringify object fields
+        if (field === 'organ_impacts' || field === 'photo_analysis_result') {
+          values.push(updates[field] ? JSON.stringify(updates[field]) : null);
+        } else {
+          values.push(updates[field]);
+        }
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return { ok: false, error: 'no_valid_fields' };
+    }
+
+    // Add meal_id and user_id for WHERE clause
+    values.push(mealId, userId);
+
+    await env.D1_DB.prepare(`
+      UPDATE logged_meals
+      SET ${setClauses.join(', ')}
+      WHERE id = ? AND user_id = ?
+    `).bind(...values).run();
+
+    // Update daily summary if nutrition changed
+    const nutritionFields = ['calories', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg'];
+    const nutritionChanged = nutritionFields.some(f => updates[f] !== undefined);
+    if (nutritionChanged) {
+      await updateDailySummary(env, userId, meal.meal_date);
+    }
+
+    return { ok: true };
+  } catch (e) {
+    console.error('updateMeal error:', e);
     return { ok: false, error: String(e?.message || e) };
   }
 }
@@ -7776,8 +8346,8 @@ async function buildAssistantContext(env, userId, timezone = null) {
   const today = getTodayISO(timezone);
 
   try {
-    // Gather all user context in parallel
-    const [profile, allergens, organPriorities, meals, summary, targets, water] = await Promise.all([
+    // Gather all user context in parallel (using allSettled for resilience)
+    const contextResults = await Promise.allSettled([
       getUserProfile(env, userId),
       getUserAllergens(env, userId),
       getUserOrganPriorities(env, userId),
@@ -7786,6 +8356,23 @@ async function buildAssistantContext(env, userId, timezone = null) {
       getUserTargets(env, userId),
       getWaterForDate(env, userId, today)
     ]);
+
+    // Extract values with safe fallbacks
+    const profile = contextResults[0].status === 'fulfilled' ? contextResults[0].value : null;
+    const allergens = contextResults[1].status === 'fulfilled' ? contextResults[1].value : [];
+    const organPriorities = contextResults[2].status === 'fulfilled' ? contextResults[2].value : [];
+    const meals = contextResults[3].status === 'fulfilled' ? contextResults[3].value : [];
+    const summary = contextResults[4].status === 'fulfilled' ? contextResults[4].value : null;
+    const targets = contextResults[5].status === 'fulfilled' ? contextResults[5].value : null;
+    const water = contextResults[6].status === 'fulfilled' ? contextResults[6].value : null;
+
+    // Log any failures for debugging
+    contextResults.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        const names = ['profile', 'allergens', 'organPriorities', 'meals', 'summary', 'targets', 'water'];
+        console.warn(`[getUserContext] Failed to fetch ${names[i]}: ${r.reason?.message || r.reason}`);
+      }
+    });
 
     // Get prioritized organs for superbrain queries
     const prioritizedOrgans = organPriorities
@@ -7825,9 +8412,9 @@ async function buildAssistantContext(env, userId, timezone = null) {
     superbrainPromises.push(getAdditiveWarnings(env).then(r => ({ additiveWarnings: r })));
     superbrainPromises.push(getOrganSystems(env).then(r => ({ organSystems: r })));
 
-    const superbrainResults = await Promise.all(superbrainPromises);
+    const superbrainSettled = await Promise.allSettled(superbrainPromises);
 
-    // Organize superbrain data
+    // Organize superbrain data (only include fulfilled results)
     const superbrain = {
       organCompounds: {},
       organFoods: {},
@@ -7839,7 +8426,12 @@ async function buildAssistantContext(env, userId, timezone = null) {
       organSystems: []
     };
 
-    for (const result of superbrainResults) {
+    for (const settled of superbrainSettled) {
+      if (settled.status === 'rejected') {
+        console.warn(`[getUserContext] Superbrain query failed: ${settled.reason?.message || settled.reason}`);
+        continue;
+      }
+      const result = settled.value;
       if (result.organ && result.compounds) {
         superbrain.organCompounds[result.organ] = result.compounds;
       } else if (result.organ && result.foods) {
@@ -8143,13 +8735,13 @@ async function callAssistantLLM(env, systemPrompt, messages, options = {}) {
   let modelUsed = null;
   let tokensUsed = null;
 
-  // Try OpenAI first if available
+  // Try OpenAI first if available (with 45s timeout for chat completions)
   if (env.OPENAI_API_KEY) {
     try {
       const model = options.model || env.OPENAI_MODEL || 'gpt-4o-mini';
       modelUsed = model;
 
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetchWithTimeout('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -8164,7 +8756,7 @@ async function callAssistantLLM(env, systemPrompt, messages, options = {}) {
           max_tokens: options.max_tokens || 500,
           temperature: options.temperature || 0.7
         })
-      });
+      }, 45000);
 
       if (response.ok) {
         const data = await response.json();
@@ -8180,7 +8772,7 @@ async function callAssistantLLM(env, systemPrompt, messages, options = {}) {
         };
       }
     } catch (e) {
-      console.error('OpenAI chat error:', e);
+      console.error('OpenAI chat error:', e?.message || e);
     }
   }
 
@@ -11093,7 +11685,15 @@ async function callVisionForText(env, imageUrl) {
   });
   if (!imgRes.ok) throw new Error(`fetch image failed: ${imgRes.status}`);
   const buf = await imgRes.arrayBuffer();
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+  // Convert to base64 in chunks to avoid stack overflow with large images
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  const b64 = btoa(binary);
 
   const body = {
     requests: [
@@ -14239,6 +14839,156 @@ async function r2ReadJSON(env, key) {
   }
 }
 
+// ============================================
+// D1-BASED BATCH TRACKING (Atomic Operations)
+// ============================================
+
+/**
+ * Create a new batch record in D1
+ * @param {Object} env - Worker environment
+ * @param {string} batchId - Unique batch identifier
+ * @param {Object} batchInfo - Batch metadata
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+async function createBatch(env, batchId, batchInfo) {
+  if (!env?.D1_DB) {
+    console.warn('[createBatch] D1_DB not available, falling back to R2');
+    await r2WriteJSON(env, `batches/${batchId}.json`, {
+      id: batchId,
+      status: 'processing',
+      created_at: new Date().toISOString(),
+      ...batchInfo
+    });
+    return { ok: true, fallback: 'r2' };
+  }
+
+  try {
+    await env.D1_DB.prepare(`
+      INSERT INTO batch_jobs (id, status, total, cached, pending, completed, failed, place_id, query, jobs_json)
+      VALUES (?, 'processing', ?, ?, ?, 0, 0, ?, ?, ?)
+    `).bind(
+      batchId,
+      batchInfo.total || 0,
+      batchInfo.cached || 0,
+      batchInfo.pending || 0,
+      batchInfo.place_id || null,
+      batchInfo.query || null,
+      JSON.stringify(batchInfo.jobs || [])
+    ).run();
+
+    return { ok: true };
+  } catch (err) {
+    console.error('[createBatch] D1 error:', err?.message);
+    // Fallback to R2 on D1 failure
+    await r2WriteJSON(env, `batches/${batchId}.json`, {
+      id: batchId,
+      status: 'processing',
+      created_at: new Date().toISOString(),
+      ...batchInfo
+    });
+    return { ok: true, fallback: 'r2', error: err?.message };
+  }
+}
+
+/**
+ * Atomically increment batch counters in D1
+ * Uses SQL UPDATE for atomic operation - no race conditions
+ * @param {Object} env - Worker environment
+ * @param {string} batchId - Batch identifier
+ * @param {boolean} success - Whether the job succeeded
+ * @returns {Promise<{ok: boolean, completed?: number, failed?: number, status?: string}>}
+ */
+async function incrementBatchCounter(env, batchId, success) {
+  if (!env?.D1_DB) {
+    console.warn('[incrementBatchCounter] D1_DB not available');
+    return { ok: false, error: 'D1_DB not available' };
+  }
+
+  try {
+    // Atomic increment using SQL - this is the key to avoiding race conditions
+    const column = success ? 'completed' : 'failed';
+    await env.D1_DB.prepare(`
+      UPDATE batch_jobs
+      SET ${column} = ${column} + 1
+      WHERE id = ?
+    `).bind(batchId).run();
+
+    // Check if batch is now complete and update status atomically
+    const result = await env.D1_DB.prepare(`
+      UPDATE batch_jobs
+      SET status = CASE
+        WHEN (completed + failed) >= pending THEN 'completed'
+        ELSE status
+      END,
+      completed_at = CASE
+        WHEN (completed + failed) >= pending THEN datetime('now')
+        ELSE completed_at
+      END
+      WHERE id = ?
+      RETURNING completed, failed, status, pending
+    `).bind(batchId).first();
+
+    return {
+      ok: true,
+      completed: result?.completed || 0,
+      failed: result?.failed || 0,
+      status: result?.status || 'processing',
+      pending: result?.pending || 0
+    };
+  } catch (err) {
+    console.error('[incrementBatchCounter] D1 error:', err?.message);
+    return { ok: false, error: err?.message };
+  }
+}
+
+/**
+ * Get batch status from D1
+ * @param {Object} env - Worker environment
+ * @param {string} batchId - Batch identifier
+ * @returns {Promise<Object|null>}
+ */
+async function getBatchStatus(env, batchId) {
+  if (!env?.D1_DB) {
+    // Fallback to R2
+    return await r2ReadJSON(env, `batches/${batchId}.json`);
+  }
+
+  try {
+    const batch = await env.D1_DB.prepare(`
+      SELECT id, status, total, cached, pending, completed, failed,
+             created_at, completed_at, place_id, query, jobs_json
+      FROM batch_jobs
+      WHERE id = ?
+    `).bind(batchId).first();
+
+    if (!batch) {
+      // Try R2 fallback for older batches
+      return await r2ReadJSON(env, `batches/${batchId}.json`);
+    }
+
+    return {
+      id: batch.id,
+      status: batch.status,
+      total: batch.total,
+      cached: batch.cached,
+      pending: batch.pending,
+      completed: batch.completed,
+      failed: batch.failed,
+      created_at: batch.created_at,
+      completed_at: batch.completed_at,
+      place_id: batch.place_id,
+      query: batch.query,
+      jobs: batch.jobs_json ? JSON.parse(batch.jobs_json) : []
+    };
+  } catch (err) {
+    console.error('[getBatchStatus] D1 error:', err?.message);
+    // Fallback to R2
+    return await r2ReadJSON(env, `batches/${batchId}.json`);
+  }
+}
+
+// ============================================
+
 // Helper: Get full meal analysis from R2
 async function getMealFullAnalysis(env, r2Key) {
   if (!r2Key) return null;
@@ -14417,18 +15167,57 @@ async function processBatchInBackground(env, batchId, jobs, options = {}) {
   const completed = results.filter(r => r.value?.status === "completed").length;
   const failed = results.filter(r => r.value?.status === "failed" || r.error).length;
 
-  await r2WriteJSON(env, `batches/${batchId}.json`, {
-    id: batchId,
-    status: "completed",
-    completed_at: new Date().toISOString(),
-    total: jobs.length,
-    completed: completed,
-    failed: failed,
-    jobs: results.map(r => ({
-      jobId: r.jobId,
-      status: r.value?.status || "error"
-    }))
-  });
+  // Update D1 batch record with final status
+  if (env?.D1_DB) {
+    try {
+      await env.D1_DB.prepare(`
+        UPDATE batch_jobs
+        SET status = 'completed',
+            completed = ?,
+            failed = ?,
+            completed_at = datetime('now'),
+            jobs_json = ?
+        WHERE id = ?
+      `).bind(
+        completed,
+        failed,
+        JSON.stringify(results.map(r => ({
+          jobId: r.jobId,
+          status: r.value?.status || "error"
+        }))),
+        batchId
+      ).run();
+    } catch (d1Err) {
+      console.warn(`[BATCH-BG] D1 update failed, falling back to R2: ${d1Err?.message}`);
+      // Fallback to R2
+      await r2WriteJSON(env, `batches/${batchId}.json`, {
+        id: batchId,
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        total: jobs.length,
+        completed: completed,
+        failed: failed,
+        jobs: results.map(r => ({
+          jobId: r.jobId,
+          status: r.value?.status || "error"
+        }))
+      });
+    }
+  } else {
+    // Fallback to R2 if D1 not available
+    await r2WriteJSON(env, `batches/${batchId}.json`, {
+      id: batchId,
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      total: jobs.length,
+      completed: completed,
+      failed: failed,
+      jobs: results.map(r => ({
+        jobId: r.jobId,
+        status: r.value?.status || "error"
+      }))
+    });
+  }
 
   return { batchId, total: jobs.length, completed, failed };
 }
@@ -18537,6 +19326,13 @@ const _worker_impl = {
     // When restaurant page loads, frontend calls this with all menu items
     // Returns immediately with job IDs while processing continues in background
     if (pathname === "/api/analyze/batch" && request.method === "POST") {
+      // Rate limit check for dish analysis (moderately expensive)
+      const clientId = getClientIdentifier(request);
+      const rateCheck = await checkRateLimit(env, clientId, 'dish_analysis');
+      if (!rateCheck.allowed) {
+        return rateLimitResponse(rateCheck.resetAt);
+      }
+
       try {
         const body = (await readJson(request)) || {};
         const dishes = body.dishes || body.items || [];
@@ -18637,11 +19433,8 @@ const _worker_impl = {
         const cachedJobs = jobs.filter(j => j.cached);
         const uncachedJobs = jobs.filter(j => !j.cached);
 
-        // Write initial batch status to R2
-        await r2WriteJSON(env, `batches/${batchId}.json`, {
-          id: batchId,
-          status: "processing",
-          created_at: new Date().toISOString(),
+        // Create batch in D1 for atomic counter updates (with R2 fallback)
+        await createBatch(env, batchId, {
           total: jobs.length,
           cached: cachedJobs.length,
           pending: uncachedJobs.length,
@@ -18770,8 +19563,8 @@ const _worker_impl = {
           );
         }
 
-        // Batch status
-        const batchData = await r2ReadJSON(env, `batches/${batchId}.json`);
+        // Batch status (D1 with R2 fallback for older batches)
+        const batchData = await getBatchStatus(env, batchId);
         if (!batchData) {
           return new Response(
             JSON.stringify({ ok: false, error: "batch_not_found" }),
@@ -19431,16 +20224,15 @@ const _worker_impl = {
 
       const ORGANS = await getOrgans(env);
 
+      // Use logged_meals table (the actual table that exists)
       const { results } = await env.D1_DB.prepare(
-        `SELECT id, user_id, dish,
-            ingredients_json,
-            organ_levels_json,
-            top_drivers_json,
-            calories_kcal,
-            created_at
-     FROM user_meal_logs
+        `SELECT id, user_id, dish_name as dish,
+            organ_impacts as organ_levels_json,
+            calories as calories_kcal,
+            logged_at as created_at
+     FROM logged_meals
      WHERE user_id = ?
-     ORDER BY datetime(created_at) DESC
+     ORDER BY logged_at DESC
      LIMIT ?`
       )
         .bind(userId, limit)
@@ -19483,38 +20275,61 @@ const _worker_impl = {
       };
       const items = [];
       for (const row of results || []) {
-        const organ_levels = safeJson(row.organ_levels_json, {});
-        const top_drivers = safeJson(row.top_drivers_json, {});
+        // organ_impacts is stored as JSON object with scores, not levels
+        const organ_scores = safeJson(row.organ_levels_json, {});
+
+        // Convert numeric scores to level labels for backward compatibility
+        const scoreToLevel = (score) => {
+          if (score === null || score === undefined) return "Neutral";
+          if (score >= 60) return "High Benefit";
+          if (score >= 30) return "Benefit";
+          if (score >= 10) return "Mild Benefit";
+          if (score > -10) return "Neutral";
+          if (score > -30) return "Mild Caution";
+          if (score > -60) return "Caution";
+          return "High Caution";
+        };
+
+        const organ_levels = Object.fromEntries(
+          Object.entries(organ_scores).map(([k, v]) => [k, scoreToLevel(v)])
+        );
         const organ_bars = Object.fromEntries(
-          Object.entries(organ_levels).map(([k, v]) => [k, levelToBar(v)])
+          Object.entries(organ_scores).map(([k, v]) => [k, v ?? 0])
         );
         const organ_colors = Object.fromEntries(
           Object.entries(organ_levels).map(([k, v]) => [k, levelToColor(v)])
         );
-        const tummy = computeBarometerFromLevelsAll(ORGANS, organ_levels);
+
+        // Calculate tummy barometer from scores
+        const scoreValues = Object.values(organ_scores).filter(v => typeof v === 'number');
+        const tummy = scoreValues.length > 0
+          ? Math.round(scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length)
+          : 0;
         const barometer_color = barometerToColor(tummy);
+
+        // Generate insight lines from organ impacts
         const insight_lines = ORGANS.map((key) => {
-          if (!organ_levels[key]) return null;
-          const drivers = Array.isArray(top_drivers[key])
-            ? top_drivers[key]
-            : [];
-          if (!drivers.length) return null;
-          return `${titleFor(key)}: ${drivers.join(", ")}`;
+          const score = organ_scores[key];
+          if (score === null || score === undefined) return null;
+          const level = scoreToLevel(score);
+          if (level === "Neutral") return null;
+          return `${titleFor(key)}: ${level}`;
         })
           .filter(Boolean)
           .slice(0, 3);
+
         const dish_summary = `${
-          tummy >= 60 ? "🟢" : tummy >= 40 ? "🟡" : "🟠"
+          tummy >= 30 ? "🟢" : tummy >= 0 ? "🟡" : "🟠"
         } ${insight_lines[0] || "See details"}`;
         const item = {
           id: row.id,
           user_id: row.user_id,
           dish: row.dish,
-          ingredients: safeJson(row.ingredients_json, []),
+          ingredients: [],  // Not available in logged_meals
           organ_levels,
           organ_bars,
           organ_colors,
-          top_drivers,
+          top_drivers: {},  // Not available in logged_meals
           calories_kcal: row.calories_kcal ?? null,
           tummy_barometer: tummy,
           barometer_color,
@@ -20802,13 +21617,34 @@ const _worker_impl = {
     // POST /api/meals/log - Log a meal
     if (pathname === "/api/meals/log" && request.method === "POST") {
       const body = await readJsonSafe(request);
-      const userId = body?.user_id || url.searchParams.get("user_id");
 
-      if (!userId || !body?.dish_name) {
-        return new Response(JSON.stringify({ ok: false, error: "missing_user_id_or_dish_name" }), {
-          status: 400,
-          headers: { "content-type": "application/json", ...CORS_ALL }
+      // Validate user_id
+      const userIdValidation = validateUserId(body?.user_id || url.searchParams.get("user_id"));
+      if (!userIdValidation.valid) {
+        return validationErrorResponse(userIdValidation.error);
+      }
+      const userId = userIdValidation.value;
+
+      // Validate dish_name
+      const dishNameValidation = validateString(body?.dish_name, {
+        required: true,
+        maxLength: 500,
+        fieldName: 'dish_name'
+      });
+      if (!dishNameValidation.valid) {
+        return validationErrorResponse(dishNameValidation.error);
+      }
+
+      // Validate optional calories if provided
+      if (body?.calories !== undefined && body?.calories !== null) {
+        const caloriesValidation = validateInteger(body.calories, {
+          min: 0,
+          max: 50000,
+          fieldName: 'calories'
         });
+        if (!caloriesValidation.valid) {
+          return validationErrorResponse(caloriesValidation.error);
+        }
       }
 
       const result = await logMeal(env, userId, body);
@@ -20821,16 +21657,24 @@ const _worker_impl = {
 
     // GET /api/meals - Get meals for a date
     if (pathname === "/api/meals" && request.method === "GET") {
-      const userId = url.searchParams.get("user_id");
-      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
-      const date = url.searchParams.get("date") || getTodayISO(timezone);
-
-      if (!userId) {
-        return new Response(JSON.stringify({ ok: false, error: "missing_user_id" }), {
-          status: 400,
-          headers: { "content-type": "application/json", ...CORS_ALL }
-        });
+      // Validate user_id
+      const userIdValidation = validateUserId(url.searchParams.get("user_id"));
+      if (!userIdValidation.valid) {
+        return validationErrorResponse(userIdValidation.error);
       }
+      const userId = userIdValidation.value;
+
+      const timezone = url.searchParams.get("timezone"); // e.g., "America/New_York"
+
+      // Validate date if provided
+      const dateParam = url.searchParams.get("date");
+      if (dateParam) {
+        const dateValidation = validateDate(dateParam);
+        if (!dateValidation.valid) {
+          return validationErrorResponse(dateValidation.error);
+        }
+      }
+      const date = dateParam || getTodayISO(timezone);
 
       const meals = await getMealsForDate(env, userId, date);
 
@@ -20841,20 +21685,87 @@ const _worker_impl = {
 
     // DELETE /api/meals/:id - Delete a meal
     if (pathname.startsWith("/api/meals/") && request.method === "DELETE") {
-      const mealId = pathname.split("/").pop();
-      const userId = url.searchParams.get("user_id");
+      // Validate user_id
+      const userIdValidation = validateUserId(url.searchParams.get("user_id"));
+      if (!userIdValidation.valid) {
+        return validationErrorResponse(userIdValidation.error);
+      }
+      const userId = userIdValidation.value;
 
-      if (!userId || !mealId) {
-        return new Response(JSON.stringify({ ok: false, error: "missing_user_id_or_meal_id" }), {
-          status: 400,
-          headers: { "content-type": "application/json", ...CORS_ALL }
-        });
+      // Validate meal_id
+      const mealIdStr = pathname.split("/").pop();
+      const mealIdValidation = validateInteger(mealIdStr, {
+        required: true,
+        min: 1,
+        fieldName: 'meal_id'
+      });
+      if (!mealIdValidation.valid) {
+        return validationErrorResponse(mealIdValidation.error);
       }
 
-      const result = await deleteMeal(env, userId, parseInt(mealId, 10));
+      const result = await deleteMeal(env, userId, mealIdValidation.value);
 
       return new Response(JSON.stringify(result), {
         status: result.ok ? 200 : 404,
+        headers: { "content-type": "application/json", ...CORS_ALL }
+      });
+    }
+
+    // PUT /api/meals/:id - Update a meal (photo_status, portion, nutrition)
+    if (pathname.startsWith("/api/meals/") && request.method === "PUT") {
+      // Validate user_id
+      const userIdValidation = validateUserId(url.searchParams.get("user_id"));
+      if (!userIdValidation.valid) {
+        return validationErrorResponse(userIdValidation.error);
+      }
+      const userId = userIdValidation.value;
+
+      // Validate meal_id
+      const mealIdStr = pathname.split("/").pop();
+      const mealIdValidation = validateInteger(mealIdStr, {
+        required: true,
+        min: 1,
+        fieldName: 'meal_id'
+      });
+      if (!mealIdValidation.valid) {
+        return validationErrorResponse(mealIdValidation.error);
+      }
+      const mealId = mealIdValidation.value;
+
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return validationErrorResponse('Invalid JSON body');
+      }
+
+      // Validate optional fields in body
+      if (body.portion_percent !== undefined) {
+        const portionValidation = validateInteger(body.portion_percent, {
+          min: 0,
+          max: 200,
+          fieldName: 'portion_percent'
+        });
+        if (!portionValidation.valid) {
+          return validationErrorResponse(portionValidation.error);
+        }
+      }
+
+      if (body.calories !== undefined) {
+        const caloriesValidation = validateInteger(body.calories, {
+          min: 0,
+          max: 50000,
+          fieldName: 'calories'
+        });
+        if (!caloriesValidation.valid) {
+          return validationErrorResponse(caloriesValidation.error);
+        }
+      }
+
+      const result = await updateMeal(env, userId, mealId, body);
+
+      return new Response(JSON.stringify(result), {
+        status: result.ok ? 200 : 400,
         headers: { "content-type": "application/json", ...CORS_ALL }
       });
     }
@@ -20878,6 +21789,13 @@ const _worker_impl = {
 
     // POST /api/meal-photo/upload - Upload a before or after meal photo
     if (pathname === "/api/meal-photo/upload" && request.method === "POST") {
+      // Rate limit check for photo uploads (storage-intensive)
+      const clientId = getClientIdentifier(request);
+      const rateCheck = await checkRateLimit(env, clientId, 'photo_upload');
+      if (!rateCheck.allowed) {
+        return rateLimitResponse(rateCheck.resetAt);
+      }
+
       try {
         const contentType = request.headers.get("content-type") || "";
 
@@ -21000,6 +21918,7 @@ const _worker_impl = {
 
     // POST /api/meal-photo/identify - Analyze a single photo to identify food, ingredients, and calories
     // This is for the "before" photo - identifies what's on the plate
+    // Uses FatSecret Image Recognition as primary, OpenAI GPT-4 Vision as fallback
     if (pathname === "/api/meal-photo/identify" && request.method === "POST") {
       try {
         const body = await readJsonSafe(request);
@@ -21012,10 +21931,12 @@ const _worker_impl = {
           });
         }
 
-        // Get photo as base64
-        let imageBase64 = photoBase64;
-        if (!imageBase64 && photoUrl) {
-          // Fetch from URL
+        // Helper to fetch photo and convert to base64
+        const getImageBase64 = async () => {
+          if (photoBase64) {
+            return photoBase64.replace(/^data:image\/\w+;base64,/, "");
+          }
+
           const fetchPhoto = async (url) => {
             const internalPrefixFull = "https://tb-dish-processor-production.tummybuddy.workers.dev/api/meal-photo/serve/";
             const internalPrefixDev = "https://tb-dish-processor.josejorge305.workers.dev/api/meal-photo/serve/";
@@ -21039,15 +21960,184 @@ const _worker_impl = {
           };
 
           const buffer = await fetchPhoto(photoUrl);
-          imageBase64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-        } else if (imageBase64) {
-          // Strip data URL prefix if present
-          imageBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+          // Convert ArrayBuffer to base64 in chunks to avoid stack overflow with large images
+          const bytes = new Uint8Array(buffer);
+          const chunkSize = 8192;
+          let binary = '';
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+            binary += String.fromCharCode.apply(null, chunk);
+          }
+          return btoa(binary);
+        };
+
+        let analysis = null;
+        let source = null;
+
+        // Try FatSecret Image Recognition first (your existing API)
+        const fsToken = await getFatSecretAccessToken(env);
+        if (fsToken) {
+          try {
+            const imageBase64 = await getImageBase64();
+            const region = env.FATSECRET_REGION || "US";
+            const language = env.FATSECRET_LANGUAGE || "en";
+
+            const fsResp = await fetch(
+              "https://platform.fatsecret.com/rest/image-recognition/v2",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${fsToken}`,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                  image_b64: imageBase64,
+                  include_food_data: true,
+                  region,
+                  language
+                })
+              }
+            );
+
+            if (fsResp.ok) {
+              const fsData = await fsResp.json();
+              const normalized = normalizeFatSecretImageResult(fsData);
+
+              // Calculate total nutrition from components
+              let totalNutrition = {
+                calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0, sodium_mg: 0
+              };
+
+              if (Array.isArray(normalized.nutrition_breakdown)) {
+                for (const comp of normalized.nutrition_breakdown) {
+                  totalNutrition.calories += comp.energyKcal || 0;
+                  totalNutrition.protein_g += comp.protein_g || 0;
+                  totalNutrition.carbs_g += comp.carbs_g || 0;
+                  totalNutrition.fat_g += comp.fat_g || 0;
+                  totalNutrition.fiber_g += comp.fiber_g || 0;
+                  totalNutrition.sodium_mg += comp.sodium_mg || 0;
+                }
+              }
+
+              // Build dish name from plate components
+              const dishName = normalized.plate_components?.length > 0
+                ? normalized.plate_components.map(c => c.food_name || c.name).filter(Boolean).join(" with ")
+                : "Mixed Plate";
+
+              // Build ingredients list from components
+              const ingredients = (normalized.plate_components || []).map(comp => ({
+                name: comp.food_name || comp.name || "Unknown",
+                estimatedAmount: comp.serving_description || "1 serving",
+                visible: true
+              }));
+
+              analysis = {
+                ok: true,
+                dishName,
+                dishDescription: `Detected ${normalized.plate_components?.length || 0} food item(s)`,
+                portionSize: "as photographed",
+                ingredients,
+                nutrition: {
+                  calories: Math.round(totalNutrition.calories),
+                  protein_g: Math.round(totalNutrition.protein_g),
+                  carbs_g: Math.round(totalNutrition.carbs_g),
+                  fat_g: Math.round(totalNutrition.fat_g),
+                  fiber_g: Math.round(totalNutrition.fiber_g) || null,
+                  sodium_mg: Math.round(totalNutrition.sodium_mg) || null
+                },
+                allergens: Object.keys(normalized.component_allergens || {}).filter(k => normalized.component_allergens[k]),
+                confidence: normalized.plate_components?.length > 0 ? 0.85 : 0.5,
+                notes: null
+              };
+              source = "fatsecret_image_recognition";
+            }
+          } catch (fsErr) {
+            console.error("FatSecret image recognition failed:", fsErr?.message || fsErr);
+          }
         }
 
-        // Check for Anthropic API key
-        const anthropicKey = env.ANTHROPIC_API_KEY;
-        if (!anthropicKey) {
+        // Fallback to OpenAI GPT-4 Vision if FatSecret failed
+        if (!analysis && env.OPENAI_API_KEY) {
+          try {
+            const imageBase64 = await getImageBase64();
+
+            const openaiResp = await fetch("https://api.openai.com/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${env.OPENAI_API_KEY}`
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                max_tokens: 1500,
+                messages: [{
+                  role: "user",
+                  content: [
+                    {
+                      type: "image_url",
+                      image_url: {
+                        url: `data:image/jpeg;base64,${imageBase64}`,
+                        detail: "high"
+                      }
+                    },
+                    {
+                      type: "text",
+                      text: `Analyze this food photo. ${context ? `Context: ${context}` : ''}
+
+Return a JSON object:
+{
+  "dishName": "<identified dish name>",
+  "dishDescription": "<brief description>",
+  "portionSize": "<small/medium/large or specific amount>",
+  "ingredients": [{"name": "<ingredient>", "estimatedAmount": "<amount>", "visible": true}],
+  "nutrition": {"calories": <number>, "protein_g": <number>, "carbs_g": <number>, "fat_g": <number>, "fiber_g": <number or null>, "sodium_mg": <number or null>},
+  "allergens": ["<allergen1>"],
+  "confidence": <0-1>,
+  "notes": "<observations>"
+}
+
+Estimate calories for the ACTUAL visible portion, not a standard serving. Only return JSON.`
+                    }
+                  ]
+                }]
+              })
+            });
+
+            if (openaiResp.ok) {
+              const openaiData = await openaiResp.json();
+              const responseText = openaiData?.choices?.[0]?.message?.content || "";
+
+              const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const foodData = JSON.parse(jsonMatch[0]);
+                analysis = {
+                  ok: true,
+                  dishName: foodData.dishName || "Unknown Dish",
+                  dishDescription: foodData.dishDescription || null,
+                  portionSize: foodData.portionSize || "medium",
+                  ingredients: foodData.ingredients || [],
+                  nutrition: {
+                    calories: foodData.nutrition?.calories || 0,
+                    protein_g: foodData.nutrition?.protein_g || 0,
+                    carbs_g: foodData.nutrition?.carbs_g || 0,
+                    fat_g: foodData.nutrition?.fat_g || 0,
+                    fiber_g: foodData.nutrition?.fiber_g || null,
+                    sodium_mg: foodData.nutrition?.sodium_mg || null
+                  },
+                  allergens: foodData.allergens || [],
+                  confidence: foodData.confidence || 0.7,
+                  notes: foodData.notes || null
+                };
+                source = "openai_gpt4_vision";
+              }
+            }
+          } catch (openaiErr) {
+            console.error("OpenAI Vision failed:", openaiErr?.message || openaiErr);
+          }
+        }
+
+        // If no analysis succeeded, return error
+        if (!analysis) {
           return new Response(JSON.stringify({
             ok: false,
             error: "vision_api_unavailable",
@@ -21058,126 +22148,8 @@ const _worker_impl = {
           });
         }
 
-        // Call Claude Vision to identify food
-        const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": anthropicKey,
-            "anthropic-version": "2023-06-01"
-          },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 2048,
-            messages: [{
-              role: "user",
-              content: [
-                {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: "image/jpeg",
-                    data: imageBase64
-                  }
-                },
-                {
-                  type: "text",
-                  text: `You are a nutrition expert analyzing a photo of food. ${context ? `Context: ${context}` : ''}
-
-Analyze this food photo and identify:
-1. What dish/food items are visible
-2. Estimated portion size (small, medium, large, or in standard units like cups, oz)
-3. Key ingredients you can identify
-4. Estimated total calories for the VISIBLE portion
-5. Macronutrient breakdown (protein, carbs, fat in grams)
-6. Potential allergens present
-
-Return a JSON object with this structure:
-{
-  "dishName": "<identified dish name>",
-  "dishDescription": "<brief description of what you see>",
-  "portionSize": "<small/medium/large or specific amount>",
-  "ingredients": [
-    {"name": "<ingredient>", "estimatedAmount": "<amount>", "visible": true/false}
-  ],
-  "nutrition": {
-    "calories": <number>,
-    "protein_g": <number>,
-    "carbs_g": <number>,
-    "fat_g": <number>,
-    "fiber_g": <number or null>,
-    "sodium_mg": <number or null>
-  },
-  "allergens": ["<allergen1>", "<allergen2>"],
-  "confidence": <0-1 confidence score>,
-  "notes": "<any relevant observations about the food>"
-}
-
-Be accurate with calorie estimates based on the ACTUAL visible portion size, not a standard serving.
-Only return the JSON object, no other text.`
-                }
-              ]
-            }]
-          })
-        });
-
-        if (!claudeResponse.ok) {
-          const errorText = await claudeResponse.text();
-          console.error("Claude Vision API error:", errorText);
-          return new Response(JSON.stringify({
-            ok: false,
-            error: "vision_analysis_failed",
-            details: errorText.slice(0, 200)
-          }), {
-            status: 502,
-            headers: { "content-type": "application/json", ...CORS_ALL }
-          });
-        }
-
-        const claudeData = await claudeResponse.json();
-        const responseText = claudeData?.content?.[0]?.text || "";
-
-        // Parse Claude's JSON response
-        let foodData;
-        try {
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            foodData = JSON.parse(jsonMatch[0]);
-          } else {
-            throw new Error("No JSON found in response");
-          }
-        } catch (parseError) {
-          console.error("Failed to parse Claude response:", responseText);
-          return new Response(JSON.stringify({
-            ok: false,
-            error: "parse_error",
-            rawResponse: responseText.slice(0, 500)
-          }), {
-            status: 500,
-            headers: { "content-type": "application/json", ...CORS_ALL }
-          });
-        }
-
-        // Normalize the response
-        const analysis = {
-          ok: true,
-          dishName: foodData.dishName || "Unknown Dish",
-          dishDescription: foodData.dishDescription || null,
-          portionSize: foodData.portionSize || "medium",
-          ingredients: foodData.ingredients || [],
-          nutrition: {
-            calories: foodData.nutrition?.calories || 0,
-            protein_g: foodData.nutrition?.protein_g || 0,
-            carbs_g: foodData.nutrition?.carbs_g || 0,
-            fat_g: foodData.nutrition?.fat_g || 0,
-            fiber_g: foodData.nutrition?.fiber_g || null,
-            sodium_mg: foodData.nutrition?.sodium_mg || null
-          },
-          allergens: foodData.allergens || [],
-          confidence: foodData.confidence || 0.7,
-          notes: foodData.notes || null,
-          source: "claude_vision"
-        };
+        // Add source to response
+        analysis.source = source;
 
         return new Response(JSON.stringify(analysis), {
           headers: { "content-type": "application/json", ...CORS_ALL }
@@ -21195,7 +22167,7 @@ Only return the JSON object, no other text.`
       }
     }
 
-    // POST /api/meal-photo/analyze - Analyze before/after photos using Claude Vision
+    // POST /api/meal-photo/analyze - Analyze before/after photos using OpenAI GPT-4 Vision
     // Compares before and after photos to calculate actual consumption
     if (pathname === "/api/meal-photo/analyze" && request.method === "POST") {
       try {
@@ -21256,13 +22228,22 @@ Only return the JSON object, no other text.`
           });
         }
 
-        // Convert to base64 for Claude Vision
-        const beforeBase64 = btoa(String.fromCharCode(...new Uint8Array(beforeBuffer)));
-        const afterBase64 = btoa(String.fromCharCode(...new Uint8Array(afterBuffer)));
+        // Convert to base64 (chunked to avoid stack overflow)
+        const toBase64Chunked = (buffer) => {
+          const bytes = new Uint8Array(buffer);
+          const chunkSize = 8192;
+          let binary = '';
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+            binary += String.fromCharCode.apply(null, chunk);
+          }
+          return btoa(binary);
+        };
+        const beforeBase64 = toBase64Chunked(beforeBuffer);
+        const afterBase64 = toBase64Chunked(afterBuffer);
 
-        // Call Claude Vision to analyze consumption
-        const anthropicKey = env.ANTHROPIC_API_KEY;
-        if (!anthropicKey) {
+        // Use OpenAI GPT-4 Vision for before/after comparison
+        if (!env.OPENAI_API_KEY) {
           // Fallback to estimation if no API key
           return new Response(JSON.stringify({
             ok: true,
@@ -21272,91 +22253,64 @@ Only return the JSON object, no other text.`
           });
         }
 
-        const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+        // Vision API can be slow with high-detail images - use 60s timeout
+        const openaiResp = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": anthropicKey,
-            "anthropic-version": "2023-06-01"
+            "Authorization": `Bearer ${env.OPENAI_API_KEY}`
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 2048,
+            model: "gpt-4o",
+            max_tokens: 2000,
             messages: [{
               role: "user",
               content: [
                 {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: "image/jpeg",
-                    data: beforeBase64
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/jpeg;base64,${beforeBase64}`,
+                    detail: "high"
                   }
                 },
                 {
-                  type: "image",
-                  source: {
-                    type: "base64",
-                    media_type: "image/jpeg",
-                    data: afterBase64
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/jpeg;base64,${afterBase64}`,
+                    detail: "high"
                   }
                 },
                 {
                   type: "text",
-                  text: `You are a nutrition expert analyzing food consumption by comparing before and after photos.
+                  text: `Analyze food consumption by comparing these before and after photos.
 
-The FIRST image shows the plate BEFORE eating.
-The SECOND image shows the plate AFTER eating.
+FIRST image: plate BEFORE eating
+SECOND image: plate AFTER eating
 
-${dishName ? `The user identified this as: ${dishName}` : 'Identify the food in the image.'}
-${beforeAnalysis ? `Previous analysis of the before photo: ${JSON.stringify(beforeAnalysis)}` : ''}
+${dishName ? `Food identified as: ${dishName}` : 'Identify the food.'}
+${beforeAnalysis ? `Before photo analysis: ${JSON.stringify(beforeAnalysis)}` : ''}
 
-Analyze BOTH images and determine:
-1. What food items are visible in the BEFORE photo (identify the actual food)
-2. What remains in the AFTER photo
-3. Calculate the percentage of each item consumed
-4. Estimate the ACTUAL calories consumed based on what was eaten
-
-Return a JSON object with:
+Return JSON:
 {
-  "dishName": "<identified dish name from the photo>",
-  "beforePhoto": {
-    "items": [
-      {"name": "<food item>", "estimatedCalories": <number>, "estimatedGrams": <number>}
-    ],
-    "totalCalories": <number>
-  },
-  "afterPhoto": {
-    "itemsRemaining": [
-      {"name": "<food item>", "percentRemaining": <0-100>, "caloriesRemaining": <number>}
-    ],
-    "totalCaloriesRemaining": <number>
-  },
-  "consumption": {
-    "percentConsumed": <number 0-100>,
-    "caloriesConsumed": <number>,
-    "proteinConsumed_g": <number or null>,
-    "carbsConsumed_g": <number or null>,
-    "fatConsumed_g": <number or null>
-  },
-  "items": [
-    {"name": "<item>", "percentConsumed": <0-100>, "caloriesEaten": <number>}
-  ],
-  "allergens": ["<allergen1>", "<allergen2>"],
+  "dishName": "<dish name>",
+  "beforePhoto": {"items": [{"name": "<item>", "estimatedCalories": <num>}], "totalCalories": <num>},
+  "afterPhoto": {"itemsRemaining": [{"name": "<item>", "percentRemaining": <0-100>}], "totalCaloriesRemaining": <num>},
+  "consumption": {"percentConsumed": <0-100>, "caloriesConsumed": <num>, "proteinConsumed_g": <num or null>, "carbsConsumed_g": <num or null>, "fatConsumed_g": <num or null>},
+  "items": [{"name": "<item>", "percentConsumed": <0-100>, "caloriesEaten": <num>}],
+  "allergens": [],
   "confidence": <0-1>,
-  "notes": "<observations about what was eaten vs left>"
+  "notes": "<observations>"
 }
 
-Base calorie estimates on the ACTUAL visible portion sizes, not standard servings.
-Only return the JSON object, no other text.`
+Estimate based on ACTUAL visible portions. Only return JSON.`
                 }
               ]
             }]
           })
-        });
+        }, 60000);
 
-        if (!claudeResponse.ok) {
-          console.error("Claude API error:", await claudeResponse.text());
+        if (!openaiResp.ok) {
+          console.error("OpenAI API error:", await openaiResp.text());
           return new Response(JSON.stringify({
             ok: true,
             analysis: createFallbackAnalysis(baselineCalories || 500)
@@ -21365,13 +22319,12 @@ Only return the JSON object, no other text.`
           });
         }
 
-        const claudeData = await claudeResponse.json();
-        const responseText = claudeData?.content?.[0]?.text || "";
+        const openaiData = await openaiResp.json();
+        const responseText = openaiData?.choices?.[0]?.message?.content || "";
 
-        // Parse Claude's JSON response
+        // Parse JSON response
         let analysisData;
         try {
-          // Extract JSON from response (handle markdown code blocks)
           const jsonMatch = responseText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             analysisData = JSON.parse(jsonMatch[0]);
@@ -21379,7 +22332,7 @@ Only return the JSON object, no other text.`
             throw new Error("No JSON found in response");
           }
         } catch (parseError) {
-          console.error("Failed to parse Claude response:", responseText);
+          console.error("Failed to parse OpenAI response:", responseText);
           return new Response(JSON.stringify({
             ok: false,
             error: "parse_error",
@@ -21390,7 +22343,7 @@ Only return the JSON object, no other text.`
           });
         }
 
-        // Extract values from Claude's analysis (which is based on actual photo analysis)
+        // Extract values from analysis
         const consumption = analysisData.consumption || {};
         const percentConsumed = consumption.percentConsumed || analysisData.percentConsumed || 100;
         const caloriesConsumed = consumption.caloriesConsumed ||
@@ -21399,7 +22352,7 @@ Only return the JSON object, no other text.`
             null);
         const caloriesRemaining = analysisData.afterPhoto?.totalCaloriesRemaining || 0;
 
-        // Build item breakdown from Claude's analysis
+        // Build item breakdown
         const items = (analysisData.items || []).map((item, idx) => ({
           name: item.name || `Item ${idx + 1}`,
           percentConsumed: item.percentConsumed || percentConsumed,
@@ -21408,35 +22361,29 @@ Only return the JSON object, no other text.`
         }));
 
         // Build comprehensive analysis response
+        // Note: Using caloriesEaten/caloriesLeft to match frontend PhotoAnalysisResult interface
         const analysis = {
           ok: true,
-          source: "claude_vision",
+          source: "openai_gpt4_vision",
           dishName: analysisData.dishName || dishName || "Unknown Dish",
-          // Before photo analysis
           beforePhoto: analysisData.beforePhoto || null,
-          // After photo analysis
           afterPhoto: analysisData.afterPhoto || null,
-          // Consumption summary
           percentConsumed,
-          caloriesConsumed,
-          caloriesRemaining,
-          // Macros if available
+          caloriesEaten: caloriesConsumed,      // Frontend expects caloriesEaten, not caloriesConsumed
+          caloriesLeft: caloriesRemaining,       // Frontend expects caloriesLeft, not caloriesRemaining
           nutrition: {
             calories: caloriesConsumed,
             protein_g: consumption.proteinConsumed_g || null,
             carbs_g: consumption.carbsConsumed_g || null,
             fat_g: consumption.fatConsumed_g || null
           },
-          // Item breakdown
           items: items.length > 0 ? items : [{
             name: analysisData.dishName || dishName || "Meal",
             percentConsumed,
             caloriesEaten: caloriesConsumed || 0,
             caloriesLeft: caloriesRemaining
           }],
-          // Allergens detected
           allergens: analysisData.allergens || [],
-          // Confidence and notes
           confidence: analysisData.confidence || 0.7,
           notes: analysisData.notes || null
         };
@@ -21483,13 +22430,28 @@ Only return the JSON object, no other text.`
         });
       }
 
-      const [summary, targets, meals, organPriorities, water] = await Promise.all([
+      const trackerResults = await Promise.allSettled([
         getDailySummary(env, userId, date, timezone),
         getUserTargets(env, userId),
         getMealsForDate(env, userId, date),
         getUserOrganPriorities(env, userId),
         getWaterForDate(env, userId, date, timezone)
       ]);
+
+      // Extract values with safe fallbacks
+      const summary = trackerResults[0].status === 'fulfilled' ? trackerResults[0].value : null;
+      const targets = trackerResults[1].status === 'fulfilled' ? trackerResults[1].value : null;
+      const meals = trackerResults[2].status === 'fulfilled' ? trackerResults[2].value : [];
+      const organPriorities = trackerResults[3].status === 'fulfilled' ? trackerResults[3].value : [];
+      const water = trackerResults[4].status === 'fulfilled' ? trackerResults[4].value : null;
+
+      // Log any failures
+      trackerResults.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          const names = ['summary', 'targets', 'meals', 'organPriorities', 'water'];
+          console.warn(`[/api/tracker/daily] Failed to fetch ${names[i]}: ${r.reason?.message || r.reason}`);
+        }
+      });
 
       // Sort organ impacts by user priority
       let sortedOrganImpacts = [];
@@ -21541,10 +22503,21 @@ Only return the JSON object, no other text.`
         });
       }
 
-      const [summaries, targets] = await Promise.all([
+      const weeklyResults = await Promise.allSettled([
         getWeeklySummaries(env, userId, days, timezone),
         getUserTargets(env, userId)
       ]);
+
+      const summaries = weeklyResults[0].status === 'fulfilled' ? weeklyResults[0].value : [];
+      const targets = weeklyResults[1].status === 'fulfilled' ? weeklyResults[1].value : null;
+
+      // Log any failures
+      if (weeklyResults[0].status === 'rejected') {
+        console.warn(`[/api/tracker/weekly] Failed to fetch summaries: ${weeklyResults[0].reason?.message}`);
+      }
+      if (weeklyResults[1].status === 'rejected') {
+        console.warn(`[/api/tracker/weekly] Failed to fetch targets: ${weeklyResults[1].reason?.message}`);
+      }
 
       // Calculate averages
       const totals = { calories: 0, protein: 0, fiber: 0, sugar: 0, sodium: 0 };
@@ -22639,6 +23612,13 @@ Only return the JSON object, no other text.`
 
     // Cleaner Uber Eats test endpoint (returns flattened items)
     if (pathname === "/menu/uber-test" && request.method === "GET") {
+      // Rate limit check for menu scraping (expensive operation)
+      const clientId = getClientIdentifier(request);
+      const rateCheck = await checkRateLimit(env, clientId, 'menu_scrape');
+      if (!rateCheck.allowed) {
+        return rateLimitResponse(rateCheck.resetAt);
+      }
+
       let ctx = makeCtx(env);
       let rid = newRequestId();
       let trace = {}; // ensure 'trace' exists immediately
@@ -24997,13 +25977,27 @@ Only return the JSON object, no other text.`
     // aggregate organ_summary across all recent dishes,
     // compute average plus/minus counts, derive sentiment, and build items[] dynamically.
 
-    // Welcome / help text
-    return new Response(
-      "HELLO — tb-dish-processor is running.\n" +
-        "Try: GET /health, /debug/ping, /debug/job?id=..., /results/<id>.json, /menu/uber-test;\n" +
-        "POST /enqueue",
-      { status: 200, headers: { "content-type": "text/plain" } }
-    );
+    // Welcome / help text for root path only
+    if (pathname === "/" || pathname === "") {
+      return new Response(
+        "HELLO — tb-dish-processor is running.\n" +
+          "Try: GET /health, /debug/ping, /debug/job?id=..., /results/<id>.json, /menu/uber-test;\n" +
+          "POST /enqueue",
+        { status: 200, headers: { "content-type": "text/plain" } }
+      );
+    }
+
+    // 404 handler for all unmatched routes
+    console.warn(`[Router] 404 Not Found: ${request.method} ${pathname}`);
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "not_found",
+      message: `Route not found: ${request.method} ${pathname}`,
+      hint: "Check the API documentation for available endpoints"
+    }), {
+      status: 404,
+      headers: { "content-type": "application/json", ...CORS_ALL }
+    });
   },
 
   // ---- Scheduled handler: background menu cache refresh ----
@@ -26798,31 +27792,75 @@ async function rateLimit(env, request, { limit = 60 } = {}) {
 }
 
 async function handleHealthz(env) {
-  let d1 = "ok";
+  const checks = {
+    d1: { status: "unknown", latency_ms: null },
+    kv: { status: "unknown", latency_ms: null },
+    r2: { status: "unknown", latency_ms: null }
+  };
+
+  // Check D1
   try {
-    if (!env?.D1_DB) throw new Error("no D1");
+    if (!env?.D1_DB) throw new Error("D1_DB not bound");
+    const d1Start = Date.now();
     await env.D1_DB.prepare("SELECT 1").first();
+    checks.d1 = { status: "ok", latency_ms: Date.now() - d1Start };
   } catch (err) {
-    if (err) console.warn("[healthz] d1 ping failed", err?.message || err);
-    d1 = "fail";
+    console.warn("[healthz] D1 check failed:", err?.message || err);
+    checks.d1 = { status: "fail", error: err?.message || String(err) };
   }
 
-  const missing = [];
-  for (const name of [
+  // Check KV
+  try {
+    if (!env?.MENUS_CACHE) throw new Error("MENUS_CACHE not bound");
+    const kvStart = Date.now();
+    await env.MENUS_CACHE.get("__healthcheck__");
+    checks.kv = { status: "ok", latency_ms: Date.now() - kvStart };
+  } catch (err) {
+    console.warn("[healthz] KV check failed:", err?.message || err);
+    checks.kv = { status: "fail", error: err?.message || String(err) };
+  }
+
+  // Check R2
+  try {
+    if (!env?.R2_BUCKET) throw new Error("R2_BUCKET not bound");
+    const r2Start = Date.now();
+    await env.R2_BUCKET.head("__healthcheck__");
+    checks.r2 = { status: "ok", latency_ms: Date.now() - r2Start };
+  } catch (err) {
+    // R2 head on non-existent key returns null, not error - that's ok
+    if (err?.message?.includes("not bound")) {
+      checks.r2 = { status: "fail", error: err?.message };
+    } else {
+      checks.r2 = { status: "ok", latency_ms: 0 };
+    }
+  }
+
+  // Check required secrets
+  const requiredSecrets = [
     "RAPIDAPI_KEY",
     "OPENAI_API_KEY",
     "SPOONACULAR_KEY",
     "EDAMAM_APP_ID",
     "EDAMAM_APP_KEY"
-  ]) {
-    if (!env?.[name]) missing.push(name);
-  }
+  ];
+  const missing = requiredSecrets.filter(name => !env?.[name]);
+
+  // Overall health status
+  const allChecksOk = Object.values(checks).every(c => c.status === "ok");
+  const overallStatus = allChecksOk && missing.length === 0 ? "healthy" : "degraded";
 
   return okJson({
-    ok: true,
-    d1,
-    secrets_missing: missing,
-    ts: Math.floor(Date.now() / 1000)
+    ok: overallStatus === "healthy",
+    status: overallStatus,
+    version: getVersion(env),
+    checks,
+    secrets: {
+      missing,
+      configured: requiredSecrets.length - missing.length,
+      total: requiredSecrets.length
+    },
+    timestamp: new Date().toISOString(),
+    uptime_hint: "Workers are stateless - no uptime tracking"
   });
 }
 
@@ -26928,7 +27966,9 @@ async function bumpStatusKV(env, delta = {}) {
     await env.MENUS_CACHE.put(STATUS_KV_KEY, JSON.stringify(cur), {
       expirationTtl: 7 * 24 * 3600
     });
-  } catch {}
+  } catch (e) {
+    console.warn('[bumpStatusKV] Failed to update status KV:', e?.message || e);
+  }
 }
 
 // === Menu cache helpers (KV) ===============================================
@@ -29510,8 +30550,10 @@ async function runDishAnalysis(env, body, ctx) {
     body.forceReanalyze === true ||
     body.force_reanalyze === 1;
 
+  // Photo analysis should never use cache since each photo is unique
+  const isPhotoAnalysis = body.source === 'photo_analysis' || !!body.imageUrl;
   const allowCache =
-    !devFlag && !forceReanalyze && !selectionComponentIdsInput;
+    !devFlag && !forceReanalyze && !selectionComponentIdsInput && !isPhotoAnalysis;
 
   let cacheKey = null;
   let cacheKeySimple = null;
@@ -32853,11 +33895,14 @@ async function runDishAnalysis(env, body, ctx) {
           Promise.all(writePromises).catch(e => console.error('[Cache] Write error:', e))
         );
       } else {
-        // Without waitUntil, write all keys (non-blocking)
-        env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days });
-        env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days });
+        // Without waitUntil, write all keys (non-blocking with error handling)
+        env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days })
+          .catch(e => console.warn('[Cache] Write error (cacheKey):', e?.message || e));
+        env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days })
+          .catch(e => console.warn('[Cache] Write error (simpleKey):', e?.message || e));
         if (descCache) {
-          env.DISH_ANALYSIS_CACHE.put(descKey, descCache, { expirationTtl: ttl30Days });
+          env.DISH_ANALYSIS_CACHE.put(descKey, descCache, { expirationTtl: ttl30Days })
+            .catch(e => console.warn('[Cache] Write error (descKey):', e?.message || e));
         }
       }
     } catch (e) {
@@ -33876,21 +34921,14 @@ export default {
             const result = await processAndCacheDish(env, jobId, payload);
             console.log(`[QUEUE] Completed ${payload.dishName}: ${result?.status || 'unknown'}`);
 
-            // Update batch status if batchId provided
+            // Update batch status if batchId provided (using atomic D1 counter)
             if (batchId) {
               try {
-                const batchData = await r2ReadJSON(env, `batches/${batchId}.json`);
-                if (batchData) {
-                  const completedCount = (batchData.completed || 0) + (result?.ok ? 1 : 0);
-                  const failedCount = (batchData.failed || 0) + (result?.ok ? 0 : 1);
-                  const totalPending = batchData.pending || batchData.total || 0;
-
-                  await r2WriteJSON(env, `batches/${batchId}.json`, {
-                    ...batchData,
-                    completed: completedCount,
-                    failed: failedCount,
-                    status: (completedCount + failedCount >= totalPending) ? 'completed' : 'processing'
-                  });
+                const updateResult = await incrementBatchCounter(env, batchId, result?.ok === true);
+                if (updateResult.ok) {
+                  console.log(`[QUEUE] Batch ${batchId} progress: ${updateResult.completed}/${updateResult.pending} completed, ${updateResult.failed} failed, status: ${updateResult.status}`);
+                } else {
+                  console.warn(`[QUEUE] Batch counter update failed: ${updateResult.error}`);
                 }
               } catch (batchUpdateErr) {
                 console.error(`[QUEUE] Batch update error: ${batchUpdateErr?.message}`);

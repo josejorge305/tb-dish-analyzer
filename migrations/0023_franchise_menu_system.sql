@@ -1,4 +1,4 @@
--- Migration 0012: Franchise Menu Template System
+-- Migration 0023: Franchise Menu Template System
 -- Implements hierarchical menu inheritance (GLOBAL → COUNTRY → REGION → STORE)
 -- with append-only provenance tracking and 15-day auto-renewal
 --
