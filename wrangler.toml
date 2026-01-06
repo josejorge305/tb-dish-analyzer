@@ -29,20 +29,13 @@ BUILT_AT = "2025-11-11T00:00:00Z"
 FALLBACK_TRIGGER_UNDER = "50"
 HITS_LIMIT = "25"
 
-# === Menu Source Control ===
-# USE_LEGACY_MENU_SOURCE = false → use in-house pipeline (DEFAULT)
-# USE_LEGACY_MENU_SOURCE = true → enable Apify/RapidAPI (ROLLBACK ONLY)
-USE_LEGACY_MENU_SOURCE = "false"
-
 # === Providers ===
 PROVIDERS = "edamam,spoonacular,openai"
 PROVIDERS_PARSE = "zestful,openai"
 
 # === External hosts ===
-APIFY_UBER_ACTOR_ID = "borderline~ubereats-scraper"
-UBER_RAPID_HOST = "uber-eats-scraper-api.p.rapidapi.com"
-RAPIDAPI_BASE_URL = "https://uber-eats-scraper-api.p.rapidapi.com"
-RAPIDAPI_HOST = "uber-eats-scraper-api.p.rapidapi.com"
+# Note: Menu scraping now uses in-house Cloudflare Browser Rendering only
+# Apify and RapidAPI scrapers have been removed
 ZESTFUL_RAPID_HOST = "zestful.p.rapidapi.com"
 ZESTFUL_DAILY_CAP = "5500"
 USDA_FDC_HOST = "api.nal.usda.gov"
@@ -119,30 +112,15 @@ BUILT_AT = "2025-11-11T00:00:00Z"
 FALLBACK_TRIGGER_UNDER = "50"
 HITS_LIMIT = "25"
 
-# === Menu Source Control ===
-# USE_LEGACY_MENU_SOURCE = false → use in-house pipeline (DEFAULT)
-# USE_LEGACY_MENU_SOURCE = true → enable Apify/RapidAPI (ROLLBACK ONLY)
-USE_LEGACY_MENU_SOURCE = "false"
-
 # === Providers ===
 # Code reads ONLY this var for recipe provider order:
 # (edamam, spoonacular, openai) — adjust as needed
 PROVIDERS = "edamam,spoonacular,openai"
-
-# If you add an ingredient parser tier later (zestful/openai), your code can read another var,
-# but today the running code path expects PROVIDERS above. Keeping parse hints for future:
 PROVIDERS_PARSE = "zestful,openai"
 
-# === External hosts (for consistency with your current code) ===
-# Uber Eats Scraper Tiers:
-#   Tier 1 (primary): Apify - more efficient, requires APIFY_TOKEN secret
-#   Tier 2 (fallback): RapidAPI - original scraper
-APIFY_UBER_ACTOR_ID = "borderline~ubereats-scraper"
-
-# RapidAPI (Tier 2 fallback)
-UBER_RAPID_HOST = "uber-eats-scraper-api.p.rapidapi.com"
-RAPIDAPI_BASE_URL = "https://uber-eats-scraper-api.p.rapidapi.com"
-RAPIDAPI_HOST    = "uber-eats-scraper-api.p.rapidapi.com"
+# === External hosts ===
+# Note: Menu scraping now uses in-house Cloudflare Browser Rendering only
+# Apify and RapidAPI scrapers have been removed
 ZESTFUL_RAPID_HOST = "zestful.p.rapidapi.com"
 ZESTFUL_DAILY_CAP  = "5500"
 USDA_FDC_HOST      = "api.nal.usda.gov"
@@ -159,14 +137,13 @@ FATSECRET_SCOPES = "image-recognition"
 # === Secrets to set (do NOT put values here; set via `wrangler secret put ...`) ===
 #   wrangler secret put ADMIN_SECRET         # Admin key for cache/R2 deletion endpoints (X-Admin-Key header)
 #   wrangler secret put PROXY_API_KEY        # FatSecret proxy API key
-#   wrangler secret put APIFY_TOKEN          # Tier 1 Uber Eats scraper (Apify)
-#   wrangler secret put RAPIDAPI_KEY         # Tier 2 Uber Eats scraper (RapidAPI fallback)
 #   wrangler secret put OPENAI_API_KEY
 #   wrangler secret put SPOONACULAR_KEY
 #   wrangler secret put ZESTFUL_RAPID_KEY
 #   wrangler secret put EDAMAM_APP_ID
 #   wrangler secret put EDAMAM_APP_KEY
 #   wrangler secret put GOOGLE_PLACES_API_KEY  # Google Places API for restaurant search
+# Note: APIFY_TOKEN and RAPIDAPI_KEY are no longer needed - using in-house scraper
 
 # --- D1 (production) ---
 [[env.production.d1_databases]]
