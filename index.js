@@ -20998,13 +20998,211 @@ const _worker_impl = {
       }
     }
 
+    // POST /api/meal-photo/identify - Analyze a single photo to identify food, ingredients, and calories
+    // This is for the "before" photo - identifies what's on the plate
+    if (pathname === "/api/meal-photo/identify" && request.method === "POST") {
+      try {
+        const body = await readJsonSafe(request);
+        const { photoUrl, photoBase64, context } = body || {};
+
+        if (!photoUrl && !photoBase64) {
+          return new Response(JSON.stringify({ ok: false, error: "missing_photo" }), {
+            status: 400,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Get photo as base64
+        let imageBase64 = photoBase64;
+        if (!imageBase64 && photoUrl) {
+          // Fetch from URL
+          const fetchPhoto = async (url) => {
+            const internalPrefixFull = "https://tb-dish-processor-production.tummybuddy.workers.dev/api/meal-photo/serve/";
+            const internalPrefixDev = "https://tb-dish-processor.josejorge305.workers.dev/api/meal-photo/serve/";
+
+            let r2Key = null;
+            if (url.startsWith(internalPrefixFull)) {
+              r2Key = url.replace(internalPrefixFull, "");
+            } else if (url.startsWith(internalPrefixDev)) {
+              r2Key = url.replace(internalPrefixDev, "");
+            }
+
+            if (r2Key) {
+              const object = await env.R2_BUCKET.get(r2Key);
+              if (!object) throw new Error(`Photo not found: ${r2Key}`);
+              return await object.arrayBuffer();
+            } else {
+              const response = await fetch(url);
+              if (!response.ok) throw new Error(`Failed to fetch: ${url}`);
+              return await response.arrayBuffer();
+            }
+          };
+
+          const buffer = await fetchPhoto(photoUrl);
+          imageBase64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        } else if (imageBase64) {
+          // Strip data URL prefix if present
+          imageBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+        }
+
+        // Check for Anthropic API key
+        const anthropicKey = env.ANTHROPIC_API_KEY;
+        if (!anthropicKey) {
+          return new Response(JSON.stringify({
+            ok: false,
+            error: "vision_api_unavailable",
+            hint: "Photo analysis is not configured. Please enter dish details manually."
+          }), {
+            status: 503,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Call Claude Vision to identify food
+        const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01"
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 2048,
+            messages: [{
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/jpeg",
+                    data: imageBase64
+                  }
+                },
+                {
+                  type: "text",
+                  text: `You are a nutrition expert analyzing a photo of food. ${context ? `Context: ${context}` : ''}
+
+Analyze this food photo and identify:
+1. What dish/food items are visible
+2. Estimated portion size (small, medium, large, or in standard units like cups, oz)
+3. Key ingredients you can identify
+4. Estimated total calories for the VISIBLE portion
+5. Macronutrient breakdown (protein, carbs, fat in grams)
+6. Potential allergens present
+
+Return a JSON object with this structure:
+{
+  "dishName": "<identified dish name>",
+  "dishDescription": "<brief description of what you see>",
+  "portionSize": "<small/medium/large or specific amount>",
+  "ingredients": [
+    {"name": "<ingredient>", "estimatedAmount": "<amount>", "visible": true/false}
+  ],
+  "nutrition": {
+    "calories": <number>,
+    "protein_g": <number>,
+    "carbs_g": <number>,
+    "fat_g": <number>,
+    "fiber_g": <number or null>,
+    "sodium_mg": <number or null>
+  },
+  "allergens": ["<allergen1>", "<allergen2>"],
+  "confidence": <0-1 confidence score>,
+  "notes": "<any relevant observations about the food>"
+}
+
+Be accurate with calorie estimates based on the ACTUAL visible portion size, not a standard serving.
+Only return the JSON object, no other text.`
+                }
+              ]
+            }]
+          })
+        });
+
+        if (!claudeResponse.ok) {
+          const errorText = await claudeResponse.text();
+          console.error("Claude Vision API error:", errorText);
+          return new Response(JSON.stringify({
+            ok: false,
+            error: "vision_analysis_failed",
+            details: errorText.slice(0, 200)
+          }), {
+            status: 502,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        const claudeData = await claudeResponse.json();
+        const responseText = claudeData?.content?.[0]?.text || "";
+
+        // Parse Claude's JSON response
+        let foodData;
+        try {
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            foodData = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error("No JSON found in response");
+          }
+        } catch (parseError) {
+          console.error("Failed to parse Claude response:", responseText);
+          return new Response(JSON.stringify({
+            ok: false,
+            error: "parse_error",
+            rawResponse: responseText.slice(0, 500)
+          }), {
+            status: 500,
+            headers: { "content-type": "application/json", ...CORS_ALL }
+          });
+        }
+
+        // Normalize the response
+        const analysis = {
+          ok: true,
+          dishName: foodData.dishName || "Unknown Dish",
+          dishDescription: foodData.dishDescription || null,
+          portionSize: foodData.portionSize || "medium",
+          ingredients: foodData.ingredients || [],
+          nutrition: {
+            calories: foodData.nutrition?.calories || 0,
+            protein_g: foodData.nutrition?.protein_g || 0,
+            carbs_g: foodData.nutrition?.carbs_g || 0,
+            fat_g: foodData.nutrition?.fat_g || 0,
+            fiber_g: foodData.nutrition?.fiber_g || null,
+            sodium_mg: foodData.nutrition?.sodium_mg || null
+          },
+          allergens: foodData.allergens || [],
+          confidence: foodData.confidence || 0.7,
+          notes: foodData.notes || null,
+          source: "claude_vision"
+        };
+
+        return new Response(JSON.stringify(analysis), {
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+
+      } catch (e) {
+        console.error("meal-photo identify error:", e);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: e?.message || "identification_failed"
+        }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...CORS_ALL }
+        });
+      }
+    }
+
     // POST /api/meal-photo/analyze - Analyze before/after photos using Claude Vision
+    // Compares before and after photos to calculate actual consumption
     if (pathname === "/api/meal-photo/analyze" && request.method === "POST") {
       try {
         const body = await readJsonSafe(request);
-        const { beforePhotoUrl, afterPhotoUrl, dishName, baselineCalories } = body || {};
+        const { beforePhotoUrl, afterPhotoUrl, dishName, baselineCalories, beforeAnalysis } = body || {};
 
-        if (!beforePhotoUrl || !afterPhotoUrl || !dishName) {
+        if (!beforePhotoUrl || !afterPhotoUrl) {
           return new Response(JSON.stringify({ ok: false, error: "missing_required_fields" }), {
             status: 400,
             headers: { "content-type": "application/json", ...CORS_ALL }
@@ -21083,7 +21281,7 @@ const _worker_impl = {
           },
           body: JSON.stringify({
             model: "claude-sonnet-4-20250514",
-            max_tokens: 1024,
+            max_tokens: 2048,
             messages: [{
               role: "user",
               content: [
@@ -21105,24 +21303,51 @@ const _worker_impl = {
                 },
                 {
                   type: "text",
-                  text: `You are analyzing food consumption from before and after photos.
+                  text: `You are a nutrition expert analyzing food consumption by comparing before and after photos.
 
-Dish: ${dishName}
-Baseline calories (full portion): ${baselineCalories || 500} kcal
+The FIRST image shows the plate BEFORE eating.
+The SECOND image shows the plate AFTER eating.
 
-The FIRST image shows the dish BEFORE eating.
-The SECOND image shows the dish AFTER eating.
+${dishName ? `The user identified this as: ${dishName}` : 'Identify the food in the image.'}
+${beforeAnalysis ? `Previous analysis of the before photo: ${JSON.stringify(beforeAnalysis)}` : ''}
 
-Analyze how much of the food was consumed. Return a JSON object with:
+Analyze BOTH images and determine:
+1. What food items are visible in the BEFORE photo (identify the actual food)
+2. What remains in the AFTER photo
+3. Calculate the percentage of each item consumed
+4. Estimate the ACTUAL calories consumed based on what was eaten
+
+Return a JSON object with:
 {
-  "percentConsumed": <number 0-100 representing % eaten>,
-  "confidence": <number 0-1 representing confidence in estimate>,
+  "dishName": "<identified dish name from the photo>",
+  "beforePhoto": {
+    "items": [
+      {"name": "<food item>", "estimatedCalories": <number>, "estimatedGrams": <number>}
+    ],
+    "totalCalories": <number>
+  },
+  "afterPhoto": {
+    "itemsRemaining": [
+      {"name": "<food item>", "percentRemaining": <0-100>, "caloriesRemaining": <number>}
+    ],
+    "totalCaloriesRemaining": <number>
+  },
+  "consumption": {
+    "percentConsumed": <number 0-100>,
+    "caloriesConsumed": <number>,
+    "proteinConsumed_g": <number or null>,
+    "carbsConsumed_g": <number or null>,
+    "fatConsumed_g": <number or null>
+  },
   "items": [
-    {"name": "<item name>", "percentConsumed": <0-100>}
+    {"name": "<item>", "percentConsumed": <0-100>, "caloriesEaten": <number>}
   ],
-  "notes": "<brief observation about what was eaten vs left>"
+  "allergens": ["<allergen1>", "<allergen2>"],
+  "confidence": <0-1>,
+  "notes": "<observations about what was eaten vs left>"
 }
 
+Base calorie estimates on the ACTUAL visible portion sizes, not standard servings.
 Only return the JSON object, no other text.`
                 }
               ]
@@ -21156,39 +21381,63 @@ Only return the JSON object, no other text.`
         } catch (parseError) {
           console.error("Failed to parse Claude response:", responseText);
           return new Response(JSON.stringify({
-            ok: true,
-            analysis: createFallbackAnalysis(baselineCalories || 500)
+            ok: false,
+            error: "parse_error",
+            rawResponse: responseText.slice(0, 500)
           }), {
+            status: 500,
             headers: { "content-type": "application/json", ...CORS_ALL }
           });
         }
 
-        // Calculate calories based on percent consumed
-        const baseline = baselineCalories || 500;
-        const percentConsumed = analysisData.percentConsumed || 80;
-        const caloriesEaten = Math.round(baseline * (percentConsumed / 100));
-        const caloriesLeft = baseline - caloriesEaten;
+        // Extract values from Claude's analysis (which is based on actual photo analysis)
+        const consumption = analysisData.consumption || {};
+        const percentConsumed = consumption.percentConsumed || analysisData.percentConsumed || 100;
+        const caloriesConsumed = consumption.caloriesConsumed ||
+          (analysisData.beforePhoto?.totalCalories ?
+            Math.round(analysisData.beforePhoto.totalCalories * (percentConsumed / 100)) :
+            null);
+        const caloriesRemaining = analysisData.afterPhoto?.totalCaloriesRemaining || 0;
 
-        // Build item breakdown with calories
-        const items = (analysisData.items || []).map((item, idx) => {
-          const itemPercent = item.percentConsumed || percentConsumed;
-          const itemCalories = Math.round((baseline / (analysisData.items?.length || 1)) * (itemPercent / 100));
-          return {
-            name: item.name || `Item ${idx + 1}`,
-            percentConsumed: itemPercent,
-            caloriesEaten: itemCalories,
-            caloriesLeft: Math.round((baseline / (analysisData.items?.length || 1)) - itemCalories)
-          };
-        });
+        // Build item breakdown from Claude's analysis
+        const items = (analysisData.items || []).map((item, idx) => ({
+          name: item.name || `Item ${idx + 1}`,
+          percentConsumed: item.percentConsumed || percentConsumed,
+          caloriesEaten: item.caloriesEaten || 0,
+          caloriesLeft: item.caloriesRemaining || 0
+        }));
 
+        // Build comprehensive analysis response
         const analysis = {
+          ok: true,
+          source: "claude_vision",
+          dishName: analysisData.dishName || dishName || "Unknown Dish",
+          // Before photo analysis
+          beforePhoto: analysisData.beforePhoto || null,
+          // After photo analysis
+          afterPhoto: analysisData.afterPhoto || null,
+          // Consumption summary
           percentConsumed,
-          caloriesEaten,
-          caloriesLeft,
-          confidence: analysisData.confidence || 0.8,
-          items: items.length > 0 ? items : [
-            { name: dishName, percentConsumed, caloriesEaten, caloriesLeft }
-          ],
+          caloriesConsumed,
+          caloriesRemaining,
+          // Macros if available
+          nutrition: {
+            calories: caloriesConsumed,
+            protein_g: consumption.proteinConsumed_g || null,
+            carbs_g: consumption.carbsConsumed_g || null,
+            fat_g: consumption.fatConsumed_g || null
+          },
+          // Item breakdown
+          items: items.length > 0 ? items : [{
+            name: analysisData.dishName || dishName || "Meal",
+            percentConsumed,
+            caloriesEaten: caloriesConsumed || 0,
+            caloriesLeft: caloriesRemaining
+          }],
+          // Allergens detected
+          allergens: analysisData.allergens || [],
+          // Confidence and notes
+          confidence: analysisData.confidence || 0.7,
           notes: analysisData.notes || null
         };
 
@@ -21199,9 +21448,10 @@ Only return the JSON object, no other text.`
       } catch (e) {
         console.error("meal-photo analyze error:", e);
         return new Response(JSON.stringify({
-          ok: true,
-          analysis: createFallbackAnalysis(500)
+          ok: false,
+          error: e?.message || "analysis_failed"
         }), {
+          status: 500,
           headers: { "content-type": "application/json", ...CORS_ALL }
         });
       }
