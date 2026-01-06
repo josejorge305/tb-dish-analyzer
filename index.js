@@ -82,7 +82,7 @@ function providerOrder(env) {
 }
 
 // ---- Pipeline versioning & cache helpers ----
-const PIPELINE_VERSION = "analysis-v0.1"; // bump this when prompts/logic change
+const PIPELINE_VERSION = "analysis-v0.4"; // bump this when prompts/logic change - v0.4: verified nutrition table + dish name normalization
 
 function hashShort(str) {
   let h = 0;
@@ -140,6 +140,19 @@ function buildDishCacheKeySimple(body) {
   ].join("|");
 }
 
+// Description-only cache key - ignores all variation (for description backfill lookups)
+// Only uses dish name and restaurant name - no description, flags, section, etc.
+function buildDescriptionCacheKey(body) {
+  const dishName = normalizeForKey(body.dishName || body.dish);
+  const restaurantName = normalizeForKey(body.restaurantName || body.restaurant);
+  return [
+    "dish-description",
+    PIPELINE_VERSION,
+    dishName || "no-dish",
+    restaurantName || "no-restaurant"
+  ].join("|");
+}
+
 // ---- Enrich Menu Items with Generated Descriptions ----
 // When menu items don't have descriptions from Uber Eats, look up cached analysis
 // and use the generated_description (from recipe introduction) as a fallback
@@ -150,17 +163,17 @@ async function enrichItemsWithGeneratedDescriptions(env, items, restaurantName) 
   const itemsNeedingDescription = items.filter(it => !it.description || it.description.trim() === "");
   if (itemsNeedingDescription.length === 0) return items;
 
-  // Batch lookup cached analyses for items without descriptions
+  // Batch lookup cached descriptions for items without descriptions
+  // Use the description-specific cache key which ignores menu description variations
   const enrichmentPromises = itemsNeedingDescription.map(async (item) => {
     try {
-      // Build simple cache key (more likely to hit since it ignores section)
-      const simpleKey = buildDishCacheKeySimple({
+      // Use description-only cache key (ignores all variation except dish+restaurant)
+      const descKey = buildDescriptionCacheKey({
         dishName: item.name,
-        restaurantName: restaurantName,
-        menuDescription: ""
+        restaurantName: restaurantName
       });
 
-      const cached = await env.DISH_ANALYSIS_CACHE.get(simpleKey, "json");
+      const cached = await env.DISH_ANALYSIS_CACHE.get(descKey, "json");
       if (cached?.generated_description) {
         return { name: item.name, generated_description: cached.generated_description };
       }
@@ -1852,6 +1865,686 @@ const DEFAULT_SERVINGS_BY_CATEGORY = {
   Appetizers: 1.0,
   Other: 1.0
 };
+
+// STANDARDIZED_PORTION_CHAINS: Fast-food and chain restaurants with standardized portions.
+// These restaurants have consistent, known portion sizes - category-based scaling should NOT apply.
+// The recipe provider (Edamam/USDA) already returns per-serving values for these items.
+const STANDARDIZED_PORTION_CHAINS = new Set([
+  "mcdonald's", "mcdonalds", "mcd's",
+  "burger king", "bk",
+  "wendy's", "wendys",
+  "chick-fil-a", "chickfila", "chick fil a",
+  "taco bell",
+  "kfc", "kentucky fried chicken",
+  "popeyes", "popeye's",
+  "subway",
+  "arby's", "arbys",
+  "sonic", "sonic drive-in",
+  "jack in the box",
+  "carl's jr", "carls jr", "hardee's", "hardees",
+  "five guys",
+  "in-n-out", "in n out", "innout",
+  "whataburger",
+  "shake shack",
+  "culver's", "culvers",
+  "white castle",
+  "checkers", "rally's", "rallys",
+  "del taco",
+  "chipotle",
+  "qdoba",
+  "moe's", "moes",
+  "panera", "panera bread",
+  "domino's", "dominos",
+  "pizza hut",
+  "papa john's", "papa johns",
+  "little caesars", "little caesar's",
+  "dunkin", "dunkin'", "dunkin donuts",
+  "starbucks",
+  "krispy kreme",
+  "baskin robbins", "baskin-robbins",
+  "dairy queen", "dq",
+  "wingstop",
+  "buffalo wild wings", "bww", "b-dubs",
+  "chili's", "chilis",
+  "applebee's", "applebees",
+  "olive garden",
+  "red lobster",
+  "outback", "outback steakhouse",
+  "texas roadhouse",
+  "cracker barrel",
+  "ihop",
+  "denny's", "dennys",
+  "waffle house",
+  "perkins",
+  "bob evans",
+  "panda express",
+  "pf chang's", "pf changs", "p.f. chang's",
+  "cheesecake factory",
+  "red robin",
+  "tgi fridays", "tgi friday's", "t.g.i. friday's",
+  "hooters",
+  "twin peaks",
+  "buffalo wild wings",
+  "wawa",
+  "sheetz",
+  "7-eleven", "7 eleven", "seven eleven",
+  "jersey mike's", "jersey mikes",
+  "jimmy john's", "jimmy johns",
+  "firehouse subs",
+  "potbelly",
+  "jason's deli", "jasons deli",
+  "mcalister's", "mcalisters",
+  "zaxby's", "zaxbys",
+  "raising cane's", "raising canes", "cane's",
+  "el pollo loco",
+  "church's chicken", "churchs chicken",
+  "bojangles", "bojangles'",
+  "cook out", "cookout",
+  "steak 'n shake", "steak n shake"
+]);
+
+// Helper to check if a restaurant name matches a standardized portion chain
+function isStandardizedPortionChain(restaurantName) {
+  if (!restaurantName || typeof restaurantName !== 'string') return false;
+  const normalized = restaurantName.toLowerCase().trim();
+  // Exact match
+  if (STANDARDIZED_PORTION_CHAINS.has(normalized)) return true;
+  // Partial match - check if any chain name is contained in the restaurant name
+  for (const chain of STANDARDIZED_PORTION_CHAINS) {
+    if (normalized.includes(chain) || chain.includes(normalized)) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract quantity from dish name for count-based items.
+ * E.g., "10 Piece Chicken Wings" -> 10, "12 count nuggets" -> 12
+ * Returns { quantity: number, cleanedName: string } or null if no quantity found.
+ */
+function extractDishQuantity(dishName) {
+  if (!dishName || typeof dishName !== 'string') return null;
+
+  // Patterns to match quantities in dish names
+  const patterns = [
+    // "10 piece", "10 pc", "10pc", "10-piece"
+    /(\d+)\s*[-]?\s*(?:piece|pc|pcs|pieces)/i,
+    // "10 count", "10 ct", "10ct"
+    /(\d+)\s*[-]?\s*(?:count|ct)/i,
+    // "10 wings", "10 nuggets", "10 tenders", etc.
+    /(\d+)\s*(?:wings?|nuggets?|tenders?|strips?|bites?|boneless)/i,
+    // Leading number like "10 Classic Wings"
+    /^(\d+)\s+(?!oz|inch|in\b|"|')/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = dishName.match(pattern);
+    if (match && match[1]) {
+      const qty = parseInt(match[1], 10);
+      // Reasonable count range (not sizes like "12 inch")
+      if (qty >= 2 && qty <= 50) {
+        // Clean the name by removing the quantity part for lookup
+        const cleanedName = dishName.replace(pattern, '').trim().replace(/^\s*[-,]\s*/, '');
+        return { quantity: qty, cleanedName: cleanedName || dishName };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if nutrition data looks like per-unit data that should be multiplied.
+ * E.g., single wing = 90 kcal, single nugget = 40 kcal
+ */
+function isLikelyPerUnitNutrition(calories, dishName) {
+  if (!calories || calories <= 0) return false;
+
+  const lower = dishName?.toLowerCase() || '';
+
+  // Per-unit items typically have low calories
+  // Wing: ~90 kcal, Nugget: ~40-50 kcal, Tender: ~100 kcal
+  if (calories < 200) {
+    if (lower.includes('wing') || lower.includes('nugget') ||
+        lower.includes('tender') || lower.includes('strip') ||
+        lower.includes('bite') || lower.includes('boneless')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ============================================================================
+// DISH NAME NORMALIZATION - Standardize queries for better database hit rates
+// ============================================================================
+
+/**
+ * Common dish name synonyms and abbreviations mapped to standard names.
+ * Format: { "abbreviation/slang": "Standard Database Name" }
+ */
+const DISH_NAME_SYNONYMS = {
+  // McDonald's
+  "qpc": "Quarter Pounder with Cheese",
+  "quarter pounder": "Quarter Pounder with Cheese",
+  "big mac meal": "Big Mac",
+  "mcnuggets": "Chicken McNuggets",
+  "nuggets": "Chicken McNuggets",
+  "10 pc nuggets": "10 Piece Chicken McNuggets",
+  "10pc nuggets": "10 Piece Chicken McNuggets",
+  "20 pc nuggets": "20 Piece Chicken McNuggets",
+  "20pc nuggets": "20 Piece Chicken McNuggets",
+  "mcd fries": "French Fries",
+  "mcflurry": "McFlurry",
+  "mcdouble": "McDouble",
+  "sausage mcmuffin": "Sausage McMuffin with Egg",
+  "egg mcmuffin": "Egg McMuffin",
+  "filet o fish": "Filet-O-Fish",
+  "filet-o-fish": "Filet-O-Fish",
+
+  // Burger King
+  "whopper jr": "Whopper Jr",
+  "whopper junior": "Whopper Jr",
+  "bk whopper": "Whopper",
+  "impossible whopper": "Impossible Whopper",
+  "chicken fries": "Chicken Fries",
+
+  // Wendy's
+  "baconator": "Baconator",
+  "jr bacon cheeseburger": "Jr Bacon Cheeseburger",
+  "dave's single": "Dave's Single",
+  "daves single": "Dave's Single",
+  "dave's double": "Dave's Double",
+  "daves double": "Dave's Double",
+  "frosty": "Chocolate Frosty",
+  "chocolate frosty": "Chocolate Frosty",
+  "vanilla frosty": "Vanilla Frosty",
+  "spicy nuggs": "Spicy Chicken Nuggets",
+
+  // Chick-fil-A
+  "cfa sandwich": "Chicken Sandwich",
+  "chick-fil-a sandwich": "Chicken Sandwich",
+  "chickfila sandwich": "Chicken Sandwich",
+  "cfa nuggets": "Chicken Nuggets",
+  "cfa fries": "Waffle Potato Fries",
+  "waffle fries": "Waffle Potato Fries",
+  "spicy deluxe": "Spicy Deluxe Sandwich",
+  "grilled nuggets": "Grilled Nuggets",
+
+  // Taco Bell
+  "crunchwrap": "Crunchwrap Supreme",
+  "cheesy gordita crunch": "Cheesy Gordita Crunch",
+  "cgc": "Cheesy Gordita Crunch",
+  "mexican pizza": "Mexican Pizza",
+  "chalupa": "Chalupa Supreme",
+  "quesarito": "Quesarito",
+  "nachos bellgrande": "Nachos BellGrande",
+  "nachos bell grande": "Nachos BellGrande",
+
+  // Chipotle
+  "burrito bowl": "Burrito Bowl",
+  "chicken bowl": "Chicken Burrito Bowl",
+  "steak bowl": "Steak Burrito Bowl",
+  "carnitas bowl": "Carnitas Burrito Bowl",
+  "barbacoa bowl": "Barbacoa Burrito Bowl",
+  "sofritas bowl": "Sofritas Burrito Bowl",
+  "chicken burrito": "Chicken Burrito",
+  "steak burrito": "Steak Burrito",
+
+  // Subway
+  "italian bmt": "Italian BMT",
+  "bmt": "Italian BMT",
+  "meatball sub": "Meatball Marinara",
+  "meatball marinara": "Meatball Marinara",
+  "turkey sub": "Turkey Breast",
+  "cold cut combo": "Cold Cut Combo",
+  "spicy italian": "Spicy Italian",
+  "steak and cheese": "Steak and Cheese",
+  "footlong": "12 inch",
+  "6 inch": "6 inch",
+  "six inch": "6 inch",
+
+  // KFC
+  "original recipe": "Original Recipe Chicken",
+  "extra crispy": "Extra Crispy Chicken",
+  "famous bowl": "Famous Bowl",
+  "popcorn chicken": "Popcorn Chicken",
+  "pot pie": "Chicken Pot Pie",
+
+  // Popeyes
+  "popeyes sandwich": "Chicken Sandwich",
+  "spicy chicken sandwich": "Spicy Chicken Sandwich",
+
+  // Starbucks
+  "psl": "Pumpkin Spice Latte",
+  "pumpkin spice latte": "Pumpkin Spice Latte",
+  "caramel frap": "Caramel Frappuccino",
+  "caramel frappuccino": "Caramel Frappuccino",
+  "mocha frap": "Mocha Frappuccino",
+  "java chip frap": "Java Chip Frappuccino",
+  "vanilla latte": "Vanilla Latte",
+  "iced coffee": "Iced Coffee",
+  "cold brew": "Cold Brew",
+  "pink drink": "Pink Drink",
+  "dragon drink": "Dragon Drink",
+  "refresher": "Refresher",
+
+  // Dunkin
+  "boston kreme": "Boston Kreme Donut",
+  "boston cream": "Boston Kreme Donut",
+  "glazed donut": "Glazed Donut",
+  "munchkins": "Munchkins",
+  "donut holes": "Munchkins",
+  "iced latte": "Iced Latte",
+  "hot latte": "Latte",
+
+  // Pizza
+  "pepperoni pizza": "Pepperoni Pizza",
+  "cheese pizza": "Cheese Pizza",
+  "meat lovers": "Meat Lovers Pizza",
+  "meat lover's": "Meat Lovers Pizza",
+  "supreme pizza": "Supreme Pizza",
+  "hawaiian pizza": "Hawaiian Pizza",
+  "bbq chicken pizza": "BBQ Chicken Pizza",
+  "stuffed crust": "Stuffed Crust Pizza",
+
+  // Panda Express
+  "orange chicken": "Orange Chicken",
+  "beijing beef": "Beijing Beef",
+  "kung pao chicken": "Kung Pao Chicken",
+  "broccoli beef": "Broccoli Beef",
+  "chow mein": "Chow Mein",
+  "fried rice": "Fried Rice",
+  "super greens": "Super Greens",
+
+  // Five Guys
+  "little burger": "Little Hamburger",
+  "little cheeseburger": "Little Cheeseburger",
+  "bacon burger": "Bacon Burger",
+  "bacon cheeseburger": "Bacon Cheeseburger",
+  "cajun fries": "Cajun Fries",
+  "regular fries": "Regular Fries",
+  "little fries": "Little Fries",
+
+  // In-N-Out
+  "double double": "Double-Double",
+  "double-double": "Double-Double",
+  "animal style": "Animal Style",
+  "protein style": "Protein Style",
+  "3x3": "3x3",
+  "4x4": "4x4",
+
+  // Shake Shack
+  "shack burger": "ShackBurger",
+  "shackburger": "ShackBurger",
+  "shack stack": "Shack Stack",
+  "smoke shack": "SmokeShack",
+  "shroom burger": "Shroom Burger",
+  "cheese fries": "Cheese Fries",
+  "crinkle fries": "Crinkle Cut Fries",
+
+  // Wingstop
+  "classic wings": "Classic Wings",
+  "boneless wings": "Boneless Wings",
+  "crispy tenders": "Crispy Tenders",
+
+  // Generic
+  "fries": "French Fries",
+  "onion rings": "Onion Rings",
+  "chicken tenders": "Chicken Tenders",
+  "chicken strips": "Chicken Strips",
+  "chicken fingers": "Chicken Fingers",
+  "mozzarella sticks": "Mozzarella Sticks",
+  "mozz sticks": "Mozzarella Sticks",
+  "loaded fries": "Loaded Fries",
+  "curly fries": "Curly Fries",
+  "sweet potato fries": "Sweet Potato Fries",
+  "side salad": "Side Salad",
+  "caesar salad": "Caesar Salad",
+  "garden salad": "Garden Salad",
+  "cole slaw": "Coleslaw",
+  "coleslaw": "Coleslaw",
+  "mac and cheese": "Mac and Cheese",
+  "mac n cheese": "Mac and Cheese",
+  "mashed potatoes": "Mashed Potatoes",
+  "biscuit": "Biscuit",
+  "corn on the cob": "Corn on the Cob",
+  "green beans": "Green Beans"
+};
+
+/**
+ * Normalize a dish name for better database matching.
+ * Handles abbreviations, common misspellings, and format variations.
+ * @param {string} dishName - Original dish name
+ * @param {string} restaurantName - Restaurant name for context
+ * @returns {string} Normalized dish name
+ */
+function normalizeDishName(dishName, restaurantName) {
+  if (!dishName || typeof dishName !== 'string') return dishName;
+
+  let normalized = dishName.trim();
+  const lowerName = normalized.toLowerCase();
+  const lowerRestaurant = (restaurantName || '').toLowerCase();
+
+  // Check synonym map first
+  if (DISH_NAME_SYNONYMS[lowerName]) {
+    normalized = DISH_NAME_SYNONYMS[lowerName];
+  }
+
+  // Restaurant-specific normalizations
+  if (lowerRestaurant.includes('mcdonald')) {
+    // McDonald's specific
+    if (lowerName.includes('nugget') && !lowerName.includes('mcnugget')) {
+      normalized = normalized.replace(/nuggets?/i, 'Chicken McNuggets');
+    }
+    if (lowerName.includes('fries') && !lowerName.includes('french')) {
+      normalized = normalized.replace(/fries/i, 'French Fries');
+    }
+  }
+
+  if (lowerRestaurant.includes('chick-fil-a') || lowerRestaurant.includes('chickfila')) {
+    if (lowerName === 'sandwich' || lowerName === 'chicken sandwich') {
+      normalized = 'Chicken Sandwich';
+    }
+    if (lowerName.includes('fries') && !lowerName.includes('waffle')) {
+      normalized = normalized.replace(/fries/i, 'Waffle Potato Fries');
+    }
+  }
+
+  if (lowerRestaurant.includes('subway')) {
+    // Normalize size indicators
+    if (lowerName.includes('footlong') || lowerName.includes('foot long') || lowerName.includes('12"') || lowerName.includes('12 inch')) {
+      normalized = normalized.replace(/footlong|foot long|12"|12 inch/gi, '12 inch').trim();
+    }
+    if (lowerName.includes('6"') || lowerName.includes('6 inch') || lowerName.includes('six inch')) {
+      normalized = normalized.replace(/6"|six inch/gi, '6 inch').trim();
+    }
+  }
+
+  if (lowerRestaurant.includes('starbucks')) {
+    // Normalize sizes
+    normalized = normalized
+      .replace(/\btall\b/gi, 'Tall')
+      .replace(/\bgrande\b/gi, 'Grande')
+      .replace(/\bventi\b/gi, 'Venti')
+      .replace(/\btrenta\b/gi, 'Trenta');
+  }
+
+  // Generic normalizations
+  // Standardize "piece" variants
+  normalized = normalized
+    .replace(/(\d+)\s*pc\b/gi, '$1 Piece')
+    .replace(/(\d+)\s*pcs\b/gi, '$1 Piece')
+    .replace(/(\d+)\s*pieces?\b/gi, '$1 Piece');
+
+  // Standardize "count" variants
+  normalized = normalized
+    .replace(/(\d+)\s*ct\b/gi, '$1 count')
+    .replace(/(\d+)\s*count\b/gi, '$1 count');
+
+  return normalized;
+}
+
+// ============================================================================
+// VERIFIED RESTAURANT NUTRITION TABLE - Official nutrition data from restaurants
+// ============================================================================
+
+/**
+ * Verified nutrition data from official restaurant sources.
+ * Format: "restaurant|dish" -> { energyKcal, protein_g, fat_g, carbs_g, ... }
+ * This data is from official restaurant nutrition PDFs/websites.
+ */
+const VERIFIED_RESTAURANT_NUTRITION = {
+  // McDonald's (source: mcdonalds.com/us/en-us/about-our-food/nutrition-calculator.html)
+  "mcdonald's|quarter pounder with cheese": { energyKcal: 520, protein_g: 30, fat_g: 26, carbs_g: 42, sodium_mg: 1140 },
+  "mcdonald's|big mac": { energyKcal: 590, protein_g: 25, fat_g: 34, carbs_g: 46, sodium_mg: 1050 },
+  "mcdonald's|mcchicken": { energyKcal: 400, protein_g: 14, fat_g: 21, carbs_g: 40, sodium_mg: 560 },
+  "mcdonald's|filet-o-fish": { energyKcal: 390, protein_g: 16, fat_g: 19, carbs_g: 39, sodium_mg: 580 },
+  "mcdonald's|egg mcmuffin": { energyKcal: 310, protein_g: 17, fat_g: 13, carbs_g: 30, sodium_mg: 770 },
+  "mcdonald's|sausage mcmuffin with egg": { energyKcal: 480, protein_g: 21, fat_g: 31, carbs_g: 29, sodium_mg: 900 },
+  "mcdonald's|10 piece chicken mcnuggets": { energyKcal: 410, protein_g: 25, fat_g: 24, carbs_g: 25, sodium_mg: 900 },
+  "mcdonald's|20 piece chicken mcnuggets": { energyKcal: 830, protein_g: 49, fat_g: 49, carbs_g: 51, sodium_mg: 1800 },
+  "mcdonald's|large french fries": { energyKcal: 480, protein_g: 7, fat_g: 23, carbs_g: 64, sodium_mg: 400 },
+  "mcdonald's|medium french fries": { energyKcal: 320, protein_g: 5, fat_g: 15, carbs_g: 43, sodium_mg: 260 },
+  "mcdonald's|small french fries": { energyKcal: 220, protein_g: 3, fat_g: 10, carbs_g: 29, sodium_mg: 180 },
+  "mcdonald's|double quarter pounder with cheese": { energyKcal: 740, protein_g: 48, fat_g: 42, carbs_g: 43, sodium_mg: 1360 },
+  "mcdonald's|mcdouble": { energyKcal: 400, protein_g: 22, fat_g: 20, carbs_g: 33, sodium_mg: 920 },
+
+  // Burger King (source: bk.com/nutrition)
+  "burger king|whopper": { energyKcal: 660, protein_g: 28, fat_g: 40, carbs_g: 49, sodium_mg: 980 },
+  "burger king|whopper with cheese": { energyKcal: 740, protein_g: 32, fat_g: 46, carbs_g: 50, sodium_mg: 1310 },
+  "burger king|double whopper": { energyKcal: 900, protein_g: 48, fat_g: 56, carbs_g: 49, sodium_mg: 1050 },
+  "burger king|whopper jr": { energyKcal: 310, protein_g: 13, fat_g: 18, carbs_g: 27, sodium_mg: 390 },
+  "burger king|bacon king": { energyKcal: 1150, protein_g: 61, fat_g: 79, carbs_g: 49, sodium_mg: 2150 },
+  "burger king|original chicken sandwich": { energyKcal: 660, protein_g: 28, fat_g: 40, carbs_g: 48, sodium_mg: 1170 },
+  "burger king|chicken fries 9 piece": { energyKcal: 280, protein_g: 13, fat_g: 17, carbs_g: 20, sodium_mg: 780 },
+
+  // Wendy's (source: wendys.com/nutrition)
+  "wendy's|baconator": { energyKcal: 950, protein_g: 57, fat_g: 63, carbs_g: 38, sodium_mg: 1800 },
+  "wendy's|dave's single": { energyKcal: 590, protein_g: 30, fat_g: 34, carbs_g: 41, sodium_mg: 1180 },
+  "wendy's|dave's double": { energyKcal: 850, protein_g: 49, fat_g: 53, carbs_g: 42, sodium_mg: 1460 },
+  "wendy's|jr bacon cheeseburger": { energyKcal: 380, protein_g: 18, fat_g: 22, carbs_g: 27, sodium_mg: 730 },
+  "wendy's|spicy chicken sandwich": { energyKcal: 500, protein_g: 30, fat_g: 22, carbs_g: 47, sodium_mg: 1280 },
+  "wendy's|medium chocolate frosty": { energyKcal: 460, protein_g: 11, fat_g: 12, carbs_g: 77, sodium_mg: 260 },
+  "wendy's|small chocolate frosty": { energyKcal: 350, protein_g: 9, fat_g: 9, carbs_g: 58, sodium_mg: 200 },
+  "wendy's|10 piece nuggets": { energyKcal: 470, protein_g: 22, fat_g: 30, carbs_g: 28, sodium_mg: 1050 },
+
+  // Chick-fil-A (source: chick-fil-a.com/nutrition-allergens)
+  "chick-fil-a|chicken sandwich": { energyKcal: 440, protein_g: 28, fat_g: 18, carbs_g: 40, sodium_mg: 1350 },
+  "chick-fil-a|spicy chicken sandwich": { energyKcal: 450, protein_g: 28, fat_g: 19, carbs_g: 41, sodium_mg: 1620 },
+  "chick-fil-a|spicy deluxe sandwich": { energyKcal: 550, protein_g: 33, fat_g: 24, carbs_g: 48, sodium_mg: 1750 },
+  "chick-fil-a|grilled chicken sandwich": { energyKcal: 320, protein_g: 28, fat_g: 6, carbs_g: 41, sodium_mg: 800 },
+  "chick-fil-a|8 count nuggets": { energyKcal: 250, protein_g: 27, fat_g: 11, carbs_g: 11, sodium_mg: 1080 },
+  "chick-fil-a|nuggets 8 count": { energyKcal: 250, protein_g: 27, fat_g: 11, carbs_g: 11, sodium_mg: 1080 },
+  "chick-fil-a|8 piece nuggets": { energyKcal: 250, protein_g: 27, fat_g: 11, carbs_g: 11, sodium_mg: 1080 },
+  "chick-fil-a|12 count nuggets": { energyKcal: 380, protein_g: 40, fat_g: 17, carbs_g: 16, sodium_mg: 1620 },
+  "chick-fil-a|nuggets 12 count": { energyKcal: 380, protein_g: 40, fat_g: 17, carbs_g: 16, sodium_mg: 1620 },
+  "chick-fil-a|12 piece nuggets": { energyKcal: 380, protein_g: 40, fat_g: 17, carbs_g: 16, sodium_mg: 1620 },
+  "chick-fil-a|medium waffle fries": { energyKcal: 420, protein_g: 5, fat_g: 24, carbs_g: 45, sodium_mg: 240 },
+  "chick-fil-a|large waffle fries": { energyKcal: 520, protein_g: 7, fat_g: 29, carbs_g: 56, sodium_mg: 300 },
+
+  // Taco Bell (source: tacobell.com/nutrition)
+  "taco bell|crunchwrap supreme": { energyKcal: 530, protein_g: 16, fat_g: 21, carbs_g: 71, sodium_mg: 1200 },
+  "taco bell|mexican pizza": { energyKcal: 540, protein_g: 20, fat_g: 30, carbs_g: 46, sodium_mg: 1030 },
+  "taco bell|cheesy gordita crunch": { energyKcal: 500, protein_g: 20, fat_g: 28, carbs_g: 41, sodium_mg: 800 },
+  "taco bell|chalupa supreme beef": { energyKcal: 350, protein_g: 13, fat_g: 21, carbs_g: 30, sodium_mg: 570 },
+  "taco bell|nachos bellgrande": { energyKcal: 740, protein_g: 16, fat_g: 38, carbs_g: 82, sodium_mg: 1050 },
+  "taco bell|chicken quesadilla": { energyKcal: 510, protein_g: 27, fat_g: 26, carbs_g: 40, sodium_mg: 1250 },
+  "taco bell|beef burrito": { energyKcal: 430, protein_g: 18, fat_g: 18, carbs_g: 51, sodium_mg: 1160 },
+  "taco bell|crunchy taco": { energyKcal: 170, protein_g: 8, fat_g: 9, carbs_g: 13, sodium_mg: 310 },
+  "taco bell|soft taco": { energyKcal: 180, protein_g: 9, fat_g: 9, carbs_g: 17, sodium_mg: 500 },
+
+  // Chipotle (source: chipotle.com/nutrition-calculator)
+  "chipotle|chicken burrito": { energyKcal: 1030, protein_g: 53, fat_g: 37, carbs_g: 117, sodium_mg: 2400 },
+  "chipotle|steak burrito": { energyKcal: 1000, protein_g: 50, fat_g: 36, carbs_g: 117, sodium_mg: 2500 },
+  "chipotle|carnitas burrito": { energyKcal: 1050, protein_g: 47, fat_g: 42, carbs_g: 117, sodium_mg: 2570 },
+  "chipotle|chicken burrito bowl": { energyKcal: 740, protein_g: 50, fat_g: 26, carbs_g: 77, sodium_mg: 1880 },
+  "chipotle|burrito bowl with chicken": { energyKcal: 740, protein_g: 50, fat_g: 26, carbs_g: 77, sodium_mg: 1880 },
+  "chipotle|steak burrito bowl": { energyKcal: 710, protein_g: 47, fat_g: 25, carbs_g: 77, sodium_mg: 1980 },
+  "chipotle|burrito bowl with steak": { energyKcal: 710, protein_g: 47, fat_g: 25, carbs_g: 77, sodium_mg: 1980 },
+  "chipotle|chicken tacos": { energyKcal: 565, protein_g: 32, fat_g: 14, carbs_g: 75, sodium_mg: 920 },
+  "chipotle|chips and guacamole": { energyKcal: 770, protein_g: 8, fat_g: 47, carbs_g: 81, sodium_mg: 600 },
+
+  // Popeyes (source: popeyes.com/nutrition)
+  "popeyes|chicken sandwich": { energyKcal: 700, protein_g: 28, fat_g: 42, carbs_g: 50, sodium_mg: 1440 },
+  "popeyes|spicy chicken sandwich": { energyKcal: 700, protein_g: 28, fat_g: 42, carbs_g: 50, sodium_mg: 1700 },
+  "popeyes|3 piece chicken tenders": { energyKcal: 340, protein_g: 26, fat_g: 14, carbs_g: 26, sodium_mg: 1210 },
+  "popeyes|5 piece chicken tenders": { energyKcal: 570, protein_g: 43, fat_g: 24, carbs_g: 43, sodium_mg: 2020 },
+
+  // KFC (source: kfc.com/nutrition)
+  "kfc|original recipe chicken breast": { energyKcal: 390, protein_g: 39, fat_g: 21, carbs_g: 11, sodium_mg: 1190 },
+  "kfc|original recipe chicken thigh": { energyKcal: 280, protein_g: 19, fat_g: 19, carbs_g: 8, sodium_mg: 740 },
+  "kfc|extra crispy chicken breast": { energyKcal: 490, protein_g: 34, fat_g: 29, carbs_g: 19, sodium_mg: 1190 },
+  "kfc|famous bowl": { energyKcal: 720, protein_g: 26, fat_g: 34, carbs_g: 77, sodium_mg: 2170 },
+  "kfc|mashed potatoes with gravy": { energyKcal: 130, protein_g: 2, fat_g: 5, carbs_g: 19, sodium_mg: 520 },
+  "kfc|coleslaw": { energyKcal: 170, protein_g: 1, fat_g: 12, carbs_g: 14, sodium_mg: 180 },
+
+  // Subway (source: subway.com/nutrition) - 6 inch
+  "subway|6 inch turkey breast": { energyKcal: 280, protein_g: 18, fat_g: 4, carbs_g: 42, sodium_mg: 660 },
+  "subway|6 inch italian bmt": { energyKcal: 400, protein_g: 17, fat_g: 17, carbs_g: 44, sodium_mg: 1260 },
+  "subway|6 inch meatball marinara": { energyKcal: 480, protein_g: 22, fat_g: 20, carbs_g: 54, sodium_mg: 1140 },
+  "subway|6 inch steak and cheese": { energyKcal: 380, protein_g: 24, fat_g: 12, carbs_g: 44, sodium_mg: 880 },
+  "subway|6 inch cold cut combo": { energyKcal: 360, protein_g: 14, fat_g: 14, carbs_g: 44, sodium_mg: 1080 },
+  "subway|footlong turkey breast": { energyKcal: 560, protein_g: 36, fat_g: 8, carbs_g: 84, sodium_mg: 1320 },
+  "subway|footlong italian bmt": { energyKcal: 800, protein_g: 34, fat_g: 34, carbs_g: 88, sodium_mg: 2520 },
+  "subway|12 inch italian bmt": { energyKcal: 800, protein_g: 34, fat_g: 34, carbs_g: 88, sodium_mg: 2520 },
+  "subway|italian bmt 12 inch": { energyKcal: 800, protein_g: 34, fat_g: 34, carbs_g: 88, sodium_mg: 2520 },
+  "subway|subway italian bmt 12 inch": { energyKcal: 800, protein_g: 34, fat_g: 34, carbs_g: 88, sodium_mg: 2520 },
+
+  // Starbucks (source: starbucks.com/menu/nutrition)
+  "starbucks|grande caramel frappuccino": { energyKcal: 380, protein_g: 5, fat_g: 16, carbs_g: 54, sodium_mg: 240 },
+  "starbucks|grande mocha frappuccino": { energyKcal: 370, protein_g: 6, fat_g: 15, carbs_g: 52, sodium_mg: 230 },
+  "starbucks|grande vanilla latte": { energyKcal: 250, protein_g: 12, fat_g: 6, carbs_g: 37, sodium_mg: 150 },
+  "starbucks|grande latte": { energyKcal: 190, protein_g: 13, fat_g: 7, carbs_g: 18, sodium_mg: 170 },
+  "starbucks|grande pike place": { energyKcal: 5, protein_g: 1, fat_g: 0, carbs_g: 0, sodium_mg: 10 },
+  "starbucks|grande cold brew": { energyKcal: 5, protein_g: 0, fat_g: 0, carbs_g: 0, sodium_mg: 15 },
+
+  // Dunkin (source: dunkindonuts.com/nutrition)
+  "dunkin|glazed donut": { energyKcal: 240, protein_g: 4, fat_g: 11, carbs_g: 31, sodium_mg: 340 },
+  "dunkin|boston kreme donut": { energyKcal: 300, protein_g: 4, fat_g: 15, carbs_g: 38, sodium_mg: 370 },
+  "dunkin|chocolate frosted donut": { energyKcal: 260, protein_g: 4, fat_g: 12, carbs_g: 34, sodium_mg: 340 },
+  "dunkin|medium iced coffee": { energyKcal: 260, protein_g: 2, fat_g: 9, carbs_g: 43, sodium_mg: 75 },
+  "dunkin|medium hot latte": { energyKcal: 120, protein_g: 10, fat_g: 0, carbs_g: 15, sodium_mg: 160 },
+  "dunkin|bacon egg cheese croissant": { energyKcal: 540, protein_g: 20, fat_g: 34, carbs_g: 38, sodium_mg: 1010 },
+
+  // Pizza (Domino's - source: dominos.com/nutrition)
+  "domino's|large pepperoni pizza slice": { energyKcal: 300, protein_g: 12, fat_g: 13, carbs_g: 34, sodium_mg: 680 },
+  "domino's|large cheese pizza slice": { energyKcal: 270, protein_g: 11, fat_g: 10, carbs_g: 35, sodium_mg: 580 },
+  "domino's|medium pepperoni pizza slice": { energyKcal: 200, protein_g: 9, fat_g: 9, carbs_g: 23, sodium_mg: 450 },
+
+  // Pizza Hut (source: pizzahut.com/nutrition)
+  "pizza hut|large pepperoni pizza slice": { energyKcal: 300, protein_g: 13, fat_g: 14, carbs_g: 30, sodium_mg: 680 },
+  "pizza hut|large cheese pizza slice": { energyKcal: 260, protein_g: 12, fat_g: 10, carbs_g: 30, sodium_mg: 560 },
+  "pizza hut|stuffed crust pizza slice": { energyKcal: 380, protein_g: 16, fat_g: 17, carbs_g: 38, sodium_mg: 830 },
+
+  // Panda Express (source: pandaexpress.com/nutrition)
+  "panda express|orange chicken": { energyKcal: 490, protein_g: 25, fat_g: 23, carbs_g: 44, sodium_mg: 820 },
+  "panda express|beijing beef": { energyKcal: 470, protein_g: 14, fat_g: 26, carbs_g: 46, sodium_mg: 660 },
+  "panda express|kung pao chicken": { energyKcal: 290, protein_g: 16, fat_g: 19, carbs_g: 13, sodium_mg: 970 },
+  "panda express|broccoli beef": { energyKcal: 150, protein_g: 9, fat_g: 7, carbs_g: 13, sodium_mg: 520 },
+  "panda express|chow mein": { energyKcal: 510, protein_g: 13, fat_g: 22, carbs_g: 65, sodium_mg: 980 },
+  "panda express|fried rice": { energyKcal: 520, protein_g: 11, fat_g: 16, carbs_g: 85, sodium_mg: 850 },
+
+  // Five Guys (source: fiveguys.com/nutrition)
+  "five guys|hamburger": { energyKcal: 700, protein_g: 39, fat_g: 43, carbs_g: 39, sodium_mg: 430 },
+  "five guys|cheeseburger": { energyKcal: 840, protein_g: 47, fat_g: 55, carbs_g: 40, sodium_mg: 1050 },
+  "five guys|bacon cheeseburger": { energyKcal: 920, protein_g: 51, fat_g: 62, carbs_g: 40, sodium_mg: 1310 },
+  "five guys|little hamburger": { energyKcal: 480, protein_g: 23, fat_g: 26, carbs_g: 39, sodium_mg: 380 },
+  "five guys|regular fries": { energyKcal: 953, protein_g: 15, fat_g: 41, carbs_g: 131, sodium_mg: 962 },
+  "five guys|little fries": { energyKcal: 526, protein_g: 8, fat_g: 23, carbs_g: 72, sodium_mg: 531 },
+
+  // In-N-Out (source: in-n-out.com/nutrition)
+  "in-n-out|double-double": { energyKcal: 670, protein_g: 37, fat_g: 41, carbs_g: 39, sodium_mg: 1440 },
+  "in-n-out|cheeseburger": { energyKcal: 480, protein_g: 22, fat_g: 27, carbs_g: 39, sodium_mg: 1000 },
+  "in-n-out|hamburger": { energyKcal: 390, protein_g: 16, fat_g: 19, carbs_g: 39, sodium_mg: 650 },
+  "in-n-out|french fries": { energyKcal: 395, protein_g: 7, fat_g: 18, carbs_g: 54, sodium_mg: 245 },
+
+  // Shake Shack (source: shakeshack.com/nutrition)
+  "shake shack|shackburger": { energyKcal: 530, protein_g: 28, fat_g: 33, carbs_g: 27, sodium_mg: 1250 },
+  "shake shack|shack stack": { energyKcal: 810, protein_g: 32, fat_g: 52, carbs_g: 51, sodium_mg: 1710 },
+  "shake shack|smokeshack": { energyKcal: 610, protein_g: 30, fat_g: 39, carbs_g: 29, sodium_mg: 1510 },
+  "shake shack|crinkle cut fries": { energyKcal: 470, protein_g: 6, fat_g: 20, carbs_g: 67, sodium_mg: 920 },
+  "shake shack|cheese fries": { energyKcal: 630, protein_g: 16, fat_g: 33, carbs_g: 68, sodium_mg: 1500 },
+
+  // Panera (source: panerabread.com/nutrition)
+  "panera|broccoli cheddar soup cup": { energyKcal: 230, protein_g: 9, fat_g: 14, carbs_g: 18, sodium_mg: 960 },
+  "panera|broccoli cheddar soup bowl": { energyKcal: 350, protein_g: 14, fat_g: 21, carbs_g: 27, sodium_mg: 1440 },
+  "panera|turkey sandwich": { energyKcal: 630, protein_g: 41, fat_g: 17, carbs_g: 79, sodium_mg: 1630 },
+  "panera|mac and cheese": { energyKcal: 980, protein_g: 35, fat_g: 49, carbs_g: 98, sodium_mg: 1990 },
+
+  // Dairy Queen (source: dairyqueen.com/nutrition)
+  "dairy queen|medium oreo blizzard": { energyKcal: 780, protein_g: 15, fat_g: 30, carbs_g: 113, sodium_mg: 440 },
+  "dairy queen|small oreo blizzard": { energyKcal: 570, protein_g: 11, fat_g: 21, carbs_g: 83, sodium_mg: 320 },
+  "dairy queen|large oreo blizzard": { energyKcal: 1140, protein_g: 22, fat_g: 44, carbs_g: 166, sodium_mg: 640 },
+
+  // Arby's (source: arbys.com/nutrition)
+  "arby's|beef and cheddar classic": { energyKcal: 450, protein_g: 22, fat_g: 20, carbs_g: 45, sodium_mg: 1310 },
+  "arby's|roast beef classic": { energyKcal: 360, protein_g: 23, fat_g: 14, carbs_g: 37, sodium_mg: 970 },
+  "arby's|curly fries small": { energyKcal: 250, protein_g: 3, fat_g: 13, carbs_g: 30, sodium_mg: 640 },
+  "arby's|curly fries medium": { energyKcal: 410, protein_g: 5, fat_g: 22, carbs_g: 49, sodium_mg: 1030 },
+
+  // IHOP (source: ihop.com/nutrition)
+  "ihop|buttermilk pancakes short stack": { energyKcal: 450, protein_g: 12, fat_g: 14, carbs_g: 72, sodium_mg: 1420 },
+  "ihop|buttermilk pancakes full stack": { energyKcal: 680, protein_g: 17, fat_g: 20, carbs_g: 108, sodium_mg: 2130 },
+
+  // Sonic (source: sonicdrivein.com/nutrition)
+  "sonic|double cheeseburger": { energyKcal: 710, protein_g: 35, fat_g: 42, carbs_g: 47, sodium_mg: 1200 },
+  "sonic|jr burger": { energyKcal: 330, protein_g: 14, fat_g: 17, carbs_g: 30, sodium_mg: 550 },
+  "sonic|medium tots": { energyKcal: 360, protein_g: 3, fat_g: 22, carbs_g: 38, sodium_mg: 680 },
+
+  // Wingstop (source: wingstop.com/nutrition)
+  "wingstop|10 piece classic wings": { energyKcal: 870, protein_g: 66, fat_g: 60, carbs_g: 12, sodium_mg: 1860 },
+  "wingstop|10 piece boneless wings": { energyKcal: 1050, protein_g: 52, fat_g: 58, carbs_g: 78, sodium_mg: 2580 },
+
+  // Casual Dining
+  "outback steakhouse|bloomin onion": { energyKcal: 1950, protein_g: 18, fat_g: 155, carbs_g: 123, sodium_mg: 3840 },
+  "olive garden|chicken alfredo": { energyKcal: 1570, protein_g: 71, fat_g: 88, carbs_g: 117, sodium_mg: 2170 },
+  "applebee's|classic burger": { energyKcal: 1020, protein_g: 52, fat_g: 64, carbs_g: 57, sodium_mg: 2190 },
+  "chili's|original ribs full rack": { energyKcal: 1660, protein_g: 105, fat_g: 104, carbs_g: 64, sodium_mg: 4340 },
+  "chili's|original ribs half rack": { energyKcal: 830, protein_g: 52, fat_g: 52, carbs_g: 32, sodium_mg: 2170 },
+  "cheesecake factory|original cheesecake": { energyKcal: 830, protein_g: 11, fat_g: 59, carbs_g: 62, sodium_mg: 570 }
+};
+
+/**
+ * Look up verified restaurant nutrition data.
+ * @param {string} restaurantName - Restaurant name
+ * @param {string} dishName - Dish name
+ * @returns {Object|null} Nutrition data or null if not found
+ */
+function getVerifiedNutrition(restaurantName, dishName) {
+  if (!restaurantName || !dishName) return null;
+
+  const normalizedRestaurant = restaurantName.toLowerCase().trim()
+    .replace(/['']s?$/g, "'s")  // Normalize apostrophes
+    .replace(/\s+/g, ' ');
+  const normalizedDish = dishName.toLowerCase().trim();
+
+  // Try exact match first
+  const key = `${normalizedRestaurant}|${normalizedDish}`;
+  if (VERIFIED_RESTAURANT_NUTRITION[key]) {
+    return { ...VERIFIED_RESTAURANT_NUTRITION[key], source: 'verified_official' };
+  }
+
+  // Track best match (longest dish name match wins)
+  let bestMatch = null;
+  let bestMatchLength = 0;
+
+  // Try partial restaurant name matches
+  for (const [k, v] of Object.entries(VERIFIED_RESTAURANT_NUTRITION)) {
+    const [restaurant, dish] = k.split('|');
+
+    // Check if restaurant name contains or is contained by the query
+    const restaurantMatch = normalizedRestaurant.includes(restaurant) ||
+                           restaurant.includes(normalizedRestaurant.split(' ')[0]);
+
+    if (restaurantMatch) {
+      // Check dish match - prefer exact, then longest matching
+      const dishNoSpace = normalizedDish.replace(/\s+/g, '');
+      const keyDishNoSpace = dish.replace(/\s+/g, '');
+
+      // Exact match
+      if (normalizedDish === dish) {
+        return { ...v, source: 'verified_official', matched_key: k };
+      }
+
+      // Check if dishes match (ignoring spaces) - must be substantial match
+      if (dishNoSpace === keyDishNoSpace) {
+        return { ...v, source: 'verified_official', matched_key: k };
+      }
+
+      // Partial match - query contains the key dish name
+      if (normalizedDish.includes(dish) && dish.length > bestMatchLength) {
+        bestMatch = { ...v, source: 'verified_official', matched_key: k };
+        bestMatchLength = dish.length;
+      }
+
+      // Partial match - key dish contains query
+      if (dish.includes(normalizedDish) && normalizedDish.length > 3 && normalizedDish.length > bestMatchLength) {
+        bestMatch = { ...v, source: 'verified_official', matched_key: k };
+        bestMatchLength = normalizedDish.length;
+      }
+    }
+  }
+
+  return bestMatch;
+}
 
 const DIET_TITLE_KEYWORDS = [
   "lighter",
@@ -17851,9 +18544,20 @@ const _worker_impl = {
             } catch (e) { /* ignore cache errors */ }
           }
 
-          // Validate cached result has organ data (required for tracker functionality)
-          // Old cached analyses may not have organs - treat as uncached to re-analyze
-          const isCacheValid = cached?.ok && cached?.organs && Array.isArray(cached.organs.organs) && cached.organs.organs.length > 0;
+          // Validate cached result has core analysis data (allergens, nutrition, or description)
+          // Return cached results for instant display even if organs are pending
+          // The frontend can poll for organs separately if needed
+          const hasBasicData = cached?.ok && (
+            cached?.allergen_flags?.length > 0 ||
+            cached?.nutrition_summary ||
+            cached?.generated_description
+          );
+
+          // Also check if organs are complete (for full cache hit)
+          const hasOrgans = cached?.organs && Array.isArray(cached.organs.organs) && cached.organs.organs.length > 0;
+
+          // Use cache if it has basic analysis data - organs can be pending
+          const isCacheValid = hasBasicData;
 
           const jobId = generateJobId();
           jobs.push({
@@ -17861,7 +18565,9 @@ const _worker_impl = {
             dishName,
             payload,
             cached: isCacheValid ? true : false,
-            cachedResult: isCacheValid ? cached : null
+            cachedResult: isCacheValid ? cached : null,
+            // Flag to indicate if organs need to be fetched
+            needsOrgans: hasBasicData && !hasOrgans
           });
         }
 
@@ -17950,7 +18656,9 @@ const _worker_impl = {
               jobId: j.jobId,
               dishName: j.dishName,
               status: j.cached ? "cached" : "pending",
-              result: j.cachedResult || null
+              result: j.cachedResult || null,
+              // Flag if organs need to be fetched for cached results
+              needsOrgans: j.needsOrgans || false
             }))
           }),
           { status: 202, headers: { "Content-Type": "application/json", ...CORS_ALL } }
@@ -28349,17 +29057,210 @@ async function runDishAnalysis(env, body, ctx) {
   devFlag =
     devFlag || recipeResult?.devFlag || recipeResult?.out?.devFlag || false;
 
-  const nutritionSummaryFromRecipe =
-    (recipeResult && recipeResult.out && recipeResult.out.nutrition_summary) ||
-    recipeResult.nutrition_summary ||
-    null;
-  let finalNutritionSummary = nutritionSummaryFromRecipe || null;
+  let finalNutritionSummary = null;
   let nutrition_source = null;
 
-  if (recipeResult?.out?.nutrition_summary) {
-    nutrition_source = "recipe_out";
-  } else if (recipeResult?.nutrition_summary) {
-    nutrition_source = "recipe_legacy";
+  // PRIORITY PATH: For standardized portion chains (fast food), try USDA FIRST with brand name.
+  // USDA has exact per-item nutrition for commercial products like "McDONALD'S, Quarter Pounder".
+  // This is more accurate than Edamam recipes which return total recipe nutrition for homemade versions.
+  const isStandardizedChainForNutrition = isStandardizedPortionChain(restaurantName);
+
+  // Debug: Track if we're attempting USDA branded lookup
+  debug.usda_branded_chain_check = isStandardizedChainForNutrition;
+  debug.usda_branded_restaurant = restaurantName;
+  debug.usda_branded_dish = dishName;
+
+  // STEP 1: Normalize dish name for better database matching
+  const normalizedDishName = normalizeDishName(dishName, restaurantName);
+  if (normalizedDishName !== dishName) {
+    debug.dish_name_normalized = normalizedDishName;
+    debug.dish_name_original = dishName;
+  }
+
+  // STEP 2: Check verified restaurant nutrition table FIRST (highest priority)
+  // This is official data from restaurant websites - most accurate source
+  const verifiedNutrition = getVerifiedNutrition(restaurantName, normalizedDishName);
+  if (verifiedNutrition && verifiedNutrition.energyKcal > 0) {
+    finalNutritionSummary = {
+      energyKcal: verifiedNutrition.energyKcal,
+      protein_g: verifiedNutrition.protein_g || null,
+      fat_g: verifiedNutrition.fat_g || null,
+      carbs_g: verifiedNutrition.carbs_g || null,
+      sugar_g: verifiedNutrition.sugar_g || null,
+      fiber_g: verifiedNutrition.fiber_g || null,
+      sodium_mg: verifiedNutrition.sodium_mg || null
+    };
+    nutrition_source = "verified_official";
+    debug.verified_nutrition_hit = true;
+    debug.verified_nutrition_key = verifiedNutrition.matched_key || `${restaurantName}|${normalizedDishName}`;
+    debug.verified_nutrition_kcal = verifiedNutrition.energyKcal;
+  }
+
+  // STEP 3: For standardized chains without verified data, try USDA and FatSecret in parallel
+  // This gives us the most accurate data since different sources excel for different items
+  if (!finalNutritionSummary && isStandardizedChainForNutrition && normalizedDishName) {
+    let usdaResult = null;
+    let fatsecretResult = null;
+
+    // Run USDA and FatSecret lookups in parallel for speed
+    // Use normalized dish name for better matching
+    const brandedQuery = `${restaurantName} ${normalizedDishName}`;
+    debug.usda_branded_query = brandedQuery;
+    debug.fatsecret_text_query = brandedQuery;
+
+    const [usdaPromise, fatsecretPromise] = await Promise.allSettled([
+      (async () => {
+        let hit = await callUSDAFDC(env, brandedQuery);
+        // If branded query fails, try normalized dish name only
+        const kcal = hit?.nutrients?.energyKcal;
+        if (!hit || !kcal || kcal < 100) {
+          const dishOnlyHit = await callUSDAFDC(env, normalizedDishName);
+          if (dishOnlyHit?.nutrients?.energyKcal > (kcal || 0)) {
+            hit = dishOnlyHit;
+            debug.usda_used_dish_only = true;
+          }
+        }
+        return hit;
+      })(),
+      fetchComponentNutrition(env, brandedQuery, 1)
+    ]);
+
+    if (usdaPromise.status === 'fulfilled' && usdaPromise.value?.nutrients?.energyKcal > 50) {
+      usdaResult = usdaPromise.value;
+      debug.usda_branded_hit = true;
+      debug.usda_branded_fdcId = usdaResult.fdcId;
+      debug.usda_branded_description = usdaResult.description;
+      debug.usda_branded_energyKcal = usdaResult.nutrients.energyKcal;
+    } else {
+      debug.usda_branded_hit = false;
+    }
+
+    if (fatsecretPromise.status === 'fulfilled' && fatsecretPromise.value?.energyKcal > 50) {
+      fatsecretResult = fatsecretPromise.value;
+      debug.fatsecret_text_hit = true;
+      debug.fatsecret_food_name = fatsecretResult.food_name;
+      debug.fatsecret_energyKcal = fatsecretResult.energyKcal;
+    } else {
+      debug.fatsecret_text_hit = false;
+    }
+
+    // Decision logic: Pick the best result
+    // Prefer FatSecret for branded restaurant items (more accurate for chain-specific dishes)
+    // Fall back to USDA if FatSecret doesn't have it
+    const usdaKcal = usdaResult?.nutrients?.energyKcal || 0;
+    const fsKcal = fatsecretResult?.energyKcal || 0;
+
+    debug.usda_kcal_candidate = usdaKcal;
+    debug.fatsecret_kcal_candidate = fsKcal;
+
+    // Decision criteria:
+    // 1. If FatSecret has a branded match (food_name contains restaurant or dish name), prefer it
+    // 2. If USDA and FatSecret both have data, prefer the one with higher calories (restaurant portions are large)
+    // 3. If only one has data, use that one
+    const fsBrandMatch = fatsecretResult?.food_name &&
+      (fatsecretResult.food_name.toLowerCase().includes(dishName.toLowerCase().split(' ')[0]) ||
+       fatsecretResult.brand?.toLowerCase().includes(restaurantName.toLowerCase().split(' ')[0]));
+
+    let chosenSource = null;
+    if (fsKcal > 50 && fsBrandMatch) {
+      // FatSecret has a brand match - trust it
+      finalNutritionSummary = {
+        energyKcal: fsKcal,
+        protein_g: fatsecretResult.protein_g || null,
+        fat_g: fatsecretResult.fat_g || null,
+        carbs_g: fatsecretResult.carbs_g || null,
+        sugar_g: null, fiber_g: null, sodium_mg: null
+      };
+      nutrition_source = "fatsecret_text_search";
+      chosenSource = "fatsecret_brand_match";
+    } else if (fsKcal > 50 && usdaKcal > 50) {
+      // Both have data - pick higher calories (restaurant portions tend to be larger than USDA generic entries)
+      // But cap the difference - if one is 3x+ higher, it might be wrong (whole recipe vs serving)
+      const ratio = Math.max(fsKcal, usdaKcal) / Math.min(fsKcal, usdaKcal);
+      if (ratio < 3) {
+        // Reasonable difference - pick higher
+        if (fsKcal >= usdaKcal) {
+          finalNutritionSummary = {
+            energyKcal: fsKcal,
+            protein_g: fatsecretResult.protein_g || null,
+            fat_g: fatsecretResult.fat_g || null,
+            carbs_g: fatsecretResult.carbs_g || null,
+            sugar_g: null, fiber_g: null, sodium_mg: null
+          };
+          nutrition_source = "fatsecret_text_search";
+          chosenSource = "fatsecret_higher";
+        } else {
+          finalNutritionSummary = usdaResult.nutrients;
+          nutrition_source = "usda_branded_fast_food";
+          chosenSource = "usda_higher";
+        }
+      } else {
+        // Large difference - prefer USDA as more conservative/reliable
+        finalNutritionSummary = usdaResult.nutrients;
+        nutrition_source = "usda_branded_fast_food";
+        chosenSource = "usda_ratio_conservative";
+      }
+    } else if (fsKcal > 50) {
+      finalNutritionSummary = {
+        energyKcal: fsKcal,
+        protein_g: fatsecretResult.protein_g || null,
+        fat_g: fatsecretResult.fat_g || null,
+        carbs_g: fatsecretResult.carbs_g || null,
+        sugar_g: null, fiber_g: null, sodium_mg: null
+      };
+      nutrition_source = "fatsecret_text_search";
+      chosenSource = "fatsecret_only";
+    } else if (usdaKcal > 50) {
+      finalNutritionSummary = usdaResult.nutrients;
+      nutrition_source = "usda_branded_fast_food";
+      chosenSource = "usda_only";
+    }
+
+    debug.nutrition_chosen_source = chosenSource;
+
+    // QUANTITY MULTIPLIER: Check if dish has a count (e.g., "10 wings") and nutrition looks per-unit
+    // This handles cases like Wingstop returning 90 kcal for a single wing when we asked for 10
+    if (finalNutritionSummary && finalNutritionSummary.energyKcal > 0) {
+      const quantityInfo = extractDishQuantity(dishName);
+      if (quantityInfo && quantityInfo.quantity > 1) {
+        const perUnitCal = finalNutritionSummary.energyKcal;
+        debug.quantity_detected = quantityInfo.quantity;
+        debug.quantity_cleaned_name = quantityInfo.cleanedName;
+        debug.quantity_per_unit_cal = perUnitCal;
+
+        // Check if calories look like per-unit data
+        if (isLikelyPerUnitNutrition(perUnitCal, dishName)) {
+          const multiplier = quantityInfo.quantity;
+          debug.quantity_multiplier_applied = multiplier;
+
+          finalNutritionSummary = {
+            energyKcal: perUnitCal * multiplier,
+            protein_g: (finalNutritionSummary.protein_g || 0) * multiplier || null,
+            fat_g: (finalNutritionSummary.fat_g || 0) * multiplier || null,
+            carbs_g: (finalNutritionSummary.carbs_g || 0) * multiplier || null,
+            sugar_g: (finalNutritionSummary.sugar_g || 0) * multiplier || null,
+            fiber_g: (finalNutritionSummary.fiber_g || 0) * multiplier || null,
+            sodium_mg: (finalNutritionSummary.sodium_mg || 0) * multiplier || null
+          };
+          nutrition_source = nutrition_source + "_multiplied";
+        }
+      }
+    }
+  }
+
+  // Fall back to recipe-based nutrition if USDA and FatSecret lookups didn't work
+  if (!finalNutritionSummary) {
+    const nutritionSummaryFromRecipe =
+      (recipeResult && recipeResult.out && recipeResult.out.nutrition_summary) ||
+      recipeResult.nutrition_summary ||
+      null;
+    finalNutritionSummary = nutritionSummaryFromRecipe || null;
+
+    if (recipeResult?.out?.nutrition_summary) {
+      nutrition_source = "recipe_out";
+    } else if (recipeResult?.nutrition_summary) {
+      nutrition_source = "recipe_legacy";
+    }
   }
 
   if (
@@ -28570,46 +29471,26 @@ async function runDishAnalysis(env, body, ctx) {
     }
   }
 
+  // NOTE: Removed duplicate servingsUsed division block here.
+  // Per-serving normalization is now handled ONCE at lines 30220-30296 with better
+  // source tracking (debug.servings_divisor, debug.servings_source).
+  // The old block here was causing DOUBLE division when both recipe.yield and raw.yield
+  // were present with the same value (e.g., Edamam responses).
   if (finalNutritionSummary) {
     servingsUsed = getServingsFromRecipe(recipeResult);
-    if (servingsUsed && servingsUsed > 0 && servingsUsed !== 1) {
-      finalNutritionSummary = {
-        energyKcal:
-          finalNutritionSummary.energyKcal != null
-            ? finalNutritionSummary.energyKcal / servingsUsed
-            : null,
-        protein_g:
-          finalNutritionSummary.protein_g != null
-            ? finalNutritionSummary.protein_g / servingsUsed
-            : null,
-        fat_g:
-          finalNutritionSummary.fat_g != null
-            ? finalNutritionSummary.fat_g / servingsUsed
-            : null,
-        carbs_g:
-          finalNutritionSummary.carbs_g != null
-            ? finalNutritionSummary.carbs_g / servingsUsed
-            : null,
-        sugar_g:
-          finalNutritionSummary.sugar_g != null
-            ? finalNutritionSummary.sugar_g / servingsUsed
-            : null,
-        fiber_g:
-          finalNutritionSummary.fiber_g != null
-            ? finalNutritionSummary.fiber_g / servingsUsed
-            : null,
-        sodium_mg:
-          finalNutritionSummary.sodium_mg != null
-            ? finalNutritionSummary.sodium_mg / servingsUsed
-            : null
-      };
-      if (recipeResult?.out) {
-        recipeResult.out.nutrition_summary = finalNutritionSummary;
-      }
-    }
+    // Track servingsUsed for debug but do NOT divide here - it's done later
+    debug.servings_from_recipe = servingsUsed;
   }
 
-  if (restaurantCalories != null && !Number.isNaN(Number(restaurantCalories))) {
+  // IMPORTANT: Do NOT apply restaurantCalories scaling when we have verified_official nutrition
+  // The verified data from restaurant websites is more accurate than Uber Eats scraped data
+  const shouldSkipRestaurantCaloriesScaling = nutrition_source === "verified_official";
+  if (shouldSkipRestaurantCaloriesScaling && restaurantCalories != null) {
+    debug.skipped_restaurant_calories_scaling = true;
+    debug.skipped_restaurant_calories_value = Number(restaurantCalories);
+  }
+
+  if (restaurantCalories != null && !Number.isNaN(Number(restaurantCalories)) && !shouldSkipRestaurantCaloriesScaling) {
     const kcalFromRestaurant = Number(restaurantCalories);
 
     if (!finalNutritionSummary) {
@@ -30289,14 +31170,36 @@ async function runDishAnalysis(env, body, ctx) {
 
     // Skip per-serving divisor when:
     // 1. nutrition_source is "fatsecret_image" (FatSecret returns per-portion values from detected food)
-    // 2. Other conditions already handled (restaurantCalories, etc.)
+    // 2. nutrition_source is "usda_branded_fast_food" (USDA returns per-item values for commercial products)
+    // 3. nutrition_source is "fatsecret_text_search" (FatSecret text search returns per-serving values)
+    // 4. nutrition_source contains "_multiplied" (already multiplied by quantity count)
+    // 5. nutrition_source is "verified_official" (verified data from restaurant websites is already per-serving)
+    // 6. Other conditions already handled (restaurantCalories, etc.)
     const skipDivisorForFatSecret = nutrition_source === "fatsecret_image";
+    const skipDivisorForUSDABranded = nutrition_source === "usda_branded_fast_food";
+    const skipDivisorForFatSecretText = nutrition_source === "fatsecret_text_search" || (nutrition_source && nutrition_source.includes("_multiplied"));
+    const skipDivisorForVerified = nutrition_source === "verified_official";
+    const isStandardizedChain = isStandardizedPortionChain(restaurantName);
+
+    if (isStandardizedChain) {
+      debug.standardized_chain_detected = restaurantName;
+    }
+
+    if (skipDivisorForUSDABranded) {
+      debug.servings_divisor_skipped = "usda_branded_per_item";
+    }
+    if (skipDivisorForVerified) {
+      debug.servings_divisor_skipped = "verified_official_per_serving";
+    }
 
     if (
       servingsDivisor > 1 &&
       finalNutritionSummary &&
       typeof finalNutritionSummary === "object" &&
-      !skipDivisorForFatSecret
+      !skipDivisorForFatSecret &&
+      !skipDivisorForUSDABranded &&
+      !skipDivisorForFatSecretText &&
+      !skipDivisorForVerified
     ) {
       finalNutritionSummary = {
         energyKcal:
@@ -30337,6 +31240,8 @@ async function runDishAnalysis(env, body, ctx) {
   }
 
   // Heuristic multi-serving divisor for oversized base recipes (when no restaurantCalories)
+  // Skip for verified_official since that data is already per-serving
+  const skipHeuristicDivisorForVerified = nutrition_source === "verified_official";
   try {
     let nutritionMultiServingsDivisor = 1;
     const baseKcal =
@@ -30347,7 +31252,7 @@ async function runDishAnalysis(env, body, ctx) {
     const hasRestaurantCalories =
       typeof restaurantCalories === "number" && restaurantCalories > 0;
 
-    if (!hasRestaurantCalories && baseKcal != null && baseKcal > 2000) {
+    if (!hasRestaurantCalories && !skipHeuristicDivisorForVerified && baseKcal != null && baseKcal > 2000) {
       nutritionMultiServingsDivisor = 4;
     }
 
@@ -30449,39 +31354,50 @@ async function runDishAnalysis(env, body, ctx) {
       aiPortionFactor = pfCandidate;
     }
   } else if (!dishImageUrl && !restaurantCalories) {
-    const catKey = canonicalCategory || menuSection || "Other";
-    let defaultFactor = 1;
-    if (typeof catKey === "string") {
-      if (DEFAULT_SERVINGS_BY_CATEGORY[catKey]) {
-        defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY[catKey];
-      } else {
-        const lower = catKey.toLowerCase();
-        if (lower.includes("pasta") || lower.includes("pizza")) {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Pasta & Pizza"];
-        } else if (
-          lower.includes("burger") ||
-          lower.includes("sandwich") ||
-          lower.includes("sandwiches & burgers")
-        ) {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Sandwiches & Burgers"];
-        } else if (lower.includes("salad")) {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Salads"];
-        } else if (lower.includes("kids")) {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Kids"];
-        } else if (lower.includes("dessert")) {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Desserts"];
-        } else if (
-          lower.includes("mains") ||
-          lower.includes("dinners") ||
-          lower.includes("skillets")
-        ) {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Mains"];
+    // SKIP category-based scaling for standardized portion chains (fast food, etc.)
+    // These restaurants have consistent, known portion sizes that don't need adjustment.
+    const isStandardizedChain = isStandardizedPortionChain(restaurantName);
+
+    if (isStandardizedChain) {
+      // For chains like McDonald's, portions are standardized - no scaling needed
+      aiPortionFactor = 1;
+      debug.portion_skipped_reason = "standardized_portion_chain";
+      debug.portion_chain_detected = restaurantName;
+    } else {
+      const catKey = canonicalCategory || menuSection || "Other";
+      let defaultFactor = 1;
+      if (typeof catKey === "string") {
+        if (DEFAULT_SERVINGS_BY_CATEGORY[catKey]) {
+          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY[catKey];
         } else {
-          defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Other"];
+          const lower = catKey.toLowerCase();
+          if (lower.includes("pasta") || lower.includes("pizza")) {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Pasta & Pizza"];
+          } else if (
+            lower.includes("burger") ||
+            lower.includes("sandwich") ||
+            lower.includes("sandwiches & burgers")
+          ) {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Sandwiches & Burgers"];
+          } else if (lower.includes("salad")) {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Salads"];
+          } else if (lower.includes("kids")) {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Kids"];
+          } else if (lower.includes("dessert")) {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Desserts"];
+          } else if (
+            lower.includes("mains") ||
+            lower.includes("dinners") ||
+            lower.includes("skillets")
+          ) {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Mains"];
+          } else {
+            defaultFactor = DEFAULT_SERVINGS_BY_CATEGORY["Other"];
+          }
         }
       }
+      aiPortionFactor = defaultFactor;
     }
-    aiPortionFactor = defaultFactor;
   }
 
   const effectivePortionFactor = manualPortionFactor * aiPortionFactor;
@@ -30491,14 +31407,17 @@ async function runDishAnalysis(env, body, ctx) {
   debug.portion_effective_factor = effectivePortionFactor;
 
   // Skip portion factor when restaurantCalories is provided - those are already per-serving from the menu
+  // Also skip for verified_official data - that's already per-serving from restaurant websites
   const hasRestaurantCalories = restaurantCalories != null && !Number.isNaN(Number(restaurantCalories));
+  const hasVerifiedNutrition = nutrition_source === "verified_official";
 
   if (
     finalNutritionSummary &&
     typeof effectivePortionFactor === "number" &&
     isFinite(effectivePortionFactor) &&
     effectivePortionFactor !== 1 &&
-    !hasRestaurantCalories
+    !hasRestaurantCalories &&
+    !hasVerifiedNutrition
   ) {
     finalNutritionSummary = {
       energyKcal:
@@ -30533,6 +31452,40 @@ async function runDishAnalysis(env, body, ctx) {
     debug.nutrition_portion_factor_used = effectivePortionFactor;
   } else if (hasRestaurantCalories) {
     debug.nutrition_portion_factor_skipped = "restaurant_calories_already_per_serving";
+  } else if (hasVerifiedNutrition) {
+    debug.nutrition_portion_factor_skipped = "verified_official_already_per_serving";
+  }
+
+  // SANITY CHECK: Flag unreasonable calorie values for a single dish
+  // Typical single restaurant dish: 200-1500 kcal. Extreme dishes (like cheesecake factory): up to 2500 kcal.
+  if (
+    finalNutritionSummary &&
+    typeof finalNutritionSummary.energyKcal === "number"
+  ) {
+    const kcal = finalNutritionSummary.energyKcal;
+
+    // Too high: > 2500 kcal without restaurant data suggests scaling issue
+    if (kcal > 2500 && !hasRestaurantCalories) {
+      debug.nutrition_sanity_warning = "calories_exceeds_2500_single_dish";
+      debug.nutrition_raw_kcal = kcal;
+      console.warn(`[NutritionSanity] HIGH calorie value: ${Math.round(kcal)} kcal for "${dishName}" at "${restaurantName}". Check servings divisor.`);
+    }
+
+    // Too low: < 50 kcal for a real dish (not a beverage/sauce) suggests over-division
+    // Skip this check for appetizers, sauces, beverages which can legitimately be low-cal
+    const lowCalCategory = (canonicalCategory || menuSection || "").toLowerCase();
+    const isLikelyLowCalItem = lowCalCategory.includes("beverage") ||
+                               lowCalCategory.includes("drink") ||
+                               lowCalCategory.includes("sauce") ||
+                               lowCalCategory.includes("condiment") ||
+                               dishName.toLowerCase().includes("sauce") ||
+                               dishName.toLowerCase().includes("dressing");
+
+    if (kcal < 50 && !isLikelyLowCalItem && !hasRestaurantCalories) {
+      debug.nutrition_sanity_warning = "calories_suspiciously_low";
+      debug.nutrition_raw_kcal = kcal;
+      console.warn(`[NutritionSanity] LOW calorie value: ${Math.round(kcal)} kcal for "${dishName}" at "${restaurantName}". Possible over-division.`);
+    }
   }
 
   if (finalNutritionSummary) {
@@ -31131,7 +32084,21 @@ async function runDishAnalysis(env, body, ctx) {
 
   // Generate fallback description from recipe introduction when no menu description available
   // This provides a rich description for dish cards when Uber Eats doesn't have one
-  const generatedDescription = full_recipe?.full_recipe?.introduction || null;
+  // Priority: full_recipe intro > likely_recipe key ingredients > null
+  let generatedDescription = full_recipe?.full_recipe?.introduction || null;
+
+  // Fallback: build a brief description from key ingredients if no intro available
+  if (!generatedDescription && likely_recipe?.ingredients?.length > 0) {
+    const keyIngredients = likely_recipe.ingredients
+      .filter(ing => ing?.name)
+      .slice(0, 4)
+      .map(ing => ing.name.toLowerCase());
+    if (keyIngredients.length >= 2) {
+      const ingredientList = keyIngredients.slice(0, -1).join(', ') +
+        (keyIngredients.length > 1 ? ` and ${keyIngredients[keyIngredients.length - 1]}` : '');
+      generatedDescription = `Made with ${ingredientList}.`;
+    }
+  }
 
   const result = {
     ok: true,
@@ -31195,18 +32162,35 @@ async function runDishAnalysis(env, body, ctx) {
       // Also build simple key for fallback lookups
       const simpleKey = buildDishCacheKeySimple(body);
 
+      // Build description-specific key for description backfill (ignores all variation)
+      const descKey = buildDescriptionCacheKey(body);
+      // Only store generated_description in the description cache (smaller payload)
+      const descCache = generatedDescription
+        ? JSON.stringify({ generated_description: generatedDescription })
+        : null;
+
       if (ctx && typeof ctx.waitUntil === "function") {
-        // Write to both keys in parallel using waitUntil
+        // Write to all keys in parallel using waitUntil
+        const writePromises = [
+          env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days }),
+          env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days })
+        ];
+        // Only write description cache if we have a generated_description
+        if (descCache) {
+          writePromises.push(
+            env.DISH_ANALYSIS_CACHE.put(descKey, descCache, { expirationTtl: ttl30Days })
+          );
+        }
         ctx.waitUntil(
-          Promise.all([
-            env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days }),
-            env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days })
-          ]).catch(e => console.error('[Cache] Write error:', e))
+          Promise.all(writePromises).catch(e => console.error('[Cache] Write error:', e))
         );
       } else {
-        // Without waitUntil, write both keys (non-blocking)
+        // Without waitUntil, write all keys (non-blocking)
         env.DISH_ANALYSIS_CACHE.put(cacheKey, toCacheJson, { expirationTtl: ttl30Days });
         env.DISH_ANALYSIS_CACHE.put(simpleKey, toCacheJson, { expirationTtl: ttl30Days });
+        if (descCache) {
+          env.DISH_ANALYSIS_CACHE.put(descKey, descCache, { expirationTtl: ttl30Days });
+        }
       }
     } catch (e) {
       // do not break response if cache write fails
