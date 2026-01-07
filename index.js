@@ -1957,6 +1957,326 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
 }
 
 /**
+ * Streaming version of scrapeUberEatsMenu
+ * Emits menu items progressively as they're discovered during scrolling
+ * @param {Object} env - Cloudflare environment with BROWSER binding
+ * @param {string} query - Restaurant name to search for
+ * @param {string} address - Address for location context
+ * @param {Object} options - Configuration options
+ * @param {number} options.maxRows - Maximum items to collect (default: 100)
+ * @param {Function} options.onPhase - Callback for phase updates (phase, message)
+ * @param {Function} options.onItem - Callback for each discovered item (item, index)
+ * @param {Function} options.onRestaurant - Callback for restaurant info
+ * @returns {Object} - { ok, items, restaurant, error }
+ */
+async function scrapeUberEatsMenuStreaming(env, query, address, options = {}) {
+  const {
+    maxRows = 100,
+    onPhase = async () => {},
+    onItem = async () => {},
+    onRestaurant = async () => {}
+  } = options;
+
+  const startTime = Date.now();
+  let browser = null;
+  const discoveredItems = [];
+  const seenItemIds = new Set();
+  const seenItemNames = new Set();
+  let itemIndex = 0;
+  let storeUrl = null;
+
+  // Noise patterns (same as main scraper)
+  const NOISE_ITEM_PATTERNS = [
+    /^utensils?$/i, /^napkins?$/i, /^forks?$/i, /^knives?$/i, /^spoons?$/i,
+    /^straws?$/i, /^plastic\s*(ware|utensil)/i, /^disposable/i,
+    /^cutlery\s*(set|pack)?$/i, /^silverware$/i, /^condiment\s*(pack|kit)/i
+  ];
+  const isNoiseItem = (name) => NOISE_ITEM_PATTERNS.some(p => p.test(name));
+
+  if (!env.BROWSER) {
+    return { ok: false, error: "BROWSER binding not available", items: [] };
+  }
+
+  try {
+    // Phase 1: Launch browser
+    await onPhase('browser', 'Launching browser...');
+    console.log(`[StreamingScraper] Starting for "${query}" @ "${address}"`);
+
+    browser = await puppeteer.launch(env.BROWSER);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    // Phase 2: Set location
+    await onPhase('location', 'Setting location...');
+
+    const locationCoords = getLocationCoords(address);
+    const plParam = generatePlParam(address, locationCoords);
+
+    const locationCookie = {
+      address: { address1: address, city: address.split(',')[0]?.trim() || "Miami", country: "US" },
+      latitude: locationCoords.lat,
+      longitude: locationCoords.lng
+    };
+
+    await page.setCookie(
+      { name: 'uev2.loc', value: encodeURIComponent(JSON.stringify(locationCookie)), domain: '.ubereats.com', path: '/' },
+      { name: 'uev2.diningMode', value: 'DELIVERY', domain: '.ubereats.com', path: '/' }
+    );
+
+    // Establish session via feed
+    const feedUrl = `https://www.ubereats.com/feed?pl=${plParam}`;
+    await page.goto(feedUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+    await wait(1500);
+
+    // Phase 3: Search for restaurant
+    await onPhase('searching', `Searching for "${query}"...`);
+
+    const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}&pl=${plParam}`;
+    await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+    await wait(2000);
+
+    // Find best matching restaurant
+    await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => null);
+
+    const allStoreLinks = await page.$$eval('a[href*="/store/"]', (links) => {
+      return links.slice(0, 20).map(link => {
+        let text = link.textContent?.trim() || '';
+        const nameMatch = text.match(/^([A-Za-z0-9\s&''\-\(\)]+?)(?:\d|\$|min|rating|•|Delivery|Pickup|Promoted)/i);
+        return {
+          href: link.href,
+          text: nameMatch ? nameMatch[1].trim() : text.split('\n')[0]?.trim() || text.slice(0, 80)
+        };
+      });
+    });
+
+    // Score matches
+    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const link of allStoreLinks) {
+      const linkWords = link.text.toLowerCase().split(/\s+/);
+      let matchCount = 0;
+      for (const qw of queryWords) {
+        if (linkWords.some(lw => lw.includes(qw) || qw.includes(lw))) matchCount++;
+      }
+      const score = queryWords.length > 0 ? matchCount / queryWords.length : 0;
+      if (score > bestScore && score >= 0.5) {
+        bestScore = score;
+        bestMatch = link;
+      }
+    }
+
+    if (!bestMatch && allStoreLinks.length > 0) {
+      // Fallback to first result if no good match
+      bestMatch = allStoreLinks[0];
+    }
+
+    if (!bestMatch) {
+      await onPhase('error', 'No matching restaurant found');
+      return { ok: false, error: 'No matching restaurant found', items: [] };
+    }
+
+    storeUrl = bestMatch.href;
+
+    // Send restaurant info
+    const restaurantInfo = { name: bestMatch.text, url: storeUrl };
+    await onRestaurant(restaurantInfo);
+
+    // Phase 4: Navigate to menu
+    await onPhase('loading', `Loading menu for ${bestMatch.text}...`);
+
+    await page.goto(storeUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+    await wait(2000);
+
+    // Wait for menu items to appear
+    await page.waitForSelector('[data-testid^="store-item-"], [data-testid*="menu-item"]', { timeout: 15000 }).catch(() => null);
+
+    // Phase 5: Progressive scroll and extract
+    await onPhase('discovering', 'Discovering menu items...');
+
+    // Helper function to extract items from current viewport
+    const extractVisibleItems = async () => {
+      return await page.evaluate((seenIds, seenNames) => {
+        const items = [];
+        const itemElements = document.querySelectorAll(
+          '[data-testid^="store-item-"], [data-testid*="menu-item"], [data-testid*="catalog-item"]'
+        );
+
+        // Build section map
+        const sectionElements = [];
+        document.querySelectorAll('[data-testid="catalog-section-title"]').forEach(h => {
+          const text = h.textContent?.trim();
+          if (text && text.length <= 80) {
+            const rect = h.getBoundingClientRect();
+            sectionElements.push({ name: text, top: rect.top + window.scrollY });
+          }
+        });
+        sectionElements.sort((a, b) => a.top - b.top);
+
+        itemElements.forEach((item) => {
+          const testId = item.getAttribute('data-testid') || '';
+          let itemId = testId.replace(/^store-item-|^menu-item-|^catalog-item-/, '') || `item-${Math.random()}`;
+
+          if (seenIds.includes(itemId)) return;
+
+          // Extract name
+          let name = null;
+          const nameLabel = item.querySelector('[data-testid="item-thumbnail-label"]');
+          if (nameLabel) name = nameLabel.textContent?.trim();
+
+          if (!name) {
+            const titleEl = item.querySelector('h3, h4, [class*="itemTitle"]');
+            if (titleEl) name = titleEl.textContent?.trim();
+          }
+
+          if (!name) {
+            const firstSpan = item.querySelector('span');
+            if (firstSpan) {
+              const text = firstSpan.textContent?.trim();
+              if (text && text.length >= 2 && text.length <= 100 && !text.startsWith('$')) {
+                name = text;
+              }
+            }
+          }
+
+          if (!name || name.length < 2) return;
+          if (seenNames.includes(name.toLowerCase())) return;
+
+          // Determine section
+          let sectionName = 'Menu Items';
+          const itemRect = item.getBoundingClientRect();
+          const itemTop = itemRect.top + window.scrollY;
+          for (let i = sectionElements.length - 1; i >= 0; i--) {
+            if (sectionElements[i].top < itemTop) {
+              sectionName = sectionElements[i].name;
+              break;
+            }
+          }
+
+          // Extract price and calories
+          const fullText = item.textContent || '';
+          const priceMatch = fullText.match(/\$(\d+\.?\d*)/);
+          const calMatch = fullText.match(/(\d+(?:\s*-\s*\d+)?)\s*Cal/);
+
+          // Extract description
+          let description = null;
+          const calDescMatch = fullText.match(/\d+(?:\s*-\s*\d+)?\s*Cal\.?\s*(.+?)(?:\$|$)/i);
+          if (calDescMatch && calDescMatch[1]) {
+            const extracted = calDescMatch[1].trim().replace(/\d+%.*$/g, '').replace(/Popular.*$/i, '').trim();
+            if (extracted.length >= 15 && extracted !== name) description = extracted;
+          }
+
+          items.push({
+            id: itemId,
+            name: name,
+            description: description,
+            section: sectionName,
+            price: priceMatch ? parseFloat(priceMatch[1]) : null,
+            price_display: priceMatch ? `$${parseFloat(priceMatch[1]).toFixed(2)}` : null,
+            calories: calMatch ? calMatch[1].replace(/\s/g, '') : null
+          });
+        });
+
+        return items;
+      }, Array.from(seenItemIds), Array.from(seenItemNames));
+    };
+
+    // Progressive scroll with item emission
+    let previousHeight = 0;
+    let noChangeCount = 0;
+    const maxScrollAttempts = 30;
+    let scrollAttempts = 0;
+
+    while (scrollAttempts < maxScrollAttempts && discoveredItems.length < maxRows) {
+      // Extract newly visible items
+      const newItems = await extractVisibleItems();
+
+      for (const item of newItems) {
+        if (discoveredItems.length >= maxRows) break;
+        if (seenItemIds.has(item.id)) continue;
+        if (seenItemNames.has(item.name.toLowerCase())) continue;
+        if (isNoiseItem(item.name)) continue;
+
+        seenItemIds.add(item.id);
+        seenItemNames.add(item.name.toLowerCase());
+        discoveredItems.push(item);
+
+        // Emit item to stream
+        await onItem(item, itemIndex++);
+      }
+
+      // Scroll down
+      const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+
+      if (currentHeight === previousHeight) {
+        noChangeCount++;
+        if (noChangeCount >= 5) break; // No more content to load
+      } else {
+        noChangeCount = 0;
+        previousHeight = currentHeight;
+      }
+
+      await page.evaluate(() => window.scrollBy(0, 400));
+      await wait(300);
+      scrollAttempts++;
+
+      // Update phase periodically
+      if (scrollAttempts % 5 === 0) {
+        await onPhase('discovering', `Found ${discoveredItems.length} items...`);
+      }
+    }
+
+    // Try expanding sections for more items
+    await onPhase('expanding', 'Expanding sections...');
+    const expandedCount = await expandSections(page);
+
+    if (expandedCount > 0) {
+      // Extract any newly revealed items
+      const additionalItems = await extractVisibleItems();
+      for (const item of additionalItems) {
+        if (discoveredItems.length >= maxRows) break;
+        if (seenItemIds.has(item.id)) continue;
+        if (seenItemNames.has(item.name.toLowerCase())) continue;
+        if (isNoiseItem(item.name)) continue;
+
+        seenItemIds.add(item.id);
+        seenItemNames.add(item.name.toLowerCase());
+        discoveredItems.push(item);
+        await onItem(item, itemIndex++);
+      }
+    }
+
+    await browser.close();
+    browser = null;
+
+    const elapsed = Date.now() - startTime;
+    await onPhase('complete', `Found ${discoveredItems.length} items in ${Math.round(elapsed/1000)}s`);
+
+    console.log(`[StreamingScraper] Complete: ${discoveredItems.length} items in ${elapsed}ms`);
+
+    return {
+      ok: true,
+      items: discoveredItems,
+      restaurant: restaurantInfo,
+      store_url: storeUrl,
+      source: 'inhouse-stream',
+      elapsed_ms: elapsed
+    };
+
+  } catch (error) {
+    console.error('[StreamingScraper] Error:', error.message);
+    await onPhase('error', error.message);
+    return { ok: false, error: error.message, items: discoveredItems };
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
+  }
+}
+
+/**
  * Auto-scroll page to load lazy content
  */
 async function autoScrollPage(page, options = {}) {
@@ -23816,6 +24136,92 @@ Estimate based on ACTUAL visible portions. Only return JSON.`
     }
     if (pathname === "/recipe/resolve")
       return handleRecipeResolve(env, request, url, ctx);
+
+    // SSE Streaming endpoint for menu scraping - returns items progressively
+    if (pathname === "/menu/uber-test/stream" && request.method === "GET") {
+      const query = searchParams.get("query");
+      const address = searchParams.get("address");
+      const maxRows = parseInt(searchParams.get("maxRows") || "100", 10);
+
+      if (!query || !address) {
+        return new Response(JSON.stringify({ error: "Missing query or address parameter" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...CORS_ALL }
+        });
+      }
+
+      // Create a TransformStream for SSE
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      const encoder = new TextEncoder();
+
+      // Helper to send SSE events
+      const sendEvent = async (event, data) => {
+        try {
+          const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+          await writer.write(encoder.encode(message));
+        } catch (e) {
+          console.error('[SSE] Failed to write event:', e.message);
+        }
+      };
+
+      // Start the scraping in the background using waitUntil
+      const scrapePromise = (async () => {
+        try {
+          // Send initial status
+          await sendEvent('status', { phase: 'starting', message: 'Initializing scraper...' });
+
+          // Call the streaming version of the scraper
+          const result = await scrapeUberEatsMenuStreaming(env, query, address, {
+            maxRows,
+            onPhase: async (phase, message) => {
+              await sendEvent('status', { phase, message });
+            },
+            onItem: async (item, index) => {
+              await sendEvent('item', { item, index });
+            },
+            onRestaurant: async (restaurant) => {
+              await sendEvent('restaurant', restaurant);
+            }
+          });
+
+          // Send completion event
+          await sendEvent('complete', {
+            ok: result.ok,
+            totalItems: result.items?.length || 0,
+            source: result.source || 'inhouse-stream',
+            elapsed_ms: result.elapsed_ms,
+            store_url: result.store_url
+          });
+
+        } catch (error) {
+          console.error('[SSE] Scraping error:', error.message);
+          await sendEvent('error', { message: error.message });
+        } finally {
+          try {
+            await writer.close();
+          } catch (e) {
+            // Writer may already be closed
+          }
+        }
+      })();
+
+      // Use waitUntil if available to keep the worker alive
+      if (ctx?.waitUntil) {
+        ctx.waitUntil(scrapePromise);
+      }
+
+      return new Response(readable, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
+          "Connection": "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "X-Accel-Buffering": "no" // Disable nginx buffering if proxied
+        }
+      });
+    }
 
     // Cleaner Uber Eats test endpoint (returns flattened items)
     if (pathname === "/menu/uber-test" && request.method === "GET") {
