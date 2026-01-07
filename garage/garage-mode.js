@@ -9,6 +9,13 @@
  * This file is allowed to be slower - we're tuning for correctness, not latency.
  */
 
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // ============================================================================
 // SECTION A: PIPELINE MAP (Documentation)
 // ============================================================================
@@ -1147,6 +1154,389 @@ async function garageRunner(restaurants, options = {}) {
 }
 
 // ============================================================================
+// SECTION H: FIXTURE CACHE SYSTEM
+// ============================================================================
+
+const FIXTURES_DIR = path.join(__dirname, "fixtures");
+const CACHE_VERSION = "v1";
+
+/**
+ * Get path for a fixture file
+ */
+function getFixturePath(restaurantId, type = "raw") {
+  return path.join(FIXTURES_DIR, `${restaurantId}_${type}_${CACHE_VERSION}.json`);
+}
+
+/**
+ * Load cached fixture if available
+ * @param {string} restaurantId
+ * @param {string} type - "raw" or "normalized"
+ * @returns {object|null}
+ */
+function loadFixture(restaurantId, type = "raw") {
+  const fixturePath = getFixturePath(restaurantId, type);
+  try {
+    if (fs.existsSync(fixturePath)) {
+      const content = fs.readFileSync(fixturePath, "utf8");
+      const data = JSON.parse(content);
+      console.log(`  [Fixture] Loaded cached ${type} for ${restaurantId}`);
+      return data;
+    }
+  } catch (e) {
+    console.warn(`  [Fixture] Failed to load ${fixturePath}: ${e.message}`);
+  }
+  return null;
+}
+
+/**
+ * Save fixture to cache
+ * @param {string} restaurantId
+ * @param {object} data
+ * @param {string} type - "raw" or "normalized"
+ */
+function saveFixture(restaurantId, data, type = "raw") {
+  try {
+    if (!fs.existsSync(FIXTURES_DIR)) {
+      fs.mkdirSync(FIXTURES_DIR, { recursive: true });
+    }
+
+    const fixturePath = getFixturePath(restaurantId, type);
+    fs.writeFileSync(fixturePath, JSON.stringify(data, null, 2));
+    console.log(`  [Fixture] Saved ${type} for ${restaurantId}`);
+  } catch (e) {
+    console.warn(`  [Fixture] Failed to save: ${e.message}`);
+  }
+}
+
+/**
+ * Check if fixture exists and is fresh
+ * @param {string} restaurantId
+ * @param {number} maxAgeMs - Maximum age in milliseconds (default 7 days)
+ */
+function hasValidFixture(restaurantId, maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+  const fixturePath = getFixturePath(restaurantId, "raw");
+  try {
+    if (fs.existsSync(fixturePath)) {
+      const stats = fs.statSync(fixturePath);
+      const age = Date.now() - stats.mtimeMs;
+      return age < maxAgeMs;
+    }
+  } catch {
+    // Ignore errors
+  }
+  return false;
+}
+
+// ============================================================================
+// SECTION I: ENHANCED MENU SCORING
+// ============================================================================
+
+/**
+ * Score a menu for "perfection" based on multiple criteria
+ * @param {object} menu - Normalized canonical menu
+ * @param {object} context - Restaurant context (cuisine, expected_categories)
+ * @returns {{ score: number, maxScore: number, isPerfect: boolean, breakdown: object }}
+ */
+function scoreMenu(menu, context = {}) {
+  const breakdown = {
+    structure: { score: 0, max: 30, details: [] },
+    completeness: { score: 0, max: 30, details: [] },
+    quality: { score: 0, max: 20, details: [] },
+    consistency: { score: 0, max: 20, details: [] }
+  };
+
+  if (!menu || !menu.sections) {
+    return {
+      score: 0,
+      maxScore: 100,
+      isPerfect: false,
+      breakdown
+    };
+  }
+
+  const sections = menu.sections;
+  const allItems = sections.flatMap(s => s.items || []);
+  const totalItems = allItems.length;
+  const totalSections = sections.length;
+
+  // STRUCTURE SCORING (30 points)
+  // - Has reasonable number of sections (5-20)
+  if (totalSections >= 3 && totalSections <= 25) {
+    breakdown.structure.score += 10;
+    breakdown.structure.details.push("Section count OK");
+  } else {
+    breakdown.structure.details.push(`Section count ${totalSections} outside 3-25 range`);
+  }
+
+  // - Sections are non-empty
+  const nonEmptySections = sections.filter(s => s.items && s.items.length > 0).length;
+  if (nonEmptySections === totalSections) {
+    breakdown.structure.score += 10;
+    breakdown.structure.details.push("All sections have items");
+  } else {
+    breakdown.structure.details.push(`${totalSections - nonEmptySections} empty sections`);
+  }
+
+  // - Items have required fields (name, id)
+  const itemsWithName = allItems.filter(i => i.name && i.name.length > 0).length;
+  if (itemsWithName === totalItems) {
+    breakdown.structure.score += 10;
+    breakdown.structure.details.push("All items have names");
+  } else {
+    breakdown.structure.details.push(`${totalItems - itemsWithName} items missing names`);
+  }
+
+  // COMPLETENESS SCORING (30 points)
+  // - Has expected categories (if provided)
+  if (context.expected_categories && context.expected_categories.length > 0) {
+    const sectionNames = sections.map(s => s.name.toLowerCase());
+    let matchedCategories = 0;
+    for (const expected of context.expected_categories) {
+      if (sectionNames.some(n => n.includes(expected.toLowerCase()))) {
+        matchedCategories++;
+      }
+    }
+    const categoryScore = Math.round((matchedCategories / context.expected_categories.length) * 15);
+    breakdown.completeness.score += categoryScore;
+    breakdown.completeness.details.push(`${matchedCategories}/${context.expected_categories.length} expected categories found`);
+  } else {
+    breakdown.completeness.score += 15; // No expectation = full credit
+    breakdown.completeness.details.push("No expected categories to check");
+  }
+
+  // - Has reasonable item count (10-200)
+  if (totalItems >= 10 && totalItems <= 200) {
+    breakdown.completeness.score += 15;
+    breakdown.completeness.details.push(`Item count ${totalItems} within expected range`);
+  } else if (totalItems > 0) {
+    breakdown.completeness.score += 5;
+    breakdown.completeness.details.push(`Item count ${totalItems} outside 10-200 range`);
+  }
+
+  // QUALITY SCORING (20 points)
+  // - Items have prices
+  const itemsWithPrice = allItems.filter(i => i.price_cents != null || i.price_display).length;
+  const priceRatio = totalItems > 0 ? itemsWithPrice / totalItems : 0;
+  breakdown.quality.score += Math.round(priceRatio * 10);
+  breakdown.quality.details.push(`${Math.round(priceRatio * 100)}% items have prices`);
+
+  // - Items have descriptions
+  const itemsWithDesc = allItems.filter(i => i.description && i.description.length > 10).length;
+  const descRatio = totalItems > 0 ? itemsWithDesc / totalItems : 0;
+  breakdown.quality.score += Math.round(descRatio * 10);
+  breakdown.quality.details.push(`${Math.round(descRatio * 100)}% items have descriptions`);
+
+  // CONSISTENCY SCORING (20 points)
+  // - No duplicate items within sections
+  let duplicateCount = 0;
+  for (const section of sections) {
+    const names = new Set();
+    for (const item of section.items || []) {
+      const key = (item.name || "").toLowerCase();
+      if (names.has(key)) {
+        duplicateCount++;
+      }
+      names.add(key);
+    }
+  }
+  if (duplicateCount === 0) {
+    breakdown.consistency.score += 10;
+    breakdown.consistency.details.push("No duplicate items within sections");
+  } else {
+    breakdown.consistency.details.push(`${duplicateCount} duplicate items found`);
+  }
+
+  // - Section names are unique
+  const sectionNames = new Set();
+  let duplicateSections = 0;
+  for (const section of sections) {
+    const name = (section.name || "").toLowerCase();
+    if (sectionNames.has(name)) {
+      duplicateSections++;
+    }
+    sectionNames.add(name);
+  }
+  if (duplicateSections === 0) {
+    breakdown.consistency.score += 10;
+    breakdown.consistency.details.push("Section names are unique");
+  } else {
+    breakdown.consistency.details.push(`${duplicateSections} duplicate section names`);
+  }
+
+  // Calculate total
+  const score = breakdown.structure.score +
+                breakdown.completeness.score +
+                breakdown.quality.score +
+                breakdown.consistency.score;
+
+  const maxScore = breakdown.structure.max +
+                   breakdown.completeness.max +
+                   breakdown.quality.max +
+                   breakdown.consistency.max;
+
+  // Perfect requires 95% or higher
+  const isPerfect = score >= maxScore * 0.95;
+
+  return { score, maxScore, isPerfect, breakdown };
+}
+
+// ============================================================================
+// SECTION J: GARAGE INGEST WITH CACHING
+// ============================================================================
+
+/**
+ * Enhanced Garage Mode ingest with fixture caching
+ *
+ * @param {string} restaurantId - Internal restaurant identifier
+ * @param {string} uberStoreUrlOrId - Uber Eats store URL or UUID
+ * @param {object} options - { env, sessionId, timeout, useCache, saveToCache }
+ * @returns {Promise<{ ok, menu, rawApify, identity, validationResult, scoreResult, error }>}
+ */
+async function garageIngestMenuCached(restaurantId, uberStoreUrlOrId, options = {}) {
+  const {
+    env,
+    sessionId = null,
+    timeout = 120000,
+    useCache = true,
+    saveToCache = true,
+    context = {}
+  } = options;
+
+  const startTime = Date.now();
+  const identity = createIdentityBundle(restaurantId, uberStoreUrlOrId, sessionId);
+
+  const result = {
+    ok: false,
+    menu: null,
+    rawApify: null,
+    identity: identity,
+    validationResult: null,
+    diffResult: null,
+    scoreResult: null,
+    qualityResult: null,
+    timing: {},
+    error: null,
+    fromCache: false
+  };
+
+  try {
+    let rawData;
+
+    // Step 1: Try to load from cache
+    if (useCache && hasValidFixture(restaurantId)) {
+      rawData = loadFixture(restaurantId, "raw");
+      if (rawData) {
+        result.fromCache = true;
+        result.timing.fetch_ms = 0;
+      }
+    }
+
+    // Step 2: Fetch from Apify if no cache
+    if (!rawData) {
+      const fetchStart = Date.now();
+
+      if (!env?.APIFY_TOKEN) {
+        throw new Error("Missing APIFY_TOKEN in environment");
+      }
+
+      const actorId = env.APIFY_UBER_ACTOR_ID || "borderline~ubereats-scraper";
+      const token = env.APIFY_TOKEN;
+
+      let scrapeUrl = uberStoreUrlOrId;
+      if (!scrapeUrl.startsWith('http')) {
+        scrapeUrl = `https://www.ubereats.com/store/${restaurantId}/${uberStoreUrlOrId}`;
+      }
+
+      const apiUrl = `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}&memory=4096&timeout=60`;
+
+      const body = {
+        urls: [{ url: scrapeUrl }],
+        maxItems: 1000,
+        extendOutputFunction: "($) => { return {} }",
+        proxyConfiguration: {
+          useApifyProxy: true,
+          apifyProxyGroups: ["RESIDENTIAL"]
+        }
+      };
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+      let response;
+      try {
+        response = await fetch(apiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Apify API error ${response.status}: ${errText.slice(0, 200)}`);
+      }
+
+      try {
+        rawData = await response.json();
+      } catch (e) {
+        throw new Error("Apify response was not valid JSON");
+      }
+
+      result.timing.fetch_ms = Date.now() - fetchStart;
+
+      // Save to cache
+      if (saveToCache) {
+        saveFixture(restaurantId, rawData, "raw");
+      }
+    }
+
+    result.rawApify = rawData;
+
+    // Step 3: Normalize to canonical schema
+    const normalizeStart = Date.now();
+    const normalizeResult = normalizeApifyToCanonical(rawData, identity);
+    result.timing.normalize_ms = Date.now() - normalizeStart;
+
+    if (!normalizeResult.ok) {
+      throw new Error(normalizeResult.message || "Normalization failed");
+    }
+
+    result.menu = normalizeResult.menu;
+
+    // Step 4: Validate strictly
+    const validateStart = Date.now();
+    result.validationResult = validateMenuStrict(result.menu);
+    result.timing.validate_ms = Date.now() - validateStart;
+
+    // Step 5: Diff against truth
+    const diffStart = Date.now();
+    result.diffResult = diffAgainstTruth(result.menu, rawData);
+    result.timing.diff_ms = Date.now() - diffStart;
+
+    // Step 6: Score the menu
+    const scoreStart = Date.now();
+    result.scoreResult = scoreMenu(result.menu, context);
+    result.timing.score_ms = Date.now() - scoreStart;
+
+    result.timing.total_ms = Date.now() - startTime;
+
+    // Determine if "perfect"
+    result.ok = result.validationResult.valid &&
+                result.diffResult.match &&
+                result.scoreResult.isPerfect;
+
+  } catch (err) {
+    result.error = err.message || String(err);
+    result.timing.total_ms = Date.now() - startTime;
+  }
+
+  return result;
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -1169,5 +1559,18 @@ export {
 
   // Garage Mode
   garageIngestMenu,
-  garageRunner
+  garageRunner,
+
+  // Enhanced: Fixture Caching
+  loadFixture,
+  saveFixture,
+  hasValidFixture,
+  getFixturePath,
+  FIXTURES_DIR,
+
+  // Enhanced: Scoring
+  scoreMenu,
+
+  // Enhanced: Cached Ingest
+  garageIngestMenuCached
 };

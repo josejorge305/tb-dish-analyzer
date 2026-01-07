@@ -6802,6 +6802,144 @@ function extractMenuItemsFromUber(raw, queryText = "") {
   return out;
 }
 
+// ============================================================================
+// PRODUCTION-SAFE JUNK ITEM DETECTION
+// O(1) per item, no network calls, no LLM - safe for production latency
+// ============================================================================
+
+/**
+ * Fast patterns for obvious junk items that shouldn't be standalone menu items
+ */
+const JUNK_ITEM_PATTERNS = [
+  // Add-ons/modifiers that leaked as standalone items
+  /^add\s+/i,
+  /^\+\s*/,
+  /^extra\s+/i,
+  /^upgrade\s+to/i,
+  /^substitute\s+/i,
+  /^(single|double|triple)\s+(shot|pump)/i,
+
+  // Grocery/inventory style
+  /^\d+\s*(oz|ml|l|lb|kg|g|ct|pk|pack)\b/i,
+  /\b(case|carton)\s+of\s+\d+/i,
+  /\b(6|12|24|36|48)\s*(pack|pk|ct)\b/i,
+
+  // System/placeholder items
+  /^placeholder/i,
+  /^test\s*item/i,
+  /^do\s*not\s*order/i,
+  /^not\s*available/i,
+  /^\[.*\]$/,
+  /^---+$/,
+
+  // Pure modifiers
+  /^no\s+(ice|whip|cream|sauce)/i,
+  /^light\s+(ice|sauce)/i,
+  /^(napkins|utensils|straws|lids)$/i
+];
+
+/**
+ * Fast patterns for valid menu items (skip junk check if matched)
+ */
+const VALID_ITEM_PATTERNS = [
+  /burger/i, /sandwich/i, /pizza/i, /pasta/i, /salad/i,
+  /taco/i, /burrito/i, /bowl/i, /wrap/i,
+  /chicken/i, /beef/i, /pork/i, /fish/i, /shrimp/i,
+  /fries/i, /wings/i, /nuggets/i, /tenders/i,
+  /soup/i, /appetizer/i, /entree/i, /dessert/i,
+  /coffee/i, /latte/i, /smoothie/i, /shake/i
+];
+
+/**
+ * Fast O(1) junk detection for a single item
+ * @param {object} item - Menu item
+ * @returns {boolean} - true if item is junk
+ */
+function isJunkItemFast(item) {
+  const name = (item.name || item.title || "").trim();
+
+  // Empty or very short names are junk
+  if (!name || name.length < 2) return true;
+
+  // Numeric-only names (SKUs)
+  if (/^\d+$/.test(name)) return true;
+
+  // Check valid patterns first (fast exit for real food items)
+  for (const pattern of VALID_ITEM_PATTERNS) {
+    if (pattern.test(name)) return false;
+  }
+
+  // Check junk patterns
+  for (const pattern of JUNK_ITEM_PATTERNS) {
+    if (pattern.test(name)) return true;
+  }
+
+  // Suspiciously cheap items (under $0.50) are likely modifiers
+  const price = item.price;
+  if (typeof price === "number" && price > 0) {
+    const priceInDollars = price > 100 ? price / 100 : price;
+    if (priceInDollars < 0.50) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Production-safe junk filtering - O(n), no network calls
+ * @param {Array} items - Menu items
+ * @returns {{ filtered: Array, removedCount: number }}
+ */
+function filterJunkItemsProduction(items) {
+  if (!Array.isArray(items)) return { filtered: [], removedCount: 0 };
+
+  let removedCount = 0;
+  const filtered = [];
+
+  for (const item of items) {
+    if (isJunkItemFast(item)) {
+      removedCount++;
+    } else {
+      filtered.push(item);
+    }
+  }
+
+  return { filtered, removedCount };
+}
+
+/**
+ * Detect suspicious menu anomalies (high item count, etc.)
+ * Returns status that can be used for fast-fail or flagging
+ * @param {object} rawPayload - Raw Uber Eats payload
+ * @returns {{ suspicious: boolean, reason: string | null }}
+ */
+function detectMenuAnomaliesFast(rawPayload) {
+  const results = rawPayload?.data?.results || rawPayload?.results || [];
+  if (!Array.isArray(results) || results.length === 0) {
+    return { suspicious: false, reason: null };
+  }
+
+  const restaurant = results[0];
+  const menu = restaurant?.menu || restaurant?.catalogs || [];
+
+  let totalItems = 0;
+  for (const section of menu) {
+    const items = section?.catalogItems || section?.items || [];
+    totalItems += items.length;
+  }
+
+  // Suspiciously high item count (likely inventory dump)
+  if (totalItems > 500) {
+    return { suspicious: true, reason: `excessive_items:${totalItems}` };
+  }
+
+  // No items at all
+  if (totalItems === 0) {
+    return { suspicious: true, reason: "empty_menu" };
+  }
+
+  return { suspicious: false, reason: null };
+}
+
 const SECTION_PRIORITY = [
   "most popular",
   "popular items",
@@ -6866,6 +7004,18 @@ function filterAndRankItems(items, searchParams, env) {
 
   const skipDrinks = searchParams.get("skip_drinks") === "1";
   const skipParty = searchParams.get("skip_party") === "1";
+  // Skip junk items by default (can be disabled with skip_junk=0)
+  const skipJunk = searchParams.get("skip_junk") !== "0";
+
+  // Apply junk filtering first (production-safe, O(n))
+  if (skipJunk) {
+    const junkResult = filterJunkItemsProduction(candidates);
+    candidates = junkResult.filtered;
+    // Optionally log if many items were filtered
+    if (junkResult.removedCount > 10) {
+      console.log(`[filterAndRankItems] Removed ${junkResult.removedCount} junk items`);
+    }
+  }
 
   if (skipDrinks) {
     candidates = candidates.filter(
