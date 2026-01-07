@@ -1446,13 +1446,30 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         /hour/i, /location/i, /contact/i, /popular\s*near/i
       ];
 
-      // NOISE SECTIONS: Sections that should be excluded (utensils, promos, condiments)
+      // NOISE SECTIONS: Sections that should be excluded (utensils, promos, condiments, drinks)
       const NOISE_SECTION_PATTERNS = [
+        // Utensils & Packaging
         /utensil/i, /napkin/i, /silverware/i, /cutlery/i, /packet/i,
+        // Promotions
         /buy\s*\d+.*get/i, /bogo/i, /free\s*with/i, /limited\s*time/i,
         /cross-?sell/i, /upsell/i, /add-?on/i,
         /featured\s*deal/i, /special\s*offer/i, /promo/i,
-        /retail/i, /merchandise/i, /gift\s*card/i
+        // Merchandise
+        /retail/i, /merchandise/i, /gift\s*card/i,
+        // DRINKS & BEVERAGES (exclude entire drink sections)
+        /^drinks?$/i, /^beverages?$/i, /^drinks?\s*(&|and)\s*/i,
+        /^soft\s*drinks?/i, /^fountain\s*drinks?/i,
+        /^cocktails?$/i, /^alcoholic/i, /^bar\s*menu/i, /^bar$/i,
+        /^wine/i, /^wines?\s*(by|list|menu)?/i, /^red\s*wine/i, /^white\s*wine/i,
+        /^beer/i, /^beers?\s*(on\s*tap|list|menu)?/i, /^draft/i, /^craft\s*beer/i,
+        /^spirits?$/i, /^liquor/i, /^shots?$/i, /^mixed\s*drinks?/i,
+        /^coffee/i, /^hot\s*drinks?/i, /^cold\s*drinks?/i,
+        /^juice/i, /^smoothie/i, /^shake/i, /^milkshake/i,
+        /^tea$/i, /^teas$/i, /^iced\s*tea/i,
+        /^soda/i, /^sodas$/i, /^pop$/i,
+        // Catering (large party orders)
+        /^catering/i, /^party\s*(pack|platter|tray)/i, /^large\s*order/i,
+        /^group\s*order/i, /^feeds\s*\d+/i, /^serves\s*\d+/i
       ];
 
       // NOISE ITEMS: Item names that should be excluded (only exact matches for utensils)
@@ -5085,6 +5102,45 @@ function isStandaloneDrink(name) {
   // Remove trademark symbols for matching
   const cleanName = n.replace(/[®™©]/g, "").trim();
 
+  // WINE BOTTLE PATTERNS (BTL = Bottle)
+  // Matches: "BTL Garnacha", "BTL Cab Sauv", "BTL Chardonnay", "Bottle of Wine"
+  if (/^btl\s+/i.test(cleanName)) return true; // Starts with "BTL "
+  if (/^bottle\s+(of\s+)?/i.test(cleanName)) return true; // Starts with "Bottle" or "Bottle of"
+  if (/\bwine\s*(bottle|btl)?\b/i.test(cleanName)) return true; // Contains "wine"
+  if (/\b(glass|carafe)\s+of\s+(wine|red|white|rose|rosé)\b/i.test(cleanName)) return true;
+
+  // COCKTAIL PATTERNS
+  // Matches: "Lemon Drop Martini", "Moscow Mule", "Passion Fruit Airmail", etc.
+  const cocktailPatterns = [
+    /martini$/i, /mule$/i, /colada$/i, /margarita$/i, /mojito$/i, /daiquiri$/i,
+    /sangria$/i, /mimosa$/i, /bellini$/i, /spritz$/i, /negroni$/i, /mai\s*tai$/i,
+    /old\s*fashioned$/i, /manhattan$/i, /cosmopolitan$/i, /cosmo$/i, /sour$/i,
+    /fizz$/i, /highball$/i, /collins$/i, /airmail$/i, /paloma$/i, /caipirinha$/i,
+    /tequila\s*sunrise$/i, /pina\s*colada$/i, /long\s*island$/i, /bloody\s*mary$/i,
+    /whiskey\s*sour$/i, /bourbon$/i, /scotch$/i, /vodka$/i, /rum$/i, /gin$/i, /tequila$/i,
+    /lemon\s*drop$/i, /sex\s*on\s*the\s*beach$/i, /moscow$/i, /espresso\s*martini$/i,
+  ];
+  for (const p of cocktailPatterns) {
+    if (p.test(cleanName)) return true;
+  }
+
+  // WINE VARIETIES
+  const wineVarieties = [
+    "cabernet", "cab sauv", "merlot", "pinot noir", "pinot grigio", "chardonnay",
+    "sauvignon blanc", "riesling", "zinfandel", "shiraz", "syrah", "malbec",
+    "tempranillo", "garnacha", "grenache", "barolo", "chianti", "prosecco",
+    "champagne", "cava", "moscato", "rose", "rosé", "white wine", "red wine",
+    "house wine", "wine by the glass", "sparkling wine", "dessert wine", "port",
+    "sherry", "vermouth", "sake", "soju", "bernabeleva", "vina maita", "reverdito"
+  ];
+  for (const wine of wineVarieties) {
+    if (cleanName.includes(wine)) return true;
+  }
+
+  // BEER PATTERNS
+  if (/\b(ipa|lager|pilsner|stout|porter|ale|wheat\s*beer|craft\s*beer|draft|draught)\b/i.test(cleanName)) return true;
+  if (/\b(bud\s*light|budweiser|miller|coors|corona|heineken|stella|guinness|modelo|pacifico)\b/i.test(cleanName)) return true;
+
   // Base drink names (will be matched with or without size prefixes)
   const drinkBases = [
     // Sodas
@@ -5117,7 +5173,7 @@ function isStandaloneDrink(name) {
     // Energy drinks
     "red bull", "redbull", "monster", "rockstar", "bang",
     "gatorade", "powerade", "body armor", "vitamin water",
-    // Alcohol
+    // Alcohol (base names)
     "beer", "wine", "margarita", "mojito", "cocktail", "martini", "sangria",
     "piña colada", "daiquiri", "cosmopolitan", "mimosa", "bellini",
     // Generic
@@ -5181,14 +5237,24 @@ function isUtensilOrFee(name) {
     /^(pizza|cookie|baking)\s*cutter$/i,
     /^cutting\s*board$/i,
     /^kitchen\s*(tool|utensil|gadget)s?$/i,
+    /^plates?\s*(set)?$/i,  // Paper plates
+    /^cups?\s*(set)?$/i,    // Paper cups
+    /^bowls?\s*(set)?$/i,   // Paper bowls
   ];
 
   const feePatterns = [
     /fee$/i,
+    /\bfee\b/i,  // Matches "Corkage Fee", "Service Fee", "Delivery Fee"
     /charge$/i,
     /surcharge$/i,
     /^bag$/i,
     /^packaging$/i,
+    /^corkage/i,           // "Corkage", "Corkage Fee"
+    /^service\s*charge/i,  // "Service Charge"
+    /^delivery\s*fee/i,    // "Delivery Fee"
+    /^tip$/i,              // "Tip"
+    /^gratuity/i,          // "Gratuity"
+    /^tax$/i,              // "Tax" (shouldn't appear but just in case)
   ];
 
   for (const p of utensilPatterns) {
@@ -5226,6 +5292,41 @@ function isPureCondiment(name) {
   return false;
 }
 
+// Check if item is a large combo/party pack (not a regular meal)
+// These are catering-style items with multiple components like "10 Wings + 3 Fries + 6 Biscuits"
+function isLargeComboBundle(name) {
+  const n = (name || "").toLowerCase().trim();
+
+  // PATTERN 1: Multiple quantities with "+" or "&" or "and"
+  // Matches: "10 wings + 3 fries", "8 pc chicken & 4 sides"
+  // Count how many distinct quantity+item pairs exist
+  const quantityPairs = n.match(/\d+\s*(pc|piece|pcs)?\.?\s*[a-z]+/gi) || [];
+  if (quantityPairs.length >= 3) return true; // 3+ different items with quantities = party pack
+
+  // PATTERN 2: Large quantities indicating catering/party
+  // Matches: "50 wings", "24 piece chicken", "100 nuggets"
+  if (/\b(2[0-9]|[3-9][0-9]|[1-9]\d{2,})\s*(pc|piece|pcs)?\.?\s*(wing|nugget|tender|strip|finger|leg|thigh|breast|rib|shrimp)/i.test(n)) return true;
+
+  // PATTERN 3: Family/Party/Catering keywords with large numbers
+  // Matches: "Family Pack 20pc", "Party Platter", "Catering Tray"
+  if (/\b(family|party|group|catering|feast|platter|tray|bucket|barrel)\b/i.test(n)) {
+    // Check if it has a large quantity
+    if (/\b(1[2-9]|[2-9]\d|\d{3,})\s*(pc|piece|pcs)?/i.test(n)) return true;
+    // Or if it explicitly says "serves X" with X >= 6
+    if (/serves?\s*([6-9]|\d{2,})/i.test(n)) return true;
+  }
+
+  // PATTERN 4: Explicit "for X people" or "feeds X"
+  if (/\b(for|feeds|serves)\s*([8-9]|[1-9]\d+)\s*(people|guests|persons)?/i.test(n)) return true;
+
+  // PATTERN 5: Bundle descriptions with multiple distinct food items
+  // "wings, fries, biscuits, and coleslaw" - 4+ items listed
+  const foodItems = n.split(/[,&+]/).filter(s => s.trim().length > 2);
+  if (foodItems.length >= 4) return true;
+
+  return false;
+}
+
 function isNoiseItem(name, description = "") {
   const n = (name || "").toLowerCase().trim();
 
@@ -5233,6 +5334,7 @@ function isNoiseItem(name, description = "") {
   if (isStandaloneDrink(n)) return true;
   if (isUtensilOrFee(n)) return true;
   if (isPureCondiment(n)) return true;
+  if (isLargeComboBundle(n)) return true;
 
   // Merch items
   if (/\bmerch(andise)?\b/i.test(n)) return true;
@@ -12954,6 +13056,64 @@ STRICTNESS RULES (IMPORTANT):
 - If the text gives no indication for an allergen and no tags imply it:
   - Prefer "present": "no" and mention that it is not listed or implied.
 
+DESCRIPTION SANITIZATION (CRITICAL - PREVENTS FALSE POSITIVES):
+- IGNORE any text that describes OTHER dishes, pairings, or serving suggestions:
+  - Phrases like "pairs well with...", "enjoy with...", "served alongside...", "goes great with...", "try it with..."
+  - References to combo items that are NOT the primary dish being analyzed
+  - Marketing/promotional text about other menu items
+- ONLY analyze the PRIMARY dish named in dishName.
+- If menuDescription mentions other dishes (e.g., "Our Coke pairs perfectly with our signature omelette"),
+  DO NOT attribute ingredients from those other dishes to the primary dish.
+- Example: "Coca-Cola - Refreshing beverage. Pairs well with our breakfast platter with eggs and bacon."
+  → The Coke has NO egg allergen. The eggs are in a DIFFERENT dish mentioned as a pairing.
+
+BEVERAGE EXCEPTION RULES (CRITICAL FOR DRINKS):
+- CARBONATED SOFT DRINKS (Coca-Cola, Pepsi, Sprite, Fanta, Dr Pepper, root beer, ginger ale, club soda, tonic water, sparkling water):
+  - These NEVER contain common allergens (gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame).
+  - Set ALL allergens to "present": "no" with reason "Carbonated soft drinks do not contain this allergen."
+  - Caramel coloring is NOT an allergen source - do not flag it.
+  - component_allergens should have ONE entry: the beverage itself with all allergens = "no".
+- PLAIN WATER (still water, sparkling water, mineral water):
+  - ALL allergens = "no". Zero exceptions.
+- PLAIN COFFEE/TEA (black coffee, espresso, plain tea, iced tea unsweetened):
+  - ALL allergens = "no" UNLESS milk/cream is explicitly stated (latte, cappuccino, etc.).
+- JUICE (orange juice, apple juice, fruit juice):
+  - ALL allergens = "no" unless explicitly stated otherwise.
+- MILK-BASED DRINKS (milkshakes, lattes, frappuccinos, smoothies with dairy):
+  - milk = "yes", all others typically "no" unless stated.
+
+STRICT "MAYBE" THRESHOLD (REDUCES FALSE POSITIVES):
+- ONLY use "present": "maybe" when:
+  1. Cross-contamination is genuinely likely (e.g., fried items in a kitchen that uses peanut oil), OR
+  2. A STANDARD preparation step almost always uses the allergen (e.g., most bread contains gluten), OR
+  3. The dish category has a very high probability of containing it (e.g., Asian sauces often contain soy).
+- DO NOT use "maybe" for:
+  - Speculative "some recipes might use X" reasoning when the specific dish shows no indication.
+  - Beverages - they should almost NEVER get "maybe" for ingredient allergens.
+  - Simple single-ingredient items (plain grilled chicken, steamed vegetables, etc.).
+- When in doubt, prefer "no" over "maybe" for cleaner results.
+
+SIMPLE DISH RULES (SINGLE-INGREDIENT ITEMS):
+- For simple items with obvious single ingredients, DO NOT over-complicate:
+  - Plain beverages: One component entry, all allergens "no".
+  - Plain grilled proteins (grilled chicken breast, grilled salmon): Only flag allergens actually present (fish for salmon, etc.).
+  - Plain vegetables/salads without dressing: Minimal allergen flags.
+  - Plain rice, plain potatoes: No allergens unless stated.
+- DO NOT infer multiple components for items that are clearly singular.
+- DO NOT add "maybe" flags based on hypothetical preparation methods for simple items.
+
+BAKED GOODS CAUTION (MEDICAL SAFETY - CRITICAL):
+- BAKED GOODS (cookies, cakes, pastries, muffins, brownies, cupcakes, bread, pie crust) USUALLY contain eggs.
+- IF the dishName contains "cookie", "cake", "muffin", "brownie", "cupcake", "pastry", "pie", "tart":
+  - AND no eggs are explicitly listed in ingredients
+  - AND the dish is NOT labeled vegan/egg-free
+  - THEN egg.present MUST be "maybe" with reason: "Traditional recipes typically include eggs. Verify with restaurant if you have an egg allergy."
+- Example: "Peanut Butter Cookie" with ingredients "peanut butter, oats, sugar, chocolate chips"
+  → Should return egg.present = "maybe" because cookies typically contain eggs even if this specific recipe doesn't show them.
+- ONLY use egg.present = "no" for baked goods if:
+  1. The dish is explicitly labeled "vegan" or "egg-free", OR
+  2. Obvious egg substitutes are listed (flax egg, chia egg, aquafaba, applesauce as binder)
+
 MULTI-LANGUAGE AWARENESS:
 - Recognize common food words in Spanish, Italian, French, Portuguese, etc.
   - "queso", "nata", "crema", "leche" → dairy (milk).
@@ -13415,6 +13575,64 @@ STRICTNESS RULES (IMPORTANT):
   - Use "present": "maybe" with a clear explanation (e.g. "Meatballs often use egg as a binder, but egg is not listed here.").
 - If the text gives no indication for an allergen and no tags imply it:
   - Prefer "present": "no" and mention that it is not listed or implied.
+
+DESCRIPTION SANITIZATION (CRITICAL - PREVENTS FALSE POSITIVES):
+- IGNORE any text that describes OTHER dishes, pairings, or serving suggestions:
+  - Phrases like "pairs well with...", "enjoy with...", "served alongside...", "goes great with...", "try it with..."
+  - References to combo items that are NOT the primary dish being analyzed
+  - Marketing/promotional text about other menu items
+- ONLY analyze the PRIMARY dish named in dishName.
+- If menuDescription mentions other dishes (e.g., "Our Coke pairs perfectly with our signature omelette"),
+  DO NOT attribute ingredients from those other dishes to the primary dish.
+- Example: "Coca-Cola - Refreshing beverage. Pairs well with our breakfast platter with eggs and bacon."
+  → The Coke has NO egg allergen. The eggs are in a DIFFERENT dish mentioned as a pairing.
+
+BEVERAGE EXCEPTION RULES (CRITICAL FOR DRINKS):
+- CARBONATED SOFT DRINKS (Coca-Cola, Pepsi, Sprite, Fanta, Dr Pepper, root beer, ginger ale, club soda, tonic water, sparkling water):
+  - These NEVER contain common allergens (gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame).
+  - Set ALL allergens to "present": "no" with reason "Carbonated soft drinks do not contain this allergen."
+  - Caramel coloring is NOT an allergen source - do not flag it.
+  - component_allergens should have ONE entry: the beverage itself with all allergens = "no".
+- PLAIN WATER (still water, sparkling water, mineral water):
+  - ALL allergens = "no". Zero exceptions.
+- PLAIN COFFEE/TEA (black coffee, espresso, plain tea, iced tea unsweetened):
+  - ALL allergens = "no" UNLESS milk/cream is explicitly stated (latte, cappuccino, etc.).
+- JUICE (orange juice, apple juice, fruit juice):
+  - ALL allergens = "no" unless explicitly stated otherwise.
+- MILK-BASED DRINKS (milkshakes, lattes, frappuccinos, smoothies with dairy):
+  - milk = "yes", all others typically "no" unless stated.
+
+STRICT "MAYBE" THRESHOLD (REDUCES FALSE POSITIVES):
+- ONLY use "present": "maybe" when:
+  1. Cross-contamination is genuinely likely (e.g., fried items in a kitchen that uses peanut oil), OR
+  2. A STANDARD preparation step almost always uses the allergen (e.g., most bread contains gluten), OR
+  3. The dish category has a very high probability of containing it (e.g., Asian sauces often contain soy).
+- DO NOT use "maybe" for:
+  - Speculative "some recipes might use X" reasoning when the specific dish shows no indication.
+  - Beverages - they should almost NEVER get "maybe" for ingredient allergens.
+  - Simple single-ingredient items (plain grilled chicken, steamed vegetables, etc.).
+- When in doubt, prefer "no" over "maybe" for cleaner results.
+
+SIMPLE DISH RULES (SINGLE-INGREDIENT ITEMS):
+- For simple items with obvious single ingredients, DO NOT over-complicate:
+  - Plain beverages: One component entry, all allergens "no".
+  - Plain grilled proteins (grilled chicken breast, grilled salmon): Only flag allergens actually present (fish for salmon, etc.).
+  - Plain vegetables/salads without dressing: Minimal allergen flags.
+  - Plain rice, plain potatoes: No allergens unless stated.
+- DO NOT infer multiple components for items that are clearly singular.
+- DO NOT add "maybe" flags based on hypothetical preparation methods for simple items.
+
+BAKED GOODS CAUTION (MEDICAL SAFETY - CRITICAL):
+- BAKED GOODS (cookies, cakes, pastries, muffins, brownies, cupcakes, bread, pie crust) USUALLY contain eggs.
+- IF the dishName contains "cookie", "cake", "muffin", "brownie", "cupcake", "pastry", "pie", "tart":
+  - AND no eggs are explicitly listed in ingredients
+  - AND the dish is NOT labeled vegan/egg-free
+  - THEN egg.present MUST be "maybe" with reason: "Traditional recipes typically include eggs. Verify with restaurant if you have an egg allergy."
+- Example: "Peanut Butter Cookie" with ingredients "peanut butter, oats, sugar, chocolate chips"
+  → Should return egg.present = "maybe" because cookies typically contain eggs even if this specific recipe doesn't show them.
+- ONLY use egg.present = "no" for baked goods if:
+  1. The dish is explicitly labeled "vegan" or "egg-free", OR
+  2. Obvious egg substitutes are listed (flax egg, chia egg, aquafaba, applesauce as binder)
 
 MULTI-LANGUAGE AWARENESS:
 - Recognize common food words in Spanish, Italian, French, Portuguese, etc.
@@ -27238,9 +27456,18 @@ function buildOrganSentences(organsArr = []) {
 }
 
 // Smart human-like allergen summary paragraph
-function buildSmartAllergenSummary(allergenFlags, lactoseFlags, allergenBreakdown) {
+function buildSmartAllergenSummary(allergenFlags, lactoseFlags, allergenBreakdown, dishName) {
   if (!Array.isArray(allergenFlags) || allergenFlags.length === 0) {
     return "No major allergens were detected in this dish based on the available information.";
+  }
+
+  // BEVERAGE SAFETY CHECK: If dish name indicates a plain beverage, override any false positive allergens
+  const beveragePatterns = /^(coca[- ]?cola|coke|pepsi|sprite|fanta|dr[. ]?pepper|7[- ]?up|mountain dew|root beer|ginger ale|club soda|tonic water|sparkling water|still water|mineral water|bottled water|iced tea|sweet tea|unsweet tea|lemonade|orange juice|apple juice|cranberry juice|grape juice|fruit punch|black coffee|espresso|americano|drip coffee)$/i;
+  const dishNameLower = (dishName || '').toLowerCase().trim();
+
+  if (beveragePatterns.test(dishNameLower)) {
+    // This is a known plain beverage - should have NO allergens
+    return "This beverage contains no major allergens.";
   }
 
   const sentences = [];
@@ -31164,6 +31391,99 @@ async function runDishAnalysis(env, body, ctx) {
     body.forceReanalyze === true ||
     body.force_reanalyze === 1;
 
+  // ========== PLAIN BEVERAGE EARLY EXIT (MEDICAL GRADE CRITICAL) ==========
+  // Plain beverages should return NO allergens immediately - don't let wrong cached recipes
+  // or LLM hallucinations create false positives for sodas, water, coffee, juice, etc.
+  const plainBeveragePattern = /^(coca[- ]?cola|coke|pepsi|sprite|fanta|dr[. ]?pepper|7[- ]?up|seven[- ]?up|mountain dew|mtn dew|root beer|ginger ale|club soda|tonic water|tonic|sparkling water|seltzer|still water|mineral water|bottled water|water|iced tea|sweet tea|unsweet tea|unsweetened tea|tea|lemonade|orange juice|apple juice|cranberry juice|grape juice|grapefruit juice|tomato juice|pineapple juice|fruit punch|punch|black coffee|coffee|espresso|americano|drip coffee|cold brew|hot chocolate|cocoa)$/i;
+  const dishNameLowerEarly = dishName.toLowerCase().trim();
+
+  if (plainBeveragePattern.test(dishNameLowerEarly)) {
+    // EARLY EXIT: Return allergen-free response for plain beverages
+    debug.plain_beverage_early_exit = true;
+    debug.plain_beverage_matched = dishName;
+    debug.total_ms = Date.now() - tStart;
+    debug.pipeline_version = PIPELINE_VERSION;
+
+    return {
+      status: 200,
+      result: {
+        ok: true,
+        apiVersion: "v1",
+        source: "pipeline.analyze-dish",
+        dishName,
+        dishNameCanonical: null,
+        canonicalId: null,
+        canonicalCuisine: null,
+        restaurantName,
+        imageUrl: null,
+        recipe_image: null,
+        generated_description: `A refreshing ${dishName.toLowerCase()}.`,
+        summary: {
+          tummyBarometer: { score: 0, label: "neutral" },
+          organs: [],
+          keyFlags: {
+            allergens: [],
+            fodmapLevel: "low",
+            lactoseLevel: "low",
+            onionGarlic: false,
+            spicy: false,
+            alcohol: false
+          },
+          sentences: [
+            "This beverage contains no major allergens.",
+            "This beverage is low in FODMAPs and suitable for most people.",
+            "This is a simple beverage with no significant health impacts."
+          ],
+          llm_sentences: {
+            overall: "This is a simple beverage with no significant health impacts.",
+            allergens: "This beverage contains no major allergens.",
+            fodmap: "This beverage is low in FODMAPs and suitable for most people.",
+            organs_overview: "This beverage has neutral impact on organs."
+          },
+          edamamLabels: []
+        },
+        allergen_flags: [],
+        allergen_summary: "This beverage contains no major allergens.",
+        allergen_breakdown: [],
+        fodmap_flags: { level: "low", reason: "Plain beverages are naturally low in FODMAPs.", source: "beverage-override" },
+        fodmap_summary: "This beverage is low in FODMAPs and suitable for most people.",
+        lactose_flags: { level: "low", reason: "This beverage contains no dairy.", source: "beverage-override" },
+        lifestyle_tags: [],
+        lifestyle_checks: null,
+        nutrition_summary: null,
+        nutrition_badges: [],
+        nutrition_insights: null,
+        nutrition_source: "beverage-override",
+        nutrition_breakdown: [],
+        plate_components: [],
+        recipe: null,
+        likely_recipe: null,
+        full_recipe: null,
+        organs: {
+          ok: true,
+          tummy_barometer: { score: 0, label: "neutral" },
+          flags: {
+            allergens: [],
+            fodmap: { level: "low", reason: "Plain beverages are naturally low in FODMAPs.", triggers: [] },
+            lactose: { level: "low", reason: "This beverage contains no dairy.", examples: [] },
+            onion_garlic: false,
+            spicy: false,
+            alcohol: false
+          },
+          organs: [],
+          llm_sentences: {
+            overall: "This is a simple beverage with no significant health impacts.",
+            allergens: "This beverage contains no major allergens.",
+            fodmap: "This beverage is low in FODMAPs and suitable for most people.",
+            organs_overview: "This beverage has neutral impact on organs."
+          },
+          debug: {}
+        },
+        debug
+      }
+    };
+  }
+
   // Photo analysis should never use cache since each photo is unique
   const isPhotoAnalysis = body.source === 'photo_analysis' || !!body.imageUrl;
   const allowCache =
@@ -34096,8 +34416,11 @@ async function runDishAnalysis(env, body, ctx) {
   debug.total_ms = Date.now() - tStart;
   debug.pipeline_version = PIPELINE_VERSION;
 
+  // NOTE: Plain beverage early exit is handled at the start of the pipeline
+  // Beverages matching the pattern never reach this point - see line ~30862
+
   // Build smart human-readable summaries
-  const allergen_summary = buildSmartAllergenSummary(allergen_flags, lactose_flags, allergen_breakdown);
+  const allergen_summary = buildSmartAllergenSummary(allergen_flags, lactose_flags, allergen_breakdown, dishName);
   const fodmap_summary = buildSmartFodmapSummary(fodmap_flags, allergen_breakdown, plateComponents);
 
   // Build Likely Recipe (merges recipe + vision ingredients + adjusted cooking method)
