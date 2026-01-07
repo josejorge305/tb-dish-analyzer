@@ -1446,30 +1446,13 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
         /hour/i, /location/i, /contact/i, /popular\s*near/i
       ];
 
-      // NOISE SECTIONS: Sections that should be excluded (utensils, promos, condiments, drinks)
+      // NOISE SECTIONS: Sections that should be excluded (utensils, promos, condiments)
       const NOISE_SECTION_PATTERNS = [
-        // Utensils & Packaging
         /utensil/i, /napkin/i, /silverware/i, /cutlery/i, /packet/i,
-        // Promotions
         /buy\s*\d+.*get/i, /bogo/i, /free\s*with/i, /limited\s*time/i,
         /cross-?sell/i, /upsell/i, /add-?on/i,
         /featured\s*deal/i, /special\s*offer/i, /promo/i,
-        // Merchandise
-        /retail/i, /merchandise/i, /gift\s*card/i,
-        // DRINKS & BEVERAGES (exclude entire drink sections)
-        /^drinks?$/i, /^beverages?$/i, /^drinks?\s*(&|and)\s*/i,
-        /^soft\s*drinks?/i, /^fountain\s*drinks?/i,
-        /^cocktails?$/i, /^alcoholic/i, /^bar\s*menu/i, /^bar$/i,
-        /^wine/i, /^wines?\s*(by|list|menu)?/i, /^red\s*wine/i, /^white\s*wine/i,
-        /^beer/i, /^beers?\s*(on\s*tap|list|menu)?/i, /^draft/i, /^craft\s*beer/i,
-        /^spirits?$/i, /^liquor/i, /^shots?$/i, /^mixed\s*drinks?/i,
-        /^coffee/i, /^hot\s*drinks?/i, /^cold\s*drinks?/i,
-        /^juice/i, /^smoothie/i, /^shake/i, /^milkshake/i,
-        /^tea$/i, /^teas$/i, /^iced\s*tea/i,
-        /^soda/i, /^sodas$/i, /^pop$/i,
-        // Catering (large party orders)
-        /^catering/i, /^party\s*(pack|platter|tray)/i, /^large\s*order/i,
-        /^group\s*order/i, /^feeds\s*\d+/i, /^serves\s*\d+/i
+        /retail/i, /merchandise/i, /gift\s*card/i
       ];
 
       // NOISE ITEMS: Item names that should be excluded (only exact matches for utensils)
@@ -1970,326 +1953,6 @@ async function scrapeUberEatsMenu(env, query, address, options = {}) {
       error: error.message,
       elapsed_ms: Date.now() - startTime
     };
-  }
-}
-
-/**
- * Streaming version of scrapeUberEatsMenu
- * Emits menu items progressively as they're discovered during scrolling
- * @param {Object} env - Cloudflare environment with BROWSER binding
- * @param {string} query - Restaurant name to search for
- * @param {string} address - Address for location context
- * @param {Object} options - Configuration options
- * @param {number} options.maxRows - Maximum items to collect (default: 100)
- * @param {Function} options.onPhase - Callback for phase updates (phase, message)
- * @param {Function} options.onItem - Callback for each discovered item (item, index)
- * @param {Function} options.onRestaurant - Callback for restaurant info
- * @returns {Object} - { ok, items, restaurant, error }
- */
-async function scrapeUberEatsMenuStreaming(env, query, address, options = {}) {
-  const {
-    maxRows = 100,
-    onPhase = async () => {},
-    onItem = async () => {},
-    onRestaurant = async () => {}
-  } = options;
-
-  const startTime = Date.now();
-  let browser = null;
-  const discoveredItems = [];
-  const seenItemIds = new Set();
-  const seenItemNames = new Set();
-  let itemIndex = 0;
-  let storeUrl = null;
-
-  // Noise patterns (same as main scraper)
-  const NOISE_ITEM_PATTERNS = [
-    /^utensils?$/i, /^napkins?$/i, /^forks?$/i, /^knives?$/i, /^spoons?$/i,
-    /^straws?$/i, /^plastic\s*(ware|utensil)/i, /^disposable/i,
-    /^cutlery\s*(set|pack)?$/i, /^silverware$/i, /^condiment\s*(pack|kit)/i
-  ];
-  const isNoiseItem = (name) => NOISE_ITEM_PATTERNS.some(p => p.test(name));
-
-  if (!env.BROWSER) {
-    return { ok: false, error: "BROWSER binding not available", items: [] };
-  }
-
-  try {
-    // Phase 1: Launch browser
-    await onPhase('browser', 'Launching browser...');
-    console.log(`[StreamingScraper] Starting for "${query}" @ "${address}"`);
-
-    browser = await puppeteer.launch(env.BROWSER);
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-    // Phase 2: Set location
-    await onPhase('location', 'Setting location...');
-
-    const locationCoords = getLocationCoords(address);
-    const plParam = generatePlParam(address, locationCoords);
-
-    const locationCookie = {
-      address: { address1: address, city: address.split(',')[0]?.trim() || "Miami", country: "US" },
-      latitude: locationCoords.lat,
-      longitude: locationCoords.lng
-    };
-
-    await page.setCookie(
-      { name: 'uev2.loc', value: encodeURIComponent(JSON.stringify(locationCookie)), domain: '.ubereats.com', path: '/' },
-      { name: 'uev2.diningMode', value: 'DELIVERY', domain: '.ubereats.com', path: '/' }
-    );
-
-    // Establish session via feed
-    const feedUrl = `https://www.ubereats.com/feed?pl=${plParam}`;
-    await page.goto(feedUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-    await wait(1500);
-
-    // Phase 3: Search for restaurant
-    await onPhase('searching', `Searching for "${query}"...`);
-
-    const searchUrl = `https://www.ubereats.com/search?q=${encodeURIComponent(query)}&pl=${plParam}`;
-    await page.goto(searchUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-    await wait(2000);
-
-    // Find best matching restaurant
-    await page.waitForSelector('a[href*="/store/"]', { timeout: 15000 }).catch(() => null);
-
-    const allStoreLinks = await page.$$eval('a[href*="/store/"]', (links) => {
-      return links.slice(0, 20).map(link => {
-        let text = link.textContent?.trim() || '';
-        const nameMatch = text.match(/^([A-Za-z0-9\s&''\-\(\)]+?)(?:\d|\$|min|rating|•|Delivery|Pickup|Promoted)/i);
-        return {
-          href: link.href,
-          text: nameMatch ? nameMatch[1].trim() : text.split('\n')[0]?.trim() || text.slice(0, 80)
-        };
-      });
-    });
-
-    // Score matches
-    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    let bestMatch = null;
-    let bestScore = 0;
-
-    for (const link of allStoreLinks) {
-      const linkWords = link.text.toLowerCase().split(/\s+/);
-      let matchCount = 0;
-      for (const qw of queryWords) {
-        if (linkWords.some(lw => lw.includes(qw) || qw.includes(lw))) matchCount++;
-      }
-      const score = queryWords.length > 0 ? matchCount / queryWords.length : 0;
-      if (score > bestScore && score >= 0.5) {
-        bestScore = score;
-        bestMatch = link;
-      }
-    }
-
-    if (!bestMatch && allStoreLinks.length > 0) {
-      // Fallback to first result if no good match
-      bestMatch = allStoreLinks[0];
-    }
-
-    if (!bestMatch) {
-      await onPhase('error', 'No matching restaurant found');
-      return { ok: false, error: 'No matching restaurant found', items: [] };
-    }
-
-    storeUrl = bestMatch.href;
-
-    // Send restaurant info
-    const restaurantInfo = { name: bestMatch.text, url: storeUrl };
-    await onRestaurant(restaurantInfo);
-
-    // Phase 4: Navigate to menu
-    await onPhase('loading', `Loading menu for ${bestMatch.text}...`);
-
-    await page.goto(storeUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-    await wait(2000);
-
-    // Wait for menu items to appear
-    await page.waitForSelector('[data-testid^="store-item-"], [data-testid*="menu-item"]', { timeout: 15000 }).catch(() => null);
-
-    // Phase 5: Progressive scroll and extract
-    await onPhase('discovering', 'Discovering menu items...');
-
-    // Helper function to extract items from current viewport
-    const extractVisibleItems = async () => {
-      return await page.evaluate((seenIds, seenNames) => {
-        const items = [];
-        const itemElements = document.querySelectorAll(
-          '[data-testid^="store-item-"], [data-testid*="menu-item"], [data-testid*="catalog-item"]'
-        );
-
-        // Build section map
-        const sectionElements = [];
-        document.querySelectorAll('[data-testid="catalog-section-title"]').forEach(h => {
-          const text = h.textContent?.trim();
-          if (text && text.length <= 80) {
-            const rect = h.getBoundingClientRect();
-            sectionElements.push({ name: text, top: rect.top + window.scrollY });
-          }
-        });
-        sectionElements.sort((a, b) => a.top - b.top);
-
-        itemElements.forEach((item) => {
-          const testId = item.getAttribute('data-testid') || '';
-          let itemId = testId.replace(/^store-item-|^menu-item-|^catalog-item-/, '') || `item-${Math.random()}`;
-
-          if (seenIds.includes(itemId)) return;
-
-          // Extract name
-          let name = null;
-          const nameLabel = item.querySelector('[data-testid="item-thumbnail-label"]');
-          if (nameLabel) name = nameLabel.textContent?.trim();
-
-          if (!name) {
-            const titleEl = item.querySelector('h3, h4, [class*="itemTitle"]');
-            if (titleEl) name = titleEl.textContent?.trim();
-          }
-
-          if (!name) {
-            const firstSpan = item.querySelector('span');
-            if (firstSpan) {
-              const text = firstSpan.textContent?.trim();
-              if (text && text.length >= 2 && text.length <= 100 && !text.startsWith('$')) {
-                name = text;
-              }
-            }
-          }
-
-          if (!name || name.length < 2) return;
-          if (seenNames.includes(name.toLowerCase())) return;
-
-          // Determine section
-          let sectionName = 'Menu Items';
-          const itemRect = item.getBoundingClientRect();
-          const itemTop = itemRect.top + window.scrollY;
-          for (let i = sectionElements.length - 1; i >= 0; i--) {
-            if (sectionElements[i].top < itemTop) {
-              sectionName = sectionElements[i].name;
-              break;
-            }
-          }
-
-          // Extract price and calories
-          const fullText = item.textContent || '';
-          const priceMatch = fullText.match(/\$(\d+\.?\d*)/);
-          const calMatch = fullText.match(/(\d+(?:\s*-\s*\d+)?)\s*Cal/);
-
-          // Extract description
-          let description = null;
-          const calDescMatch = fullText.match(/\d+(?:\s*-\s*\d+)?\s*Cal\.?\s*(.+?)(?:\$|$)/i);
-          if (calDescMatch && calDescMatch[1]) {
-            const extracted = calDescMatch[1].trim().replace(/\d+%.*$/g, '').replace(/Popular.*$/i, '').trim();
-            if (extracted.length >= 15 && extracted !== name) description = extracted;
-          }
-
-          items.push({
-            id: itemId,
-            name: name,
-            description: description,
-            section: sectionName,
-            price: priceMatch ? parseFloat(priceMatch[1]) : null,
-            price_display: priceMatch ? `$${parseFloat(priceMatch[1]).toFixed(2)}` : null,
-            calories: calMatch ? calMatch[1].replace(/\s/g, '') : null
-          });
-        });
-
-        return items;
-      }, Array.from(seenItemIds), Array.from(seenItemNames));
-    };
-
-    // Progressive scroll with item emission
-    let previousHeight = 0;
-    let noChangeCount = 0;
-    const maxScrollAttempts = 30;
-    let scrollAttempts = 0;
-
-    while (scrollAttempts < maxScrollAttempts && discoveredItems.length < maxRows) {
-      // Extract newly visible items
-      const newItems = await extractVisibleItems();
-
-      for (const item of newItems) {
-        if (discoveredItems.length >= maxRows) break;
-        if (seenItemIds.has(item.id)) continue;
-        if (seenItemNames.has(item.name.toLowerCase())) continue;
-        if (isNoiseItem(item.name)) continue;
-
-        seenItemIds.add(item.id);
-        seenItemNames.add(item.name.toLowerCase());
-        discoveredItems.push(item);
-
-        // Emit item to stream
-        await onItem(item, itemIndex++);
-      }
-
-      // Scroll down
-      const currentHeight = await page.evaluate(() => document.body.scrollHeight);
-
-      if (currentHeight === previousHeight) {
-        noChangeCount++;
-        if (noChangeCount >= 5) break; // No more content to load
-      } else {
-        noChangeCount = 0;
-        previousHeight = currentHeight;
-      }
-
-      await page.evaluate(() => window.scrollBy(0, 400));
-      await wait(300);
-      scrollAttempts++;
-
-      // Update phase periodically
-      if (scrollAttempts % 5 === 0) {
-        await onPhase('discovering', `Found ${discoveredItems.length} items...`);
-      }
-    }
-
-    // Try expanding sections for more items
-    await onPhase('expanding', 'Expanding sections...');
-    const expandedCount = await expandSections(page);
-
-    if (expandedCount > 0) {
-      // Extract any newly revealed items
-      const additionalItems = await extractVisibleItems();
-      for (const item of additionalItems) {
-        if (discoveredItems.length >= maxRows) break;
-        if (seenItemIds.has(item.id)) continue;
-        if (seenItemNames.has(item.name.toLowerCase())) continue;
-        if (isNoiseItem(item.name)) continue;
-
-        seenItemIds.add(item.id);
-        seenItemNames.add(item.name.toLowerCase());
-        discoveredItems.push(item);
-        await onItem(item, itemIndex++);
-      }
-    }
-
-    await browser.close();
-    browser = null;
-
-    const elapsed = Date.now() - startTime;
-    await onPhase('complete', `Found ${discoveredItems.length} items in ${Math.round(elapsed/1000)}s`);
-
-    console.log(`[StreamingScraper] Complete: ${discoveredItems.length} items in ${elapsed}ms`);
-
-    return {
-      ok: true,
-      items: discoveredItems,
-      restaurant: restaurantInfo,
-      store_url: storeUrl,
-      source: 'inhouse-stream',
-      elapsed_ms: elapsed
-    };
-
-  } catch (error) {
-    console.error('[StreamingScraper] Error:', error.message);
-    await onPhase('error', error.message);
-    return { ok: false, error: error.message, items: discoveredItems };
-  } finally {
-    if (browser) {
-      try { await browser.close(); } catch (e) {}
-    }
   }
 }
 
@@ -4173,7 +3836,6 @@ async function handleOrgansFromDish(url, env, request) {
   const normalizedIngredients = ingredients.slice();
 
   function snapToKnownIngredient(name) {
-    if (!name || typeof name !== 'string') return name || '';
     const s = name.toLowerCase();
     if (s.includes("olive oil")) return "olive oil";
     if (s.includes("butter")) return "butter";
@@ -5103,45 +4765,6 @@ function isStandaloneDrink(name) {
   // Remove trademark symbols for matching
   const cleanName = n.replace(/[®™©]/g, "").trim();
 
-  // WINE BOTTLE PATTERNS (BTL = Bottle)
-  // Matches: "BTL Garnacha", "BTL Cab Sauv", "BTL Chardonnay", "Bottle of Wine"
-  if (/^btl\s+/i.test(cleanName)) return true; // Starts with "BTL "
-  if (/^bottle\s+(of\s+)?/i.test(cleanName)) return true; // Starts with "Bottle" or "Bottle of"
-  if (/\bwine\s*(bottle|btl)?\b/i.test(cleanName)) return true; // Contains "wine"
-  if (/\b(glass|carafe)\s+of\s+(wine|red|white|rose|rosé)\b/i.test(cleanName)) return true;
-
-  // COCKTAIL PATTERNS
-  // Matches: "Lemon Drop Martini", "Moscow Mule", "Passion Fruit Airmail", etc.
-  const cocktailPatterns = [
-    /martini$/i, /mule$/i, /colada$/i, /margarita$/i, /mojito$/i, /daiquiri$/i,
-    /sangria$/i, /mimosa$/i, /bellini$/i, /spritz$/i, /negroni$/i, /mai\s*tai$/i,
-    /old\s*fashioned$/i, /manhattan$/i, /cosmopolitan$/i, /cosmo$/i, /sour$/i,
-    /fizz$/i, /highball$/i, /collins$/i, /airmail$/i, /paloma$/i, /caipirinha$/i,
-    /tequila\s*sunrise$/i, /pina\s*colada$/i, /long\s*island$/i, /bloody\s*mary$/i,
-    /whiskey\s*sour$/i, /bourbon$/i, /scotch$/i, /vodka$/i, /rum$/i, /gin$/i, /tequila$/i,
-    /lemon\s*drop$/i, /sex\s*on\s*the\s*beach$/i, /moscow$/i, /espresso\s*martini$/i,
-  ];
-  for (const p of cocktailPatterns) {
-    if (p.test(cleanName)) return true;
-  }
-
-  // WINE VARIETIES
-  const wineVarieties = [
-    "cabernet", "cab sauv", "merlot", "pinot noir", "pinot grigio", "chardonnay",
-    "sauvignon blanc", "riesling", "zinfandel", "shiraz", "syrah", "malbec",
-    "tempranillo", "garnacha", "grenache", "barolo", "chianti", "prosecco",
-    "champagne", "cava", "moscato", "rose", "rosé", "white wine", "red wine",
-    "house wine", "wine by the glass", "sparkling wine", "dessert wine", "port",
-    "sherry", "vermouth", "sake", "soju", "bernabeleva", "vina maita", "reverdito"
-  ];
-  for (const wine of wineVarieties) {
-    if (cleanName.includes(wine)) return true;
-  }
-
-  // BEER PATTERNS
-  if (/\b(ipa|lager|pilsner|stout|porter|ale|wheat\s*beer|craft\s*beer|draft|draught)\b/i.test(cleanName)) return true;
-  if (/\b(bud\s*light|budweiser|miller|coors|corona|heineken|stella|guinness|modelo|pacifico)\b/i.test(cleanName)) return true;
-
   // Base drink names (will be matched with or without size prefixes)
   const drinkBases = [
     // Sodas
@@ -5174,7 +4797,7 @@ function isStandaloneDrink(name) {
     // Energy drinks
     "red bull", "redbull", "monster", "rockstar", "bang",
     "gatorade", "powerade", "body armor", "vitamin water",
-    // Alcohol (base names)
+    // Alcohol
     "beer", "wine", "margarita", "mojito", "cocktail", "martini", "sangria",
     "piña colada", "daiquiri", "cosmopolitan", "mimosa", "bellini",
     // Generic
@@ -5238,24 +4861,14 @@ function isUtensilOrFee(name) {
     /^(pizza|cookie|baking)\s*cutter$/i,
     /^cutting\s*board$/i,
     /^kitchen\s*(tool|utensil|gadget)s?$/i,
-    /^plates?\s*(set)?$/i,  // Paper plates
-    /^cups?\s*(set)?$/i,    // Paper cups
-    /^bowls?\s*(set)?$/i,   // Paper bowls
   ];
 
   const feePatterns = [
     /fee$/i,
-    /\bfee\b/i,  // Matches "Corkage Fee", "Service Fee", "Delivery Fee"
     /charge$/i,
     /surcharge$/i,
     /^bag$/i,
     /^packaging$/i,
-    /^corkage/i,           // "Corkage", "Corkage Fee"
-    /^service\s*charge/i,  // "Service Charge"
-    /^delivery\s*fee/i,    // "Delivery Fee"
-    /^tip$/i,              // "Tip"
-    /^gratuity/i,          // "Gratuity"
-    /^tax$/i,              // "Tax" (shouldn't appear but just in case)
   ];
 
   for (const p of utensilPatterns) {
@@ -5293,41 +4906,6 @@ function isPureCondiment(name) {
   return false;
 }
 
-// Check if item is a large combo/party pack (not a regular meal)
-// These are catering-style items with multiple components like "10 Wings + 3 Fries + 6 Biscuits"
-function isLargeComboBundle(name) {
-  const n = (name || "").toLowerCase().trim();
-
-  // PATTERN 1: Multiple quantities with "+" or "&" or "and"
-  // Matches: "10 wings + 3 fries", "8 pc chicken & 4 sides"
-  // Count how many distinct quantity+item pairs exist
-  const quantityPairs = n.match(/\d+\s*(pc|piece|pcs)?\.?\s*[a-z]+/gi) || [];
-  if (quantityPairs.length >= 3) return true; // 3+ different items with quantities = party pack
-
-  // PATTERN 2: Large quantities indicating catering/party
-  // Matches: "50 wings", "24 piece chicken", "100 nuggets"
-  if (/\b(2[0-9]|[3-9][0-9]|[1-9]\d{2,})\s*(pc|piece|pcs)?\.?\s*(wing|nugget|tender|strip|finger|leg|thigh|breast|rib|shrimp)/i.test(n)) return true;
-
-  // PATTERN 3: Family/Party/Catering keywords with large numbers
-  // Matches: "Family Pack 20pc", "Party Platter", "Catering Tray"
-  if (/\b(family|party|group|catering|feast|platter|tray|bucket|barrel)\b/i.test(n)) {
-    // Check if it has a large quantity
-    if (/\b(1[2-9]|[2-9]\d|\d{3,})\s*(pc|piece|pcs)?/i.test(n)) return true;
-    // Or if it explicitly says "serves X" with X >= 6
-    if (/serves?\s*([6-9]|\d{2,})/i.test(n)) return true;
-  }
-
-  // PATTERN 4: Explicit "for X people" or "feeds X"
-  if (/\b(for|feeds|serves)\s*([8-9]|[1-9]\d+)\s*(people|guests|persons)?/i.test(n)) return true;
-
-  // PATTERN 5: Bundle descriptions with multiple distinct food items
-  // "wings, fries, biscuits, and coleslaw" - 4+ items listed
-  const foodItems = n.split(/[,&+]/).filter(s => s.trim().length > 2);
-  if (foodItems.length >= 4) return true;
-
-  return false;
-}
-
 function isNoiseItem(name, description = "") {
   const n = (name || "").toLowerCase().trim();
 
@@ -5335,7 +4913,6 @@ function isNoiseItem(name, description = "") {
   if (isStandaloneDrink(n)) return true;
   if (isUtensilOrFee(n)) return true;
   if (isPureCondiment(n)) return true;
-  if (isLargeComboBundle(n)) return true;
 
   // Merch items
   if (/\bmerch(andise)?\b/i.test(n)) return true;
@@ -6802,144 +6379,6 @@ function extractMenuItemsFromUber(raw, queryText = "") {
   return out;
 }
 
-// ============================================================================
-// PRODUCTION-SAFE JUNK ITEM DETECTION
-// O(1) per item, no network calls, no LLM - safe for production latency
-// ============================================================================
-
-/**
- * Fast patterns for obvious junk items that shouldn't be standalone menu items
- */
-const JUNK_ITEM_PATTERNS = [
-  // Add-ons/modifiers that leaked as standalone items
-  /^add\s+/i,
-  /^\+\s*/,
-  /^extra\s+/i,
-  /^upgrade\s+to/i,
-  /^substitute\s+/i,
-  /^(single|double|triple)\s+(shot|pump)/i,
-
-  // Grocery/inventory style
-  /^\d+\s*(oz|ml|l|lb|kg|g|ct|pk|pack)\b/i,
-  /\b(case|carton)\s+of\s+\d+/i,
-  /\b(6|12|24|36|48)\s*(pack|pk|ct)\b/i,
-
-  // System/placeholder items
-  /^placeholder/i,
-  /^test\s*item/i,
-  /^do\s*not\s*order/i,
-  /^not\s*available/i,
-  /^\[.*\]$/,
-  /^---+$/,
-
-  // Pure modifiers
-  /^no\s+(ice|whip|cream|sauce)/i,
-  /^light\s+(ice|sauce)/i,
-  /^(napkins|utensils|straws|lids)$/i
-];
-
-/**
- * Fast patterns for valid menu items (skip junk check if matched)
- */
-const VALID_ITEM_PATTERNS = [
-  /burger/i, /sandwich/i, /pizza/i, /pasta/i, /salad/i,
-  /taco/i, /burrito/i, /bowl/i, /wrap/i,
-  /chicken/i, /beef/i, /pork/i, /fish/i, /shrimp/i,
-  /fries/i, /wings/i, /nuggets/i, /tenders/i,
-  /soup/i, /appetizer/i, /entree/i, /dessert/i,
-  /coffee/i, /latte/i, /smoothie/i, /shake/i
-];
-
-/**
- * Fast O(1) junk detection for a single item
- * @param {object} item - Menu item
- * @returns {boolean} - true if item is junk
- */
-function isJunkItemFast(item) {
-  const name = (item.name || item.title || "").trim();
-
-  // Empty or very short names are junk
-  if (!name || name.length < 2) return true;
-
-  // Numeric-only names (SKUs)
-  if (/^\d+$/.test(name)) return true;
-
-  // Check valid patterns first (fast exit for real food items)
-  for (const pattern of VALID_ITEM_PATTERNS) {
-    if (pattern.test(name)) return false;
-  }
-
-  // Check junk patterns
-  for (const pattern of JUNK_ITEM_PATTERNS) {
-    if (pattern.test(name)) return true;
-  }
-
-  // Suspiciously cheap items (under $0.50) are likely modifiers
-  const price = item.price;
-  if (typeof price === "number" && price > 0) {
-    const priceInDollars = price > 100 ? price / 100 : price;
-    if (priceInDollars < 0.50) return true;
-  }
-
-  return false;
-}
-
-/**
- * Production-safe junk filtering - O(n), no network calls
- * @param {Array} items - Menu items
- * @returns {{ filtered: Array, removedCount: number }}
- */
-function filterJunkItemsProduction(items) {
-  if (!Array.isArray(items)) return { filtered: [], removedCount: 0 };
-
-  let removedCount = 0;
-  const filtered = [];
-
-  for (const item of items) {
-    if (isJunkItemFast(item)) {
-      removedCount++;
-    } else {
-      filtered.push(item);
-    }
-  }
-
-  return { filtered, removedCount };
-}
-
-/**
- * Detect suspicious menu anomalies (high item count, etc.)
- * Returns status that can be used for fast-fail or flagging
- * @param {object} rawPayload - Raw Uber Eats payload
- * @returns {{ suspicious: boolean, reason: string | null }}
- */
-function detectMenuAnomaliesFast(rawPayload) {
-  const results = rawPayload?.data?.results || rawPayload?.results || [];
-  if (!Array.isArray(results) || results.length === 0) {
-    return { suspicious: false, reason: null };
-  }
-
-  const restaurant = results[0];
-  const menu = restaurant?.menu || restaurant?.catalogs || [];
-
-  let totalItems = 0;
-  for (const section of menu) {
-    const items = section?.catalogItems || section?.items || [];
-    totalItems += items.length;
-  }
-
-  // Suspiciously high item count (likely inventory dump)
-  if (totalItems > 500) {
-    return { suspicious: true, reason: `excessive_items:${totalItems}` };
-  }
-
-  // No items at all
-  if (totalItems === 0) {
-    return { suspicious: true, reason: "empty_menu" };
-  }
-
-  return { suspicious: false, reason: null };
-}
-
 const SECTION_PRIORITY = [
   "most popular",
   "popular items",
@@ -7004,18 +6443,6 @@ function filterAndRankItems(items, searchParams, env) {
 
   const skipDrinks = searchParams.get("skip_drinks") === "1";
   const skipParty = searchParams.get("skip_party") === "1";
-  // Skip junk items by default (can be disabled with skip_junk=0)
-  const skipJunk = searchParams.get("skip_junk") !== "0";
-
-  // Apply junk filtering first (production-safe, O(n))
-  if (skipJunk) {
-    const junkResult = filterJunkItemsProduction(candidates);
-    candidates = junkResult.filtered;
-    // Optionally log if many items were filtered
-    if (junkResult.removedCount > 10) {
-      console.log(`[filterAndRankItems] Removed ${junkResult.removedCount} junk items`);
-    }
-  }
 
   if (skipDrinks) {
     candidates = candidates.filter(
@@ -7178,7 +6605,7 @@ function parseOCRToCandidates(fullText) {
   const seen = new Set();
   const out = [];
   for (const it of items) {
-    const k = `${(it.section || "").toLowerCase()}|${(it.title || "").toLowerCase()}|${it.price_text}`;
+    const k = `${(it.section || "").toLowerCase()}|${it.title.toLowerCase()}|${it.price_text}`;
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(it);
@@ -10805,7 +10232,7 @@ function arrangeCookbookIngredients(rawList = []) {
   for (const it of rawList) {
     const entry = sanitizeIngredientForCookbook(it);
     if (!entry) continue;
-    const key = (entry.name || "").toLowerCase();
+    const key = entry.name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     cleaned.push(entry);
@@ -12871,7 +12298,7 @@ function buildOrgansCacheKey(payload) {
     PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
     (payload.dishName || "").toLowerCase().trim(),
     (payload.restaurantName || "").toLowerCase().trim(),
-    JSON.stringify((payload.ingredientLines || []).map(l => (typeof l === 'string' ? l : l?.name || l?.text || '').toLowerCase().trim()).sort()),
+    JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
     JSON.stringify((payload.ingredientsNormalized || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
@@ -13207,64 +12634,6 @@ STRICTNESS RULES (IMPORTANT):
 - If the text gives no indication for an allergen and no tags imply it:
   - Prefer "present": "no" and mention that it is not listed or implied.
 
-DESCRIPTION SANITIZATION (CRITICAL - PREVENTS FALSE POSITIVES):
-- IGNORE any text that describes OTHER dishes, pairings, or serving suggestions:
-  - Phrases like "pairs well with...", "enjoy with...", "served alongside...", "goes great with...", "try it with..."
-  - References to combo items that are NOT the primary dish being analyzed
-  - Marketing/promotional text about other menu items
-- ONLY analyze the PRIMARY dish named in dishName.
-- If menuDescription mentions other dishes (e.g., "Our Coke pairs perfectly with our signature omelette"),
-  DO NOT attribute ingredients from those other dishes to the primary dish.
-- Example: "Coca-Cola - Refreshing beverage. Pairs well with our breakfast platter with eggs and bacon."
-  → The Coke has NO egg allergen. The eggs are in a DIFFERENT dish mentioned as a pairing.
-
-BEVERAGE EXCEPTION RULES (CRITICAL FOR DRINKS):
-- CARBONATED SOFT DRINKS (Coca-Cola, Pepsi, Sprite, Fanta, Dr Pepper, root beer, ginger ale, club soda, tonic water, sparkling water):
-  - These NEVER contain common allergens (gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame).
-  - Set ALL allergens to "present": "no" with reason "Carbonated soft drinks do not contain this allergen."
-  - Caramel coloring is NOT an allergen source - do not flag it.
-  - component_allergens should have ONE entry: the beverage itself with all allergens = "no".
-- PLAIN WATER (still water, sparkling water, mineral water):
-  - ALL allergens = "no". Zero exceptions.
-- PLAIN COFFEE/TEA (black coffee, espresso, plain tea, iced tea unsweetened):
-  - ALL allergens = "no" UNLESS milk/cream is explicitly stated (latte, cappuccino, etc.).
-- JUICE (orange juice, apple juice, fruit juice):
-  - ALL allergens = "no" unless explicitly stated otherwise.
-- MILK-BASED DRINKS (milkshakes, lattes, frappuccinos, smoothies with dairy):
-  - milk = "yes", all others typically "no" unless stated.
-
-STRICT "MAYBE" THRESHOLD (REDUCES FALSE POSITIVES):
-- ONLY use "present": "maybe" when:
-  1. Cross-contamination is genuinely likely (e.g., fried items in a kitchen that uses peanut oil), OR
-  2. A STANDARD preparation step almost always uses the allergen (e.g., most bread contains gluten), OR
-  3. The dish category has a very high probability of containing it (e.g., Asian sauces often contain soy).
-- DO NOT use "maybe" for:
-  - Speculative "some recipes might use X" reasoning when the specific dish shows no indication.
-  - Beverages - they should almost NEVER get "maybe" for ingredient allergens.
-  - Simple single-ingredient items (plain grilled chicken, steamed vegetables, etc.).
-- When in doubt, prefer "no" over "maybe" for cleaner results.
-
-SIMPLE DISH RULES (SINGLE-INGREDIENT ITEMS):
-- For simple items with obvious single ingredients, DO NOT over-complicate:
-  - Plain beverages: One component entry, all allergens "no".
-  - Plain grilled proteins (grilled chicken breast, grilled salmon): Only flag allergens actually present (fish for salmon, etc.).
-  - Plain vegetables/salads without dressing: Minimal allergen flags.
-  - Plain rice, plain potatoes: No allergens unless stated.
-- DO NOT infer multiple components for items that are clearly singular.
-- DO NOT add "maybe" flags based on hypothetical preparation methods for simple items.
-
-BAKED GOODS CAUTION (MEDICAL SAFETY - CRITICAL):
-- BAKED GOODS (cookies, cakes, pastries, muffins, brownies, cupcakes, bread, pie crust) USUALLY contain eggs.
-- IF the dishName contains "cookie", "cake", "muffin", "brownie", "cupcake", "pastry", "pie", "tart":
-  - AND no eggs are explicitly listed in ingredients
-  - AND the dish is NOT labeled vegan/egg-free
-  - THEN egg.present MUST be "maybe" with reason: "Traditional recipes typically include eggs. Verify with restaurant if you have an egg allergy."
-- Example: "Peanut Butter Cookie" with ingredients "peanut butter, oats, sugar, chocolate chips"
-  → Should return egg.present = "maybe" because cookies typically contain eggs even if this specific recipe doesn't show them.
-- ONLY use egg.present = "no" for baked goods if:
-  1. The dish is explicitly labeled "vegan" or "egg-free", OR
-  2. Obvious egg substitutes are listed (flax egg, chia egg, aquafaba, applesauce as binder)
-
 MULTI-LANGUAGE AWARENESS:
 - Recognize common food words in Spanish, Italian, French, Portuguese, etc.
   - "queso", "nata", "crema", "leche" → dairy (milk).
@@ -13552,7 +12921,7 @@ function buildAllergenCacheKey(input) {
     JSON.stringify((input.ingredients || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
-    JSON.stringify((input.tags || []).map(t => (typeof t === 'string' ? t : t?.name || '').toLowerCase().trim()).sort()),
+    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort()),
     // Include vision data in cache key for correctness
     input.vision_insights ? hashShort(JSON.stringify(input.vision_insights)) : "no-vision",
     input.plate_components?.length ? hashShort(JSON.stringify(input.plate_components)) : "no-components"
@@ -13726,64 +13095,6 @@ STRICTNESS RULES (IMPORTANT):
   - Use "present": "maybe" with a clear explanation (e.g. "Meatballs often use egg as a binder, but egg is not listed here.").
 - If the text gives no indication for an allergen and no tags imply it:
   - Prefer "present": "no" and mention that it is not listed or implied.
-
-DESCRIPTION SANITIZATION (CRITICAL - PREVENTS FALSE POSITIVES):
-- IGNORE any text that describes OTHER dishes, pairings, or serving suggestions:
-  - Phrases like "pairs well with...", "enjoy with...", "served alongside...", "goes great with...", "try it with..."
-  - References to combo items that are NOT the primary dish being analyzed
-  - Marketing/promotional text about other menu items
-- ONLY analyze the PRIMARY dish named in dishName.
-- If menuDescription mentions other dishes (e.g., "Our Coke pairs perfectly with our signature omelette"),
-  DO NOT attribute ingredients from those other dishes to the primary dish.
-- Example: "Coca-Cola - Refreshing beverage. Pairs well with our breakfast platter with eggs and bacon."
-  → The Coke has NO egg allergen. The eggs are in a DIFFERENT dish mentioned as a pairing.
-
-BEVERAGE EXCEPTION RULES (CRITICAL FOR DRINKS):
-- CARBONATED SOFT DRINKS (Coca-Cola, Pepsi, Sprite, Fanta, Dr Pepper, root beer, ginger ale, club soda, tonic water, sparkling water):
-  - These NEVER contain common allergens (gluten, milk, egg, soy, peanut, tree_nut, fish, shellfish, sesame).
-  - Set ALL allergens to "present": "no" with reason "Carbonated soft drinks do not contain this allergen."
-  - Caramel coloring is NOT an allergen source - do not flag it.
-  - component_allergens should have ONE entry: the beverage itself with all allergens = "no".
-- PLAIN WATER (still water, sparkling water, mineral water):
-  - ALL allergens = "no". Zero exceptions.
-- PLAIN COFFEE/TEA (black coffee, espresso, plain tea, iced tea unsweetened):
-  - ALL allergens = "no" UNLESS milk/cream is explicitly stated (latte, cappuccino, etc.).
-- JUICE (orange juice, apple juice, fruit juice):
-  - ALL allergens = "no" unless explicitly stated otherwise.
-- MILK-BASED DRINKS (milkshakes, lattes, frappuccinos, smoothies with dairy):
-  - milk = "yes", all others typically "no" unless stated.
-
-STRICT "MAYBE" THRESHOLD (REDUCES FALSE POSITIVES):
-- ONLY use "present": "maybe" when:
-  1. Cross-contamination is genuinely likely (e.g., fried items in a kitchen that uses peanut oil), OR
-  2. A STANDARD preparation step almost always uses the allergen (e.g., most bread contains gluten), OR
-  3. The dish category has a very high probability of containing it (e.g., Asian sauces often contain soy).
-- DO NOT use "maybe" for:
-  - Speculative "some recipes might use X" reasoning when the specific dish shows no indication.
-  - Beverages - they should almost NEVER get "maybe" for ingredient allergens.
-  - Simple single-ingredient items (plain grilled chicken, steamed vegetables, etc.).
-- When in doubt, prefer "no" over "maybe" for cleaner results.
-
-SIMPLE DISH RULES (SINGLE-INGREDIENT ITEMS):
-- For simple items with obvious single ingredients, DO NOT over-complicate:
-  - Plain beverages: One component entry, all allergens "no".
-  - Plain grilled proteins (grilled chicken breast, grilled salmon): Only flag allergens actually present (fish for salmon, etc.).
-  - Plain vegetables/salads without dressing: Minimal allergen flags.
-  - Plain rice, plain potatoes: No allergens unless stated.
-- DO NOT infer multiple components for items that are clearly singular.
-- DO NOT add "maybe" flags based on hypothetical preparation methods for simple items.
-
-BAKED GOODS CAUTION (MEDICAL SAFETY - CRITICAL):
-- BAKED GOODS (cookies, cakes, pastries, muffins, brownies, cupcakes, bread, pie crust) USUALLY contain eggs.
-- IF the dishName contains "cookie", "cake", "muffin", "brownie", "cupcake", "pastry", "pie", "tart":
-  - AND no eggs are explicitly listed in ingredients
-  - AND the dish is NOT labeled vegan/egg-free
-  - THEN egg.present MUST be "maybe" with reason: "Traditional recipes typically include eggs. Verify with restaurant if you have an egg allergy."
-- Example: "Peanut Butter Cookie" with ingredients "peanut butter, oats, sugar, chocolate chips"
-  → Should return egg.present = "maybe" because cookies typically contain eggs even if this specific recipe doesn't show them.
-- ONLY use egg.present = "no" for baked goods if:
-  1. The dish is explicitly labeled "vegan" or "egg-free", OR
-  2. Obvious egg substitutes are listed (flax egg, chia egg, aquafaba, applesauce as binder)
 
 MULTI-LANGUAGE AWARENESS:
 - Recognize common food words in Spanish, Italian, French, Portuguese, etc.
@@ -16932,8 +16243,7 @@ async function resolveRecipeWithCache(
     if (kv) {
       // Parallel KV reads instead of sequential loop
       const kvPromises = ingLines.map((line, i) => {
-        const lineStr = typeof line === 'string' ? line : (line?.name || line?.text || line?.original || '');
-        const k = `zestful:${lineStr.toLowerCase()}`;
+        const k = `zestful:${line.toLowerCase()}`;
         return kv.get(k, "json").then(row => ({ i, row })).catch(() => ({ i, row: null }));
       });
       const kvResults = await Promise.all(kvPromises);
@@ -16967,8 +16277,7 @@ async function resolveRecipeWithCache(
           // Parallel KV writes instead of sequential loop
           const putPromises = linesToParse.map((line, i) => {
             if (!zest[i]) return Promise.resolve();
-            const lineStr = typeof line === 'string' ? line : (line?.name || line?.text || line?.original || '');
-            const k = `zestful:${lineStr.toLowerCase()}`;
+            const k = `zestful:${line.toLowerCase()}`;
             return kv.put(k, JSON.stringify(zest[i]), { expirationTtl: 60 * 60 * 24 * 30 });
           });
           await Promise.all(putPromises);
@@ -16999,9 +16308,7 @@ async function resolveRecipeWithCache(
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
-            const ingLine = ingLines[i];
-            const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
-            const k = `zestful:${ingLineStr.toLowerCase()}`;
+            const k = `zestful:${ingLines[i].toLowerCase()}`;
             putPromises.push(kv.put(k, JSON.stringify(zest[j]), { expirationTtl: 60 * 60 * 24 * 30 }));
           }
         }
@@ -17670,9 +16977,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
     const missingIdx = [];
     if (kv) {
       for (let i = 0; i < ingLines.length; i++) {
-        const ingLine = ingLines[i];
-        const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
-        const k = `zestful:${ingLineStr.toLowerCase()}`;
+        const k = `zestful:${ingLines[i].toLowerCase()}`;
         let row = null;
         try {
           row = await kv.get(k, "json");
@@ -17714,9 +17019,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
         filled = zest;
         if (kv) {
           for (let i = 0; i < linesToParse.length; i++) {
-            const lineItem = linesToParse[i];
-            const lineStr = typeof lineItem === 'string' ? lineItem : (lineItem?.name || lineItem?.text || lineItem?.original || '');
-            const k = `zestful:${lineStr.toLowerCase()}`;
+            const k = `zestful:${linesToParse[i].toLowerCase()}`;
             if (zest[i]) {
               await kv.put(k, JSON.stringify(zest[i]), {
                 expirationTtl: 60 * 60 * 24 * 30
@@ -17758,9 +17061,7 @@ async function handleRecipeResolve(env, request, url, ctx) {
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
-            const ingLine = ingLines[i];
-            const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
-            const k = `zestful:${ingLineStr.toLowerCase()}`;
+            const k = `zestful:${ingLines[i].toLowerCase()}`;
             await kv.put(k, JSON.stringify(zest[j]), {
               expirationTtl: 60 * 60 * 24 * 30
             });
@@ -24516,92 +23817,6 @@ Estimate based on ACTUAL visible portions. Only return JSON.`
     if (pathname === "/recipe/resolve")
       return handleRecipeResolve(env, request, url, ctx);
 
-    // SSE Streaming endpoint for menu scraping - returns items progressively
-    if (pathname === "/menu/uber-test/stream" && request.method === "GET") {
-      const query = searchParams.get("query");
-      const address = searchParams.get("address");
-      const maxRows = parseInt(searchParams.get("maxRows") || "100", 10);
-
-      if (!query || !address) {
-        return new Response(JSON.stringify({ error: "Missing query or address parameter" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json", ...CORS_ALL }
-        });
-      }
-
-      // Create a TransformStream for SSE
-      const { readable, writable } = new TransformStream();
-      const writer = writable.getWriter();
-      const encoder = new TextEncoder();
-
-      // Helper to send SSE events
-      const sendEvent = async (event, data) => {
-        try {
-          const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-          await writer.write(encoder.encode(message));
-        } catch (e) {
-          console.error('[SSE] Failed to write event:', e.message);
-        }
-      };
-
-      // Start the scraping in the background using waitUntil
-      const scrapePromise = (async () => {
-        try {
-          // Send initial status
-          await sendEvent('status', { phase: 'starting', message: 'Initializing scraper...' });
-
-          // Call the streaming version of the scraper
-          const result = await scrapeUberEatsMenuStreaming(env, query, address, {
-            maxRows,
-            onPhase: async (phase, message) => {
-              await sendEvent('status', { phase, message });
-            },
-            onItem: async (item, index) => {
-              await sendEvent('item', { item, index });
-            },
-            onRestaurant: async (restaurant) => {
-              await sendEvent('restaurant', restaurant);
-            }
-          });
-
-          // Send completion event
-          await sendEvent('complete', {
-            ok: result.ok,
-            totalItems: result.items?.length || 0,
-            source: result.source || 'inhouse-stream',
-            elapsed_ms: result.elapsed_ms,
-            store_url: result.store_url
-          });
-
-        } catch (error) {
-          console.error('[SSE] Scraping error:', error.message);
-          await sendEvent('error', { message: error.message });
-        } finally {
-          try {
-            await writer.close();
-          } catch (e) {
-            // Writer may already be closed
-          }
-        }
-      })();
-
-      // Use waitUntil if available to keep the worker alive
-      if (ctx?.waitUntil) {
-        ctx.waitUntil(scrapePromise);
-      }
-
-      return new Response(readable, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
-          "Connection": "keep-alive",
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Headers": "Content-Type",
-          "X-Accel-Buffering": "no" // Disable nginx buffering if proxied
-        }
-      });
-    }
-
     // Cleaner Uber Eats test endpoint (returns flattened items)
     if (pathname === "/menu/uber-test" && request.method === "GET") {
       // Rate limit check for menu scraping (expensive operation)
@@ -27617,18 +26832,9 @@ function buildOrganSentences(organsArr = []) {
 }
 
 // Smart human-like allergen summary paragraph
-function buildSmartAllergenSummary(allergenFlags, lactoseFlags, allergenBreakdown, dishName) {
+function buildSmartAllergenSummary(allergenFlags, lactoseFlags, allergenBreakdown) {
   if (!Array.isArray(allergenFlags) || allergenFlags.length === 0) {
     return "No major allergens were detected in this dish based on the available information.";
-  }
-
-  // BEVERAGE SAFETY CHECK: If dish name indicates a plain beverage, override any false positive allergens
-  const beveragePatterns = /^(coca[- ]?cola|coke|pepsi|sprite|fanta|dr[. ]?pepper|7[- ]?up|mountain dew|root beer|ginger ale|club soda|tonic water|sparkling water|still water|mineral water|bottled water|iced tea|sweet tea|unsweet tea|lemonade|orange juice|apple juice|cranberry juice|grape juice|fruit punch|black coffee|espresso|americano|drip coffee)$/i;
-  const dishNameLower = (dishName || '').toLowerCase().trim();
-
-  if (beveragePatterns.test(dishNameLower)) {
-    // This is a known plain beverage - should have NO allergens
-    return "This beverage contains no major allergens.";
   }
 
   const sentences = [];
@@ -30261,7 +29467,7 @@ function applyVisionCorrections(visionInsights, recipeData) {
 
   // Helper: check if ingredient list mentions a food type
   const ingredientMentions = (variants) => {
-    const ingredientStr = correctedIngredients.map(getIngredientText).join(" ").toLowerCase();
+    const ingredientStr = correctedIngredients.join(" ").toLowerCase();
     const descStr = correctedDescription.toLowerCase();
     const combined = ingredientStr + " " + descStr;
 
@@ -31552,99 +30758,6 @@ async function runDishAnalysis(env, body, ctx) {
     body.forceReanalyze === true ||
     body.force_reanalyze === 1;
 
-  // ========== PLAIN BEVERAGE EARLY EXIT (MEDICAL GRADE CRITICAL) ==========
-  // Plain beverages should return NO allergens immediately - don't let wrong cached recipes
-  // or LLM hallucinations create false positives for sodas, water, coffee, juice, etc.
-  const plainBeveragePattern = /^(coca[- ]?cola|coke|pepsi|sprite|fanta|dr[. ]?pepper|7[- ]?up|seven[- ]?up|mountain dew|mtn dew|root beer|ginger ale|club soda|tonic water|tonic|sparkling water|seltzer|still water|mineral water|bottled water|water|iced tea|sweet tea|unsweet tea|unsweetened tea|tea|lemonade|orange juice|apple juice|cranberry juice|grape juice|grapefruit juice|tomato juice|pineapple juice|fruit punch|punch|black coffee|coffee|espresso|americano|drip coffee|cold brew|hot chocolate|cocoa)$/i;
-  const dishNameLowerEarly = dishName.toLowerCase().trim();
-
-  if (plainBeveragePattern.test(dishNameLowerEarly)) {
-    // EARLY EXIT: Return allergen-free response for plain beverages
-    debug.plain_beverage_early_exit = true;
-    debug.plain_beverage_matched = dishName;
-    debug.total_ms = Date.now() - tStart;
-    debug.pipeline_version = PIPELINE_VERSION;
-
-    return {
-      status: 200,
-      result: {
-        ok: true,
-        apiVersion: "v1",
-        source: "pipeline.analyze-dish",
-        dishName,
-        dishNameCanonical: null,
-        canonicalId: null,
-        canonicalCuisine: null,
-        restaurantName,
-        imageUrl: null,
-        recipe_image: null,
-        generated_description: `A refreshing ${dishName.toLowerCase()}.`,
-        summary: {
-          tummyBarometer: { score: 0, label: "neutral" },
-          organs: [],
-          keyFlags: {
-            allergens: [],
-            fodmapLevel: "low",
-            lactoseLevel: "low",
-            onionGarlic: false,
-            spicy: false,
-            alcohol: false
-          },
-          sentences: [
-            "This beverage contains no major allergens.",
-            "This beverage is low in FODMAPs and suitable for most people.",
-            "This is a simple beverage with no significant health impacts."
-          ],
-          llm_sentences: {
-            overall: "This is a simple beverage with no significant health impacts.",
-            allergens: "This beverage contains no major allergens.",
-            fodmap: "This beverage is low in FODMAPs and suitable for most people.",
-            organs_overview: "This beverage has neutral impact on organs."
-          },
-          edamamLabels: []
-        },
-        allergen_flags: [],
-        allergen_summary: "This beverage contains no major allergens.",
-        allergen_breakdown: [],
-        fodmap_flags: { level: "low", reason: "Plain beverages are naturally low in FODMAPs.", source: "beverage-override" },
-        fodmap_summary: "This beverage is low in FODMAPs and suitable for most people.",
-        lactose_flags: { level: "low", reason: "This beverage contains no dairy.", source: "beverage-override" },
-        lifestyle_tags: [],
-        lifestyle_checks: null,
-        nutrition_summary: null,
-        nutrition_badges: [],
-        nutrition_insights: null,
-        nutrition_source: "beverage-override",
-        nutrition_breakdown: [],
-        plate_components: [],
-        recipe: null,
-        likely_recipe: null,
-        full_recipe: null,
-        organs: {
-          ok: true,
-          tummy_barometer: { score: 0, label: "neutral" },
-          flags: {
-            allergens: [],
-            fodmap: { level: "low", reason: "Plain beverages are naturally low in FODMAPs.", triggers: [] },
-            lactose: { level: "low", reason: "This beverage contains no dairy.", examples: [] },
-            onion_garlic: false,
-            spicy: false,
-            alcohol: false
-          },
-          organs: [],
-          llm_sentences: {
-            overall: "This is a simple beverage with no significant health impacts.",
-            allergens: "This beverage contains no major allergens.",
-            fodmap: "This beverage is low in FODMAPs and suitable for most people.",
-            organs_overview: "This beverage has neutral impact on organs."
-          },
-          debug: {}
-        },
-        debug
-      }
-    };
-  }
-
   // Photo analysis should never use cache since each photo is unique
   const isPhotoAnalysis = body.source === 'photo_analysis' || !!body.imageUrl;
   const allowCache =
@@ -32487,79 +31600,6 @@ async function runDishAnalysis(env, body, ctx) {
     return terms.some((w) => t.includes(w));
   };
 
-  // Vision-recipe allergen conflict resolution
-  // Maps allergen types to visual_ingredients categories and keywords
-  const ALLERGEN_VISUAL_MAPPING = {
-    shellfish: {
-      categories: ["shellfish"],
-      keywords: ["shrimp", "prawn", "crab", "lobster", "clam", "mussel", "oyster", "scallop", "camarón", "gambas"]
-    },
-    fish: {
-      categories: ["fish"],
-      keywords: ["fish", "salmon", "tuna", "cod", "trout", "tilapia", "anchovy"]
-    },
-    egg: {
-      categories: ["egg"],
-      keywords: ["egg", "eggs", "fried egg", "poached egg", "sunny side"]
-    },
-    milk: {
-      categories: ["dairy"],
-      keywords: ["cheese", "cream", "butter", "milk", "queso"]
-    },
-    tree_nut: {
-      categories: ["nut"],
-      keywords: ["almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut", "macadamia", "pine nut"]
-    },
-    peanut: {
-      categories: ["nut", "legume"],
-      keywords: ["peanut", "peanuts"]
-    },
-    sesame: {
-      categories: ["seed"],
-      keywords: ["sesame", "sesame seeds"]
-    }
-    // Note: gluten and soy are typically not visually detectable
-  };
-
-  /**
-   * Check if an allergen is visually confirmed by vision analysis
-   * @param {string} allergenKind - The allergen type (e.g., "shellfish", "fish")
-   * @param {Array} visualIngredients - The visual_ingredients array from vision analysis
-   * @returns {Object} { confirmed: boolean, evidence: string|null }
-   */
-  const isAllergenVisuallyConfirmed = (allergenKind, visualIngredients) => {
-    if (!visualIngredients || !Array.isArray(visualIngredients) || visualIngredients.length === 0) {
-      return { confirmed: false, evidence: null, hasVision: false };
-    }
-
-    const mapping = ALLERGEN_VISUAL_MAPPING[allergenKind];
-    if (!mapping) {
-      // Allergen type not visually detectable (e.g., gluten, soy)
-      return { confirmed: false, evidence: null, hasVision: true, notVisuallyDetectable: true };
-    }
-
-    for (const vi of visualIngredients) {
-      const guess = (vi.guess || "").toLowerCase();
-      const category = (vi.category || "").toLowerCase();
-      const confidence = vi.confidence || 0;
-
-      // Skip low confidence detections
-      if (confidence < 0.5) continue;
-
-      // Check category match
-      if (mapping.categories.some(c => category.includes(c))) {
-        return { confirmed: true, evidence: vi.guess, hasVision: true };
-      }
-
-      // Check keyword match
-      if (mapping.keywords.some(kw => guess.includes(kw))) {
-        return { confirmed: true, evidence: vi.guess, hasVision: true };
-      }
-    }
-
-    return { confirmed: false, evidence: null, hasVision: true };
-  };
-
   const allergenInput = {
     dishName,
     restaurantName,
@@ -33037,52 +32077,6 @@ async function runDishAnalysis(env, body, ctx) {
           });
         }
       }
-    }
-
-    // Vision-recipe conflict resolution: downgrade allergens not visually confirmed
-    // This helps when generic recipes (e.g., Edamam) have ingredients the restaurant version doesn't
-    const visionIngredients = debug.vision_insights?.visual_ingredients || [];
-    if (visionIngredients.length > 0) {
-      allergen_flags = allergen_flags.map(flag => {
-        // Only process "yes" flags - "maybe" is already uncertain
-        if (flag.present !== "yes") return flag;
-
-        const visionCheck = isAllergenVisuallyConfirmed(flag.kind, visionIngredients);
-
-        // If no vision data or allergen not visually detectable, keep as-is
-        if (!visionCheck.hasVision || visionCheck.notVisuallyDetectable) return flag;
-
-        // If visually confirmed, keep as "yes"
-        if (visionCheck.confirmed) {
-          return {
-            ...flag,
-            vision_confirmed: true,
-            vision_evidence: visionCheck.evidence
-          };
-        }
-
-        // Not visually confirmed - check if it came from recipe (not menu description)
-        const inMenuText = hasEvidenceForAllergen(flag.kind, menuDescription || "");
-        if (inMenuText) {
-          // Explicitly mentioned in menu - keep as "yes"
-          return flag;
-        }
-
-        // Downgrade to "maybe" - recipe says yes but vision doesn't confirm
-        return {
-          ...flag,
-          present: "maybe",
-          message: flag.message
-            ? `${flag.message} (Note: Generic recipe may contain this allergen, but not visually detected in this dish. This restaurant's version may differ.)`
-            : "Generic recipe may contain this allergen, but not visually detected in this dish. This restaurant's version may differ.",
-          source: "llm-mini-vision-conflict",
-          original_present: "yes",
-          vision_checked: true,
-          vision_confirmed: false
-        };
-      });
-
-      debug.vision_allergen_conflict_resolution = true;
     }
 
     if (a.fodmap && typeof a.fodmap === "object") {
@@ -34696,11 +33690,8 @@ async function runDishAnalysis(env, body, ctx) {
   debug.total_ms = Date.now() - tStart;
   debug.pipeline_version = PIPELINE_VERSION;
 
-  // NOTE: Plain beverage early exit is handled at the start of the pipeline
-  // Beverages matching the pattern never reach this point - see line ~30862
-
   // Build smart human-readable summaries
-  const allergen_summary = buildSmartAllergenSummary(allergen_flags, lactose_flags, allergen_breakdown, dishName);
+  const allergen_summary = buildSmartAllergenSummary(allergen_flags, lactose_flags, allergen_breakdown);
   const fodmap_summary = buildSmartFodmapSummary(fodmap_flags, allergen_breakdown, plateComponents);
 
   // Build Likely Recipe (merges recipe + vision ingredients + adjusted cooking method)
