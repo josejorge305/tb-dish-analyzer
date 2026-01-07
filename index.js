@@ -4173,6 +4173,7 @@ async function handleOrgansFromDish(url, env, request) {
   const normalizedIngredients = ingredients.slice();
 
   function snapToKnownIngredient(name) {
+    if (!name || typeof name !== 'string') return name || '';
     const s = name.toLowerCase();
     if (s.includes("olive oil")) return "olive oil";
     if (s.includes("butter")) return "butter";
@@ -7027,7 +7028,7 @@ function parseOCRToCandidates(fullText) {
   const seen = new Set();
   const out = [];
   for (const it of items) {
-    const k = `${(it.section || "").toLowerCase()}|${it.title.toLowerCase()}|${it.price_text}`;
+    const k = `${(it.section || "").toLowerCase()}|${(it.title || "").toLowerCase()}|${it.price_text}`;
     if (seen.has(k)) continue;
     seen.add(k);
     out.push(it);
@@ -10654,7 +10655,7 @@ function arrangeCookbookIngredients(rawList = []) {
   for (const it of rawList) {
     const entry = sanitizeIngredientForCookbook(it);
     if (!entry) continue;
-    const key = entry.name.toLowerCase();
+    const key = (entry.name || "").toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     cleaned.push(entry);
@@ -12720,7 +12721,7 @@ function buildOrgansCacheKey(payload) {
     PIPELINE_VERSION, // Auto-invalidate when analysis logic changes
     (payload.dishName || "").toLowerCase().trim(),
     (payload.restaurantName || "").toLowerCase().trim(),
-    JSON.stringify((payload.ingredientLines || []).map(l => l.toLowerCase().trim()).sort()),
+    JSON.stringify((payload.ingredientLines || []).map(l => (typeof l === 'string' ? l : l?.name || l?.text || '').toLowerCase().trim()).sort()),
     JSON.stringify((payload.ingredientsNormalized || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
@@ -13401,7 +13402,7 @@ function buildAllergenCacheKey(input) {
     JSON.stringify((input.ingredients || []).map(i =>
       (i.name || i.normalized || "").toLowerCase().trim()
     ).sort()),
-    JSON.stringify((input.tags || []).map(t => t.toLowerCase().trim()).sort()),
+    JSON.stringify((input.tags || []).map(t => (typeof t === 'string' ? t : t?.name || '').toLowerCase().trim()).sort()),
     // Include vision data in cache key for correctness
     input.vision_insights ? hashShort(JSON.stringify(input.vision_insights)) : "no-vision",
     input.plate_components?.length ? hashShort(JSON.stringify(input.plate_components)) : "no-components"
@@ -16781,7 +16782,8 @@ async function resolveRecipeWithCache(
     if (kv) {
       // Parallel KV reads instead of sequential loop
       const kvPromises = ingLines.map((line, i) => {
-        const k = `zestful:${line.toLowerCase()}`;
+        const lineStr = typeof line === 'string' ? line : (line?.name || line?.text || line?.original || '');
+        const k = `zestful:${lineStr.toLowerCase()}`;
         return kv.get(k, "json").then(row => ({ i, row })).catch(() => ({ i, row: null }));
       });
       const kvResults = await Promise.all(kvPromises);
@@ -16815,7 +16817,8 @@ async function resolveRecipeWithCache(
           // Parallel KV writes instead of sequential loop
           const putPromises = linesToParse.map((line, i) => {
             if (!zest[i]) return Promise.resolve();
-            const k = `zestful:${line.toLowerCase()}`;
+            const lineStr = typeof line === 'string' ? line : (line?.name || line?.text || line?.original || '');
+            const k = `zestful:${lineStr.toLowerCase()}`;
             return kv.put(k, JSON.stringify(zest[i]), { expirationTtl: 60 * 60 * 24 * 30 });
           });
           await Promise.all(putPromises);
@@ -16846,7 +16849,9 @@ async function resolveRecipeWithCache(
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
-            const k = `zestful:${ingLines[i].toLowerCase()}`;
+            const ingLine = ingLines[i];
+            const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
+            const k = `zestful:${ingLineStr.toLowerCase()}`;
             putPromises.push(kv.put(k, JSON.stringify(zest[j]), { expirationTtl: 60 * 60 * 24 * 30 }));
           }
         }
@@ -17515,7 +17520,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
     const missingIdx = [];
     if (kv) {
       for (let i = 0; i < ingLines.length; i++) {
-        const k = `zestful:${ingLines[i].toLowerCase()}`;
+        const ingLine = ingLines[i];
+        const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
+        const k = `zestful:${ingLineStr.toLowerCase()}`;
         let row = null;
         try {
           row = await kv.get(k, "json");
@@ -17557,7 +17564,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
         filled = zest;
         if (kv) {
           for (let i = 0; i < linesToParse.length; i++) {
-            const k = `zestful:${linesToParse[i].toLowerCase()}`;
+            const lineItem = linesToParse[i];
+            const lineStr = typeof lineItem === 'string' ? lineItem : (lineItem?.name || lineItem?.text || lineItem?.original || '');
+            const k = `zestful:${lineStr.toLowerCase()}`;
             if (zest[i]) {
               await kv.put(k, JSON.stringify(zest[i]), {
                 expirationTtl: 60 * 60 * 24 * 30
@@ -17599,7 +17608,9 @@ async function handleRecipeResolve(env, request, url, ctx) {
           const i = missingIdx[j];
           filled[i] = zest[j];
           if (kv && zest[j]) {
-            const k = `zestful:${ingLines[i].toLowerCase()}`;
+            const ingLine = ingLines[i];
+            const ingLineStr = typeof ingLine === 'string' ? ingLine : (ingLine?.name || ingLine?.text || ingLine?.original || '');
+            const k = `zestful:${ingLineStr.toLowerCase()}`;
             await kv.put(k, JSON.stringify(zest[j]), {
               expirationTtl: 60 * 60 * 24 * 30
             });
@@ -30100,7 +30111,7 @@ function applyVisionCorrections(visionInsights, recipeData) {
 
   // Helper: check if ingredient list mentions a food type
   const ingredientMentions = (variants) => {
-    const ingredientStr = correctedIngredients.join(" ").toLowerCase();
+    const ingredientStr = correctedIngredients.map(getIngredientText).join(" ").toLowerCase();
     const descStr = correctedDescription.toLowerCase();
     const combined = ingredientStr + " " + descStr;
 
@@ -32326,6 +32337,79 @@ async function runDishAnalysis(env, body, ctx) {
     return terms.some((w) => t.includes(w));
   };
 
+  // Vision-recipe allergen conflict resolution
+  // Maps allergen types to visual_ingredients categories and keywords
+  const ALLERGEN_VISUAL_MAPPING = {
+    shellfish: {
+      categories: ["shellfish"],
+      keywords: ["shrimp", "prawn", "crab", "lobster", "clam", "mussel", "oyster", "scallop", "camarón", "gambas"]
+    },
+    fish: {
+      categories: ["fish"],
+      keywords: ["fish", "salmon", "tuna", "cod", "trout", "tilapia", "anchovy"]
+    },
+    egg: {
+      categories: ["egg"],
+      keywords: ["egg", "eggs", "fried egg", "poached egg", "sunny side"]
+    },
+    milk: {
+      categories: ["dairy"],
+      keywords: ["cheese", "cream", "butter", "milk", "queso"]
+    },
+    tree_nut: {
+      categories: ["nut"],
+      keywords: ["almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut", "macadamia", "pine nut"]
+    },
+    peanut: {
+      categories: ["nut", "legume"],
+      keywords: ["peanut", "peanuts"]
+    },
+    sesame: {
+      categories: ["seed"],
+      keywords: ["sesame", "sesame seeds"]
+    }
+    // Note: gluten and soy are typically not visually detectable
+  };
+
+  /**
+   * Check if an allergen is visually confirmed by vision analysis
+   * @param {string} allergenKind - The allergen type (e.g., "shellfish", "fish")
+   * @param {Array} visualIngredients - The visual_ingredients array from vision analysis
+   * @returns {Object} { confirmed: boolean, evidence: string|null }
+   */
+  const isAllergenVisuallyConfirmed = (allergenKind, visualIngredients) => {
+    if (!visualIngredients || !Array.isArray(visualIngredients) || visualIngredients.length === 0) {
+      return { confirmed: false, evidence: null, hasVision: false };
+    }
+
+    const mapping = ALLERGEN_VISUAL_MAPPING[allergenKind];
+    if (!mapping) {
+      // Allergen type not visually detectable (e.g., gluten, soy)
+      return { confirmed: false, evidence: null, hasVision: true, notVisuallyDetectable: true };
+    }
+
+    for (const vi of visualIngredients) {
+      const guess = (vi.guess || "").toLowerCase();
+      const category = (vi.category || "").toLowerCase();
+      const confidence = vi.confidence || 0;
+
+      // Skip low confidence detections
+      if (confidence < 0.5) continue;
+
+      // Check category match
+      if (mapping.categories.some(c => category.includes(c))) {
+        return { confirmed: true, evidence: vi.guess, hasVision: true };
+      }
+
+      // Check keyword match
+      if (mapping.keywords.some(kw => guess.includes(kw))) {
+        return { confirmed: true, evidence: vi.guess, hasVision: true };
+      }
+    }
+
+    return { confirmed: false, evidence: null, hasVision: true };
+  };
+
   const allergenInput = {
     dishName,
     restaurantName,
@@ -32803,6 +32887,52 @@ async function runDishAnalysis(env, body, ctx) {
           });
         }
       }
+    }
+
+    // Vision-recipe conflict resolution: downgrade allergens not visually confirmed
+    // This helps when generic recipes (e.g., Edamam) have ingredients the restaurant version doesn't
+    const visionIngredients = debug.vision_insights?.visual_ingredients || [];
+    if (visionIngredients.length > 0) {
+      allergen_flags = allergen_flags.map(flag => {
+        // Only process "yes" flags - "maybe" is already uncertain
+        if (flag.present !== "yes") return flag;
+
+        const visionCheck = isAllergenVisuallyConfirmed(flag.kind, visionIngredients);
+
+        // If no vision data or allergen not visually detectable, keep as-is
+        if (!visionCheck.hasVision || visionCheck.notVisuallyDetectable) return flag;
+
+        // If visually confirmed, keep as "yes"
+        if (visionCheck.confirmed) {
+          return {
+            ...flag,
+            vision_confirmed: true,
+            vision_evidence: visionCheck.evidence
+          };
+        }
+
+        // Not visually confirmed - check if it came from recipe (not menu description)
+        const inMenuText = hasEvidenceForAllergen(flag.kind, menuDescription || "");
+        if (inMenuText) {
+          // Explicitly mentioned in menu - keep as "yes"
+          return flag;
+        }
+
+        // Downgrade to "maybe" - recipe says yes but vision doesn't confirm
+        return {
+          ...flag,
+          present: "maybe",
+          message: flag.message
+            ? `${flag.message} (Note: Generic recipe may contain this allergen, but not visually detected in this dish. This restaurant's version may differ.)`
+            : "Generic recipe may contain this allergen, but not visually detected in this dish. This restaurant's version may differ.",
+          source: "llm-mini-vision-conflict",
+          original_present: "yes",
+          vision_checked: true,
+          vision_confirmed: false
+        };
+      });
+
+      debug.vision_allergen_conflict_resolution = true;
     }
 
     if (a.fodmap && typeof a.fodmap === "object") {
